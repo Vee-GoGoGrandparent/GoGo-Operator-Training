@@ -5,14 +5,26 @@
 // This project shares a service account with the marketing projects, and that
 // account has Editor on the marketing sheets. So "don't write to a marketing
 // sheet" cannot rest on remembering. Every write goes through here, and any
-// spreadsheet id that is not OPS_SHEET_ID throws before the request is made.
+// spreadsheet id that is not one of our two throws before the request is made.
 
 import fs from 'node:fs';
 import { google } from 'googleapis';
 
 const DEFAULT_SA = 'C:/Users/K_jah/Documents/AI/GoGo-Reviews/google-service-account.json';
 
-export const OPS_SHEET_ID = process.env.OPS_SHEET_ID || '';
+// Two sheets, two audiences, and they must never bleed into each other:
+//
+//   BUILD   — discovery output, column maps, probe results, working notes.
+//             Vee and Claude only. Nobody on the training team wants this.
+//   TRACKER — the clean, branded thing the trainer and the team leads open.
+//
+// OPS_SHEET_ID is the old single-sheet name, kept as a fallback so an older
+// Railway config keeps working instead of failing at 3am over a rename.
+export const BUILD_SHEET_ID = process.env.OPS_BUILD_SHEET_ID || process.env.OPS_SHEET_ID || '';
+export const TRACKER_SHEET_ID = process.env.OPS_TRACKER_SHEET_ID || '';
+
+/** Back-compat for code written before the split. Points at the build sheet. */
+export const OPS_SHEET_ID = BUILD_SHEET_ID;
 
 function loadCredentials() {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON?.trim();
@@ -20,15 +32,23 @@ function loadCredentials() {
   return JSON.parse(fs.readFileSync(raw || DEFAULT_SA, 'utf8'));
 }
 
-/** The only spreadsheet this project may touch. Anything else is a bug. */
+/**
+ * The only two spreadsheets this project may touch. Anything else is a bug, and
+ * the most likely "anything else" is a marketing sheet — which the shared service
+ * account genuinely has Editor on. So this throws rather than trusting anyone to
+ * remember.
+ */
 function assertOurSheet(id) {
-  if (!OPS_SHEET_ID) {
-    throw new Error('Missing OPS_SHEET_ID. Set it in Railway before running anything.');
+  if (!BUILD_SHEET_ID) {
+    throw new Error('Missing OPS_BUILD_SHEET_ID. Set it in Railway before running anything.');
   }
-  if (id !== OPS_SHEET_ID) {
+  const allowed = [BUILD_SHEET_ID, TRACKER_SHEET_ID].filter(Boolean);
+  if (!allowed.includes(id)) {
     throw new Error(
       `BLOCKED: refused to touch spreadsheet ${id}.\n` +
-        `This project may only write to OPS_SHEET_ID (${OPS_SHEET_ID}).\n` +
+        `This project may only write to:\n` +
+        `  OPS_BUILD_SHEET_ID   = ${BUILD_SHEET_ID}\n` +
+        `  OPS_TRACKER_SHEET_ID = ${TRACKER_SHEET_ID || '(not set)'}\n` +
         `If that id belongs to a marketing sheet, this guard just did its job.`,
     );
   }
@@ -69,19 +89,23 @@ export function sheets() {
   };
 }
 
-/** Create the tab if it is missing, then replace its contents with `rows`. */
-export async function writeTab(title, rows) {
+/**
+ * Create the tab if it is missing, then replace its contents with `rows`.
+ * Defaults to the BUILD sheet — writing to the team-facing tracker has to be
+ * an explicit choice, never something that happens because a default drifted.
+ */
+export async function writeTab(title, rows, spreadsheetId = BUILD_SHEET_ID) {
   const api = sheets();
-  const meta = await api.spreadsheets.get({ spreadsheetId: OPS_SHEET_ID });
+  const meta = await api.spreadsheets.get({ spreadsheetId });
   const existing = meta.data.sheets.find((s) => s.properties.title === title);
 
   if (!existing) {
     await api.spreadsheets.batchUpdate({
-      spreadsheetId: OPS_SHEET_ID,
+      spreadsheetId,
       requestBody: { requests: [{ addSheet: { properties: { title } } }] },
     });
   } else {
-    await api.spreadsheets.values.clear({ spreadsheetId: OPS_SHEET_ID, range: `'${title}'!A:ZZ` });
+    await api.spreadsheets.values.clear({ spreadsheetId, range: `'${title}'!A:ZZ` });
   }
 
   if (!rows.length) return;
@@ -95,7 +119,7 @@ export async function writeTab(title, rows) {
   });
 
   await api.spreadsheets.values.update({
-    spreadsheetId: OPS_SHEET_ID,
+    spreadsheetId,
     range: `'${title}'!A1`,
     valueInputOption: 'RAW',
     requestBody: { values: grid },
@@ -121,9 +145,9 @@ export const BRAND = {
  * Indigo header, white bold text, frozen top row, auto-sized columns.
  * Cosmetic, but these tabs get read by a trainer who did not ask for a database.
  */
-export async function formatHeader(title, { bandRows = false } = {}) {
+export async function formatHeader(title, { bandRows = false, spreadsheetId = BUILD_SHEET_ID } = {}) {
   const api = sheets();
-  const meta = await api.spreadsheets.get({ spreadsheetId: OPS_SHEET_ID });
+  const meta = await api.spreadsheets.get({ spreadsheetId });
   const tab = meta.data.sheets.find((s) => s.properties.title === title);
   if (!tab) return;
   const sheetId = tab.properties.sheetId;
@@ -175,24 +199,24 @@ export async function formatHeader(title, { bandRows = false } = {}) {
   // Banding throws if one already exists; nothing else here is destructive, so a
   // second run should not fail over a cosmetic detail.
   try {
-    await api.spreadsheets.batchUpdate({ spreadsheetId: OPS_SHEET_ID, requestBody: { requests } });
+    await api.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
   } catch (err) {
     if (!/banding/i.test(err.message)) throw err;
     await api.spreadsheets.batchUpdate({
-      spreadsheetId: OPS_SHEET_ID,
+      spreadsheetId,
       requestBody: { requests: requests.slice(0, -1) },
     });
   }
 }
 
 /** Cornflower band across a row — used to separate sections inside a tab. */
-export async function bandRow(title, rowIndex) {
+export async function bandRow(title, rowIndex, spreadsheetId = BUILD_SHEET_ID) {
   const api = sheets();
-  const meta = await api.spreadsheets.get({ spreadsheetId: OPS_SHEET_ID });
+  const meta = await api.spreadsheets.get({ spreadsheetId });
   const tab = meta.data.sheets.find((s) => s.properties.title === title);
   if (!tab) return;
   await api.spreadsheets.batchUpdate({
-    spreadsheetId: OPS_SHEET_ID,
+    spreadsheetId,
     requestBody: {
       requests: [
         {
