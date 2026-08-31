@@ -67,7 +67,7 @@ function baseConfig() {
  *                  server. Stops passive eavesdropping, not an active attacker.
  *   'none'       — plaintext. The server refused TLS.
  */
-export async function connect() {
+async function connectOnce() {
   const cfg = baseConfig();
   const ca = process.env.DB_SSL_CA;
 
@@ -87,6 +87,42 @@ export async function connect() {
   } catch (err) {
     throw new DbError(err);
   }
+}
+
+/**
+ * Connect, retrying on the errors that mean "we drew an un-allowlisted IP".
+ *
+ * Railway spreads outbound traffic across several static IPs and picks one per
+ * connection. When only some of them are on the DBA's allowlist, a single attempt
+ * is a coin flip — but each retry is a fresh draw. With two of three allowed,
+ * five attempts fail together about once in 250 runs.
+ *
+ * We only retry the network-level refusals. A wrong password or a missing grant
+ * will fail identically forever, and retrying those just wastes a minute before
+ * showing the same message.
+ */
+const RETRYABLE = new Set(['ETIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH']);
+
+export async function connect({ attempts = 5, delayMs = 3_000 } = {}) {
+  let last;
+  for (let i = 1; i <= attempts; i += 1) {
+    try {
+      const result = await connectOnce();
+      if (i > 1) console.log(`[db] connected on attempt ${i}/${attempts}`);
+      return result;
+    } catch (err) {
+      last = err;
+      const code = err.code || err.original?.code;
+      if (!RETRYABLE.has(code)) throw err; // auth/grant problems will never fix themselves
+      console.log(`[db] attempt ${i}/${attempts} drew an un-allowlisted IP (${code}); retrying…`);
+      if (i < attempts) await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw new Error(
+    `${last.message}\n\n` +
+      `Tried ${attempts} times. Railway rotates across its static IPs, so this means NONE of them ` +
+      `are on the allowlist — not just bad luck. Send the DBA the IPs from Railway → Settings → Networking.`,
+  );
 }
 
 /**
