@@ -18,6 +18,7 @@ import { writeTab, formatHeader, TRACKER_SHEET_ID, BRAND } from '../src/sheets.j
 import { notify } from '../src/slack.js';
 import { nowET, fmtDbDate } from '../src/time.js';
 import { regCallsOf, ratio, median, pctStr, weekKey, assess, TARGET_HR_RATIO } from '../src/analysis.js';
+import { AUG_2026, CLASS_META } from '../data/class-aug-2026.js';
 
 const WEEKS = 12; // 4 recent + 8 prior
 const RECENT_WEEKS = 4;
@@ -235,6 +236,8 @@ async function main() {
     [],
     ['Tab', 'What it is'],
     ['Churn Watch', 'Only the operators who need attention, most urgent first. Each row says in plain words what we saw. Start here.'],
+    ['Class Scorecard', 'The ten metrics management grades the class on. Where we can compute a number we show ours next to their published one, so a disagreement shows up before it is presented.'],
+    ['Training vs Performance', 'The August 2026 class with their training scores beside what they have actually done on the phones. This is the raw material for forecasting who will struggle.'],
     ['Hard Regs', 'Every active operator and their registration numbers for the last 4 weeks, including which plans they sell.'],
     ['Team Leads', 'The same picture rolled up by team lead — how many of their people need help, and who to talk to first.'],
     ['Weekly Trend', 'Each operator week by week, so you can see the shape: ramping up, flat, or falling.'],
@@ -253,13 +256,70 @@ async function main() {
     ['Training metrics', 'Completed training, quiz scores and trainee satisfaction come from the class workbook, not the database. Not connected yet.'],
   ];
 
+  // --- Training vs Performance: the two halves side by side ---
+  // The database knows what an operator DID. Only the class workbook knows what
+  // they looked like beforehand. Forecasting needs both, so here they are joined.
+  const tvp = [[
+    'Operator', 'Slack ID', 'Group', 'Personality', 'Lates', 'Absences',
+    'Quiz %', 'SLI /300', 'Call handling', 'System nav', 'Training total',
+    'Started calls', 'Reg calls', 'Hard regs', 'Reg ratio', 'Priority', 'Status',
+  ]];
+  const perfBySlack = Object.fromEntries(rows.filter((r) => r.o.slackId).map((r) => [r.o.slackId, r]));
+  for (const t of AUG_2026.sort((a, b) => b.total - a.total)) {
+    const r = t.slackId ? perfBySlack[t.slackId] : null;
+    tvp.push([
+      t.name, t.slackId || '(no slack id)', t.group, t.personality || '',
+      t.lates, t.absences,
+      t.knowledge ? `${t.knowledge.toFixed(2)}%` : '',
+      t.sli || '', t.callHandling || '', t.sysNav || '', t.total ? t.total.toFixed(2) : '',
+      r?.first ? fmtDbDate(r.first) : (t.status === 'active' ? '(not started)' : ''),
+      r ? r.a.recent.regCalls : '',
+      r ? r.a.recent.hardRegs : '',
+      r ? pctStr(r.verdict.recentRatio) : '',
+      r ? r.verdict.level : '',
+      t.status === 'active' ? (r?.o.closedAt ? `Left ${fmtDbDate(r.o.closedAt).slice(0, 10)}` : 'Active') : `${t.status}${t.reason ? ` — ${t.reason}` : ''}`,
+    ]);
+  }
+
+  // --- Class Scorecard: the ten metrics his management grades him on ---
+  // Where we can compute it, we do, and we show their published figure next to
+  // ours. If the two disagree the formula is wrong and we need to know that
+  // before he presents it, not after.
+  const completed = AUG_2026.filter((t) => t.status === 'active');
+  const left = AUG_2026.filter((t) => t.status !== 'active');
+  const pctCompleted = completed.length / AUG_2026.length;
+  const quizAllHires = AUG_2026.reduce((s, t) => s + t.knowledge, 0) / AUG_2026.length;
+  const quizCompletedOnly = completed.reduce((s, t) => s + t.knowledge, 0) / completed.length;
+  const gradDate = new Date(`${CLASS_META.classEnd}T00:00:00Z`);
+  const plusDays = (n) => fmtDbDate(new Date(gradDate.getTime() + n * 86400000)).slice(0, 10);
+
+  const scorecard = [
+    ['Metric', 'Goal', 'Ours', 'Their published figure', 'Match?', 'Notes'],
+    ['New hires', '—', AUG_2026.length, 40, AUG_2026.length === 40 ? '✅' : '⚠️', 'Class of Aug 3–21, 2026.'],
+    ['Completed Training', '—', completed.length, 35, completed.length === 35 ? '✅' : '⚠️', `${left.length} did not finish: ${left.map((t) => `${t.name} (${t.status})`).join(', ')}`],
+    ['% Completed Training', '90%', pctStr(pctCompleted), '87.50%', Math.abs(pctCompleted - 0.875) < 0.001 ? '✅' : '⚠️', pctCompleted < 0.9 ? 'Under goal.' : 'At goal.'],
+    ['Trainee Satisfaction', '97%', '—', 'Aug 21', '—', 'A survey of the trainees. Measures the TRAINER, not the operators. Not in the database.'],
+    // Their published 82.19% reproduces exactly as the average across ALL 40 hires,
+    // including the five who scored 0 because they never finished. So the formula is
+    // confirmed — and it means he is graded on the quiz scores of people who quit or
+    // were fired. Worth him knowing before the next review.
+    ['Quizzes Success Rate', '85%', `${quizAllHires.toFixed(2)}%`, '82.19%', Math.abs(quizAllHires - 82.19) < 0.05 ? '✅ formula confirmed' : '⚠️', `Average across ALL ${AUG_2026.length} hires, including the ${left.length} who did not finish (four of them scored 0). Counting only the ${completed.length} who completed, it is ${quizCompletedOnly.toFixed(2)}% — above the 85% goal rather than under it.`],
+    ['30 day Churn Rate', 'under 5%', 'pending', plusDays(30), '—', `The clock starts at graduation (${CLASS_META.classEnd}), not at hire. Due ${plusDays(30)}.`],
+    ['60 day Churn Rate', 'under 10%', 'pending', plusDays(60), '—', `Due ${plusDays(60)}.`],
+    ['90 day Churn Rate', 'under 15%', 'pending', plusDays(90), '—', `Due ${plusDays(90)}.`],
+    ['90 day reg rate', '+15%', 'pending', plusDays(90), '—', 'Will be computed from operatorPerformances over the first 90 days after graduation.'],
+    ['90 day star model', '3.70+', 'pending', plusDays(90), '—', 'Formula not documented anywhere we can read. Needs the definition from Ops (Aleesa).'],
+  ];
+
   await writeTab('README', readme, TRACKER_SHEET_ID);
   await writeTab('Churn Watch', watch, TRACKER_SHEET_ID);
+  await writeTab('Class Scorecard', scorecard, TRACKER_SHEET_ID);
+  await writeTab('Training vs Performance', tvp, TRACKER_SHEET_ID);
   await writeTab('Hard Regs', regs, TRACKER_SHEET_ID);
   await writeTab('Team Leads', leads, TRACKER_SHEET_ID);
   await writeTab('Weekly Trend', trend, TRACKER_SHEET_ID);
 
-  for (const t of ['README', 'Churn Watch', 'Hard Regs', 'Team Leads', 'Weekly Trend']) {
+  for (const t of ['README', 'Churn Watch', 'Class Scorecard', 'Training vs Performance', 'Hard Regs', 'Team Leads', 'Weekly Trend']) {
     await formatHeader(t, { spreadsheetId: TRACKER_SHEET_ID, bandRows: t !== 'README' }).catch(() => {});
   }
 
