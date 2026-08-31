@@ -17,6 +17,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 const TASKS = {
   discover: 'discover.js',
+  transcripts: 'probe-transcripts.js',
 };
 
 function run(script) {
