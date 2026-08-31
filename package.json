@@ -1,0 +1,19 @@
+{
+  "name": "gogo-operator-training",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Operator training & performance tracker. Separate from Marketing Growth OS by design.",
+  "scripts": {
+    "start": "node scripts/server.js",
+    "discover": "node --env-file=.env scripts/discover.js"
+  },
+  "dependencies": {
+    "googleapis": "^144.0.0",
+    "mysql2": "^3.11.0",
+    "node-cron": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
