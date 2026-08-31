@@ -15,10 +15,11 @@
 import { connect, tryQ } from '../src/db.js';
 import { writeTab, formatHeader } from '../src/sheets.js';
 import { notify } from '../src/slack.js';
+import { nowET, fmtDbDate } from '../src/time.js';
 
 const fmt = (v) => {
   if (v === null || v === undefined) return '';
-  if (v instanceof Date) return v.toISOString().slice(0, 19).replace('T', ' ');
+  if (v instanceof Date) return fmtDbDate(v); // stored value, not an instant
   if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
 };
@@ -124,7 +125,7 @@ async function main() {
   await conn.end();
 
   out.push([]);
-  out.push(['Run at', new Date().toISOString()]);
+  out.push(['Run at', nowET()]);
   await writeTab('05 Transcripts', out);
   await formatHeader('05 Transcripts').catch(() => {});
   await notify('🎙️ Transcript probe finished — see tab "05 Transcripts".');
@@ -133,7 +134,7 @@ async function main() {
 main().catch(async (err) => {
   console.error('TRANSCRIPT PROBE FAILED:', err.message);
   try {
-    await writeTab('05 Transcripts', [['Status', '❌ FAILED'], ['Error', err.message], ['Run at', new Date().toISOString()]]);
+    await writeTab('05 Transcripts', [['Status', '❌ FAILED'], ['Error', err.message], ['Run at', nowET()]]);
     await formatHeader('05 Transcripts').catch(() => {});
   } catch (e) {
     console.error('could not write the failure:', e.message);

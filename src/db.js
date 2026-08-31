@@ -57,6 +57,11 @@ function baseConfig() {
     connectTimeout: 15_000,
     // Big text columns (call summaries) come back as strings, not Buffers.
     charset: 'utf8mb4',
+    // Parse DATETIME as UTC instead of "whatever timezone this container happens
+    // to be in". A stored '2026-08-19 00:00:00' then reads back as exactly that,
+    // and src/time.js fmtDbDate() reproduces it without shifting a shift to the
+    // wrong day. Display in Eastern is a separate, deliberate step.
+    timezone: 'Z',
   };
 }
 

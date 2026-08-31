@@ -18,6 +18,7 @@
 import { connect, q, tryQ } from '../src/db.js';
 import { writeTab, formatHeader, OPS_SHEET_ID } from '../src/sheets.js';
 import { notify } from '../src/slack.js';
+import { nowET, fmtDbDate } from '../src/time.js';
 import { CLASS_SLACK_IDS, CONFLICTING_IDS } from '../data/class-slack-ids.js';
 
 // Everything that looked operator-shaped in the table inventory, plus the two
@@ -45,7 +46,7 @@ const TABLES = [
 
 const fmt = (v) => {
   if (v === null || v === undefined) return '';
-  if (v instanceof Date) return v.toISOString().slice(0, 19).replace('T', ' ');
+  if (v instanceof Date) return fmtDbDate(v); // stored value, not an instant
   if (typeof v === 'object') return JSON.stringify(v).slice(0, 500);
   return String(v);
 };
@@ -67,7 +68,7 @@ async function main() {
   note('Connected', 'yes — the static IP carried over, no DBA request needed');
   note('TLS', tls);
   note('Database', process.env.DB_NAME);
-  note('Run at', new Date().toISOString());
+  note('Run at', nowET());
 
   // ------------------------------------------------- 2. access + size per table
   const access = [['Table', 'Can SELECT?', '~Rows', 'Size (MB)', '# Cols', 'Note']];
@@ -332,7 +333,7 @@ main().catch(async (err) => {
       ['Finding', 'Value'],
       ['Status', '❌ FAILED'],
       ['Error', err.message],
-      ['Run at', new Date().toISOString()],
+      ['Run at', nowET()],
       [],
       ['If this says the IP is not on the allowlist', 'then the static IP did NOT carry over to this new Railway service, and the DBA has to add it. That is the one thing we could not know in advance.'],
     ]);
