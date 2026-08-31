@@ -18,6 +18,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TASKS = {
   discover: 'discover.js',
   transcripts: 'probe-transcripts.js',
+  link: 'probe-link.js',
+  tracker: 'build-tracker.js',
 };
 
 function run(script) {
