@@ -20,6 +20,7 @@ const TASKS = {
   transcripts: 'probe-transcripts.js',
   link: 'probe-link.js',
   tracker: 'build-tracker.js',
+  reports: 'probe-reports.js',
 };
 
 function run(script) {
