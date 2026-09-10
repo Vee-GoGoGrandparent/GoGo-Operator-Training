@@ -18,18 +18,18 @@
 // Right now that is August 2026. September's class will land here the same way.
 
 import { AUG_2026, CLASS_META as AUG_META } from './class-aug-2026.js';
-import { JUL_2026, CLASS_META as JUL_META, PUBLISHED as JUL_PUBLISHED } from './class-jul-2026.js';
+import { JUN_2026, CLASS_META as JUN_META, PUBLISHED as JUN_PUBLISHED } from './class-jun-2026.js';
 
 /**
  * Every class, oldest first. Add new classes here and every tab picks them up.
  *
  * `published` is what management's own scorecard says. `trainees` is the roster we
- * hold. A class can have one without the other: July has published figures but no
- * roster, so it appears on the scorecard and nowhere else. That asymmetry is the
- * honest state of things, not a bug to paper over.
+ * hold. A class can have one without the other — a class with published figures but
+ * no roster appears on the scorecard and nowhere else, and says so. That asymmetry is
+ * the honest state of things, not a bug to paper over.
  */
 export const CLASSES = [
-  { meta: JUL_META, trainees: JUL_2026, published: JUL_PUBLISHED },
+  { meta: JUN_META, trainees: JUN_2026, published: JUN_PUBLISHED },
   { meta: AUG_META, trainees: AUG_2026, published: null },
 ];
 
