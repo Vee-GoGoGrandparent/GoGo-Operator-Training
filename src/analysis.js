@@ -90,26 +90,24 @@ export function assess({ recent, prior, peerMedianRatio, weeksActive, isSuspende
 
   // A falling ratio only means something on enough calls to be real.
   //
-  // And a fall is only an ESCALATION if it has taken them below the bar. Someone
-  // who dropped from 26% to 18% is still beating the 15% target — that is worth a
-  // conversation, not an alarm. The first run flagged people doing fine as
-  // Escalate purely because they came down off a high, and a list like that is
-  // one a trainer learns to ignore.
-  if (rRatio !== null && pRatio !== null && recent.regCalls >= 25 && prior.regCalls >= 40) {
+  // And it only counts at all once they are BELOW the goal. Vee's rule: "as long as
+  // they're above the goal, it's fine." Someone who came down from 26% to 18% is
+  // still beating the 15% target and does not belong on anybody's list. The first
+  // live run flagged 113 of 615 people, plenty of them fine, and a list that cries
+  // wolf is one a trainer learns to ignore.
+  if (rRatio !== null && pRatio !== null && recent.regCalls >= 25 && prior.regCalls >= 40 && rRatio < TARGET_HR_RATIO) {
     const rel = 1 - rRatio / pRatio;
     if (rel >= 0.3) {
-      const stillAboveTarget = rRatio >= TARGET_HR_RATIO;
       flags.push({
-        level: stillAboveTarget ? 'Watch' : 'Escalate',
-        text:
-          `Reg ratio fell from ${pctStr(pRatio)} to ${pctStr(rRatio)} — down ${Math.round(rel * 100)}% against their own earlier work.` +
-          (stillAboveTarget ? ` Still above the ${pctStr(TARGET_HR_RATIO)} target, so this is a trend to watch rather than a problem yet.` : ''),
+        level: 'Escalate',
+        text: `Reg ratio fell from ${pctStr(pRatio)} to ${pctStr(rRatio)} — down ${Math.round(rel * 100)}% against their own earlier work, and now under the ${pctStr(TARGET_HR_RATIO)} goal.`,
       });
     }
   }
 
-  // Behind the people who started when they did.
-  if (rRatio !== null && peerMedianRatio && recent.regCalls >= 25) {
+  // Behind the people who started when they did — but again, only once they are
+  // under the goal. Someone at 17% with a 30% peer group is still doing the job.
+  if (rRatio !== null && peerMedianRatio && recent.regCalls >= 25 && rRatio < TARGET_HR_RATIO) {
     if (rRatio < peerMedianRatio * 0.6) {
       flags.push({
         level: 'Escalate',
