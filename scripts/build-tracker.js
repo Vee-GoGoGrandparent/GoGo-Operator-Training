@@ -19,7 +19,7 @@ import { notify } from '../src/slack.js';
 import { nowET, fmtDbDate } from '../src/time.js';
 import { regCallsOf, ratio, median, pctStr, pct100, weekKey, assess, TARGET_HR_RATIO } from '../src/analysis.js';
 import { AUG_2026, CLASS_META } from '../data/class-aug-2026.js';
-import { TRAINED_SLACK_IDS, TRAINED_WITHOUT_SLACK, earliestGradDate } from '../data/trained-roster.js';
+import { TRAINED, TRAINED_SLACK_IDS, TRAINED_WITHOUT_SLACK, TRAINEE_BY_SLACK, earliestGradDate } from '../data/trained-roster.js';
 
 const WEEKS = 12; // 4 recent + 8 prior — the escalate/watch comparison
 const RECENT_WEEKS = 4;
@@ -34,15 +34,28 @@ const RECENT_WEEKS = 4;
 // first thirty days. Then reg calls sixty days is the following thirty days. It's
 // still only counting thirty days, not sixty days in total."
 //
+// DAY ZERO IS THEIR FIRST REAL CALL, PER PERSON — not graduation, and definitely not
+// the practice calls taken during training. Vee: "no training calls should be counted
+// in this total… it's counted from the moment they actually start taking calls."
+// People come off a class at different speeds — some are on the schedule the next
+// day, some wait two or three — so this clock starts per operator, not per class.
+//
 // A block that has not started yet is left blank rather than shown as 0 — a zero
 // reads as "they registered nothing", which is a very different thing from "that
 // month has not happened yet".
 const BLOCKS = [
-  { label: '30d', from: 0, to: 30 },
-  { label: '60d', from: 31, to: 60 },
-  { label: '90d', from: 61, to: 90 },
+  { label: '30d', from: 0, to: 29 },
+  { label: '60d', from: 30, to: 59 },
+  { label: '90d', from: 60, to: 89 },
 ];
-const WINDOWS = [30, 60, 90]; // churn milestones — those ARE cumulative
+
+// We follow an operator for 90 days after their first real call and then stop. Vee:
+// "we're only keeping track for ninety days. After ninety days, we stop keeping track
+// of those operators." The class-level tabs still compute — a class's scorecard is
+// its permanent record — but nobody stays on the per-person tabs forever.
+const TRACK_DAYS = 90;
+
+const WINDOWS = [30, 60, 90]; // churn milestones — measured from class end, and cumulative
 
 const name = (o) => `${(o.firstName || '').trim()} ${(o.lastName || '').trim()}`.replace(/\s+/g, ' ').trim();
 
@@ -96,39 +109,62 @@ async function main() {
   );
   console.log(`[tracker] ${perf.length} daily performance rows`);
 
-  // Also the very first day each operator ever registered anything — the honest
-  // "started taking calls" date, which is NOT their hire date (that lives only in
-  // the class workbook) but is the best the database can tell us on its own.
-  const firstDays = await q(
-    conn,
-    `SELECT operatorId, MIN(aggregationDate) AS firstDay FROM operatorPerformances GROUP BY operatorId`,
-    [],
-    60_000,
-  );
-  const firstDayOf = Object.fromEntries(firstDays.map((r) => [r.operatorId, r.firstDay]));
+  // There used to be a second query here for MIN(aggregationDate) across all history.
+  // It is gone: that answer includes practice calls taken during training, and those
+  // are exactly what must not count. "Started calls" is now the first day of real
+  // work, derived from the post-training rows below.
 
   // ------------------------------------------------------------ 3. aggregate
-  const weeks = [...new Set(perf.map((r) => weekKey(r.aggregationDate)))].sort();
-  const recentWeeks = new Set(weeks.slice(-RECENT_WEEKS));
-
   // aggregationDate is a stored DATE, so it is compared against today's date in UTC,
   // matching how db.js parses it. Mixing a stored date against a real instant is the
   // classic way to end up a day out.
   const now = new Date();
   const todayUTC = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
 
-  // Day 0 is GRADUATION, not today and not the hire date. Every block below is
-  // counted forward from there, which is the same clock the scorecard uses.
+  const dayNum = (d) => Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+
+  // CHURN uses the class clock: day 0 is the last day of class. Confirmed against
+  // their own published dates — the July class ended July 10 and its 60-day mark is
+  // listed as September 10; August ends the 21st and its 30-day mark as September 21.
   const gradMs = Date.parse(`${earliestGradDate()}T00:00:00Z`);
-  const dayAfterGrad = (d) =>
-    Math.floor((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - gradMs) / 86400000);
+  const dayAfterGrad = (d) => Math.floor((dayNum(d) - gradMs) / 86400000);
   const daysSinceGrad = Math.floor((todayUTC - gradMs) / 86400000);
+
+  // REGISTRATIONS use a different clock, on purpose: day 0 is the operator's own
+  // first real call. Anything on or before their class end date is a training call
+  // and is dropped outright — not counted anywhere, because the business does not
+  // count it either.
+  const classEndMsOf = (o) => {
+    const t = o.slackId ? TRAINEE_BY_SLACK[o.slackId] : null;
+    return t ? Date.parse(`${t.gradDate}T00:00:00Z`) : gradMs;
+  };
+  const classEndByOpId = Object.fromEntries(operators.map((o) => [o.id, classEndMsOf(o)]));
+
+  // Post-training rows only, then each operator's first working day is the earliest
+  // of what is left. Two passes, because the anchor has to be known before any row
+  // can be placed in a block.
+  const working = perf.filter((r) => {
+    const end = classEndByOpId[r.operatorId];
+    return end === undefined || dayNum(r.aggregationDate) > end;
+  });
+  const startMsOf = {};
+  for (const r of working) {
+    const d = dayNum(r.aggregationDate);
+    if (startMsOf[r.operatorId] === undefined || d < startMsOf[r.operatorId]) startMsOf[r.operatorId] = d;
+  }
+  const daysWorkedOf = (id) =>
+    startMsOf[id] === undefined ? null : Math.floor((todayUTC - startMsOf[id]) / 86400000);
+
+  console.log(`[tracker] ${perf.length - working.length} training-period rows excluded, ${working.length} kept`);
+
+  const weeks = [...new Set(working.map((r) => weekKey(r.aggregationDate)))].sort();
+  const recentWeeks = new Set(weeks.slice(-RECENT_WEEKS));
 
   const agg = {}; // operatorId -> { recent, prior, byWeek, plans, block }
   const blank = () => ({ regCalls: 0, hardRegs: 0, softRegs: 0, trialRegs: 0 });
   const blankBlocks = () => Object.fromEntries(BLOCKS.map((b) => [b.label, { regCalls: 0, hardRegs: 0 }]));
 
-  for (const r of perf) {
+  for (const r of working) {
     const a = (agg[r.operatorId] ??= { recent: blank(), prior: blank(), byWeek: {}, block: blankBlocks(), plans: { annual: 0, value: 0, basic: 0, fixedIncome: 0 } });
     const calls = regCallsOf(r);
     const wk = weekKey(r.aggregationDate);
@@ -143,15 +179,17 @@ async function main() {
     w.regCalls += calls;
     w.hardRegs += Number(r.hardRegs || 0);
 
-    // Which 30-day block after graduation does this day belong to? Calls made during
-    // training week 3 land a few days BEFORE graduation; those count in block one
-    // rather than being thrown away, since they are real registrations by a real
-    // trainee. Nothing is double counted — each day lands in exactly one block.
-    const since = dayAfterGrad(r.aggregationDate);
-    const b = BLOCKS.find((x) => since <= x.to && (since >= x.from || x === BLOCKS[0]));
-    if (b) {
-      a.block[b.label].regCalls += calls;
-      a.block[b.label].hardRegs += Number(r.hardRegs || 0);
+    // Which 30-day block of THIS operator's own first 90 days does the day fall in?
+    // Training rows never reach here — they were filtered out above. Day 90 onward
+    // falls in no block, which is the point: we stop tracking.
+    const start = startMsOf[r.operatorId];
+    if (start !== undefined) {
+      const since = Math.floor((dayNum(r.aggregationDate) - start) / 86400000);
+      const b = BLOCKS.find((x) => since >= x.from && since <= x.to);
+      if (b) {
+        a.block[b.label].regCalls += calls;
+        a.block[b.label].hardRegs += Number(r.hardRegs || 0);
+      }
     }
 
     a.plans.annual += Number(r.annualHardRegs || 0);
@@ -162,7 +200,15 @@ async function main() {
 
   // Peer median by start month — a three-week-old operator and a three-year-old one
   // are not doing the same job, and comparing them would only ever be unfair.
-  const cohortOf = (id) => (firstDayOf[id] ? fmtDbDate(firstDayOf[id]).slice(0, 7) : 'unknown');
+  // Cohort is the CLASS someone was in, straight off the roster. It used to be
+  // inferred from the month of their first call, which was a guess and would have
+  // split one class across two months. Now that every operator here came from a
+  // known class, comparing class against class is a group-by rather than a project.
+  const cohortOf = (id) => {
+    const o = byId[id];
+    const t = o?.slackId ? TRAINEE_BY_SLACK[o.slackId] : null;
+    return t?.cohort || 'unknown';
+  };
   const cohortRatios = {};
   for (const [id, a] of Object.entries(agg)) {
     if (!byId[id] || a.recent.regCalls < 25) continue;
@@ -175,7 +221,10 @@ async function main() {
   for (const o of operators) {
     const a = agg[o.id];
     if (!a) continue; // no activity in the window at all
-    const first = firstDayOf[o.id];
+    const first = startMsOf[o.id] === undefined ? null : new Date(startMsOf[o.id]);
+    const daysWorked = daysWorkedOf(o.id);
+    // Past 90 days on the phones, an operator drops off the per-person tabs.
+    if (daysWorked !== null && daysWorked > TRACK_DAYS) continue;
     const weeksActive = first ? Math.floor((Date.now() - new Date(first).getTime()) / 604800000) : 0;
 
     const verdict = assess({
@@ -186,7 +235,7 @@ async function main() {
       isSuspended: !!o.suspendedAt,
     });
 
-    rows.push({ o, a, first, weeksActive, verdict, cohort: cohortOf(o.id) });
+    rows.push({ o, a, first, daysWorked, weeksActive, verdict, cohort: cohortOf(o.id) });
   }
   console.log(`[tracker] ${rows.length} operators with activity in the last ${WEEKS} weeks`);
 
@@ -314,7 +363,10 @@ async function main() {
     ['How to read it', ''],
     ['Who is in here', 'ONLY operators who went through a class we hold training data for — right now the August 2026 class. Operators from other departments are not pulled at all. Adding the next class is one file.'],
     ['Reg ratio', 'Hard registrations divided by registration calls. Test calls are excluded. Management target is 15%.'],
-    ['30d / 60d / 90d', 'Separate 30-day blocks counted forward from graduation, not running totals. 60d means days 31-60, not the first 60 days. A block that has not started yet is left blank rather than shown as zero.'],
+    ['30d / 60d / 90d', 'Separate 30-day blocks counted forward from the day that person first took a real call, not running totals. 60d means their days 30-59, not their first 60 days. A block that has not started yet is left blank rather than shown as zero.'],
+    ['Training calls', 'Not counted anywhere. Practice calls taken during class are dropped before any number on this sheet is worked out, because the business does not count them either.'],
+    ['Two different clocks', 'Registrations are measured from the day that person first took a real call, because people join the schedule at different speeds after class. Churn is measured from the last day of class, because that is how management dates it.'],
+    ['We stop at 90 days', 'An operator drops off the per-person tabs 90 days after their first real call. The class tabs keep their numbers — a class scorecard is a permanent record.'],
     ['Order of the rows', 'People still here first. Anyone who has left sits at the bottom, most recent departure first.'],
     ['Layout', 'Column widths, wrapping and column order are yours. The rebuild refreshes numbers and will not move your columns or resize them.'],
     ['Peer median', 'The middle reg ratio among operators who started taking calls the same month. A new operator is compared to other new operators, never to a veteran.'],
@@ -325,9 +377,10 @@ async function main() {
     ['No verdicts', 'Nothing here says an operator is bad. It says what the numbers did. The trainer and the team lead decide what it means.'],
     [],
     ['Known gaps', ''],
-    ['Hire date', 'The database only knows when an operator was entered into the system — usually about a week before their class starts. The real hire date is the first day of orientation, and it lives only in the class workbook. "Started calls" below is the first day they registered anything, which happens during training week 3.'],
+    ['Hire date', 'The database only knows when an operator was entered into the system — usually about a week before their class starts. The real hire date is the first day of orientation, and it lives only in the class workbook.'],
+    ['Started calls', 'The first day they took a REAL call, meaning after their class ended. Practice calls during training are excluded. Some people are on the schedule the next day, some wait two or three, which is why the 30/60/90 blocks run on each person own clock.'],
     ['Training metrics', 'Completed training, quiz scores and trainee satisfaction come from the class workbook, not the database. Not connected yet.'],
-    ['Pre-graduation calls', 'Trainees take live calls in week 3, a few days before graduation. Those registrations are counted in the 30d block rather than discarded, so the first block covers about 35 days and the later two are exactly 30.'],
+
   ];
 
   // --- Training vs Performance: the two halves side by side ---
@@ -337,13 +390,23 @@ async function main() {
   // are shown as percentages like Quiz % beside them. SLI is out of 300 and stays a
   // raw number — a percentage there would be inventing a scale the team does not use.
   const tvp = [[
-    'Operator', 'Slack ID', 'Group', 'Lates', 'Absences',
+    'Operator', 'Class', 'Slack ID', 'Group', 'Lates', 'Absences',
     'Quiz %', 'SLI /300', 'Call handling', 'System nav', 'Training total',
-    'Started calls',
+    'Started calls', 'Days on phones',
     ...BLOCKS.flatMap((b) => [`Reg calls ${b.label}`, `Hard regs ${b.label}`, `Reg ratio ${b.label}`]),
     'Priority', 'Day left', 'Status',
   ]];
   const perfBySlack = Object.fromEntries(rows.filter((r) => r.o.slackId).map((r) => [r.o.slackId, r]));
+  // Separate from `rows`, which stops at 90 days. Someone past the window still needs
+  // a row on this tab saying why they have no numbers, rather than blank cells that
+  // look like a bug.
+  const daysWorkedBySlack = Object.fromEntries(
+    operators.filter((o) => o.slackId).map((o) => [o.slackId, daysWorkedOf(o.id)]),
+  );
+  const agedOut = (t) => {
+    const d = t.slackId ? daysWorkedBySlack[t.slackId] : null;
+    return d != null && d > TRACK_DAYS;
+  };
   // Order: people still here first, best training score at the top. Anyone who has
   // gone drops to the bottom of the tab — Vee's ask — and within that group the most
   // recent departure sits at the top, because that is the one still worth talking
@@ -353,7 +416,7 @@ async function main() {
     if (o?.closedAt) return fmtDbDate(o.closedAt).slice(0, 10);
     return t.status !== 'active' ? 'during training' : null;
   };
-  const sortedClass = [...AUG_2026].sort((a, b) => {
+  const sortedClass = [...TRAINED].sort((a, b) => {
     const la = leftOn(a);
     const lb = leftOn(b);
     if (!la && !lb) return b.total - a.total;      // both here: best score first
@@ -367,10 +430,14 @@ async function main() {
     const r = t.slackId ? perfBySlack[t.slackId] : null;
     // A block that has not started yet stays blank. Vee: "I left 60 and 90 blank, we
     // don't need anything there until it's the time."
+    //
+    // Whether it has started is THIS operator's question, not the class's. Someone who
+    // waited three days after class to get on the schedule reaches their day 30 three
+    // days after someone who started immediately.
     const winCells = [];
     for (const b of BLOCKS) {
-      const started = daysSinceGrad >= b.from;
-      const w = started ? r?.a.block[b.label] : null;
+      const started = r?.daysWorked != null && r.daysWorked >= b.from;
+      const w = started ? r.a.block[b.label] : null;
       winCells.push(
         w ? w.regCalls : '',
         w ? w.hardRegs : '',
@@ -379,20 +446,27 @@ async function main() {
     }
     const left = leftOn(t);
     tvp.push([
-      t.name, t.slackId || '(no slack id)', t.group,
+      t.name, t.cohort, t.slackId || '(no slack id)', t.group,
       t.lates, t.absences,
       pct100(t.knowledge),
       t.sli || '',
       pct100(t.callHandling),
       pct100(t.sysNav),
       pct100(t.total),
-      r?.first ? fmtDbDate(r.first) : (t.status === 'active' ? '(not started)' : ''),
+      r?.first ? fmtDbDate(r.first).slice(0, 10) : (t.status === 'active' ? '(not started)' : ''),
+      r?.daysWorked ?? '',
       ...winCells,
       r ? r.verdict.level : '',
       left && left !== 'during training' && bySlack[t.slackId]?.closedAt
         ? dayAfterGrad(bySlack[t.slackId].closedAt)
         : '',
-      t.status === 'active' ? (r?.o.closedAt ? `Left ${fmtDbDate(r.o.closedAt).slice(0, 10)}` : 'Active') : `${t.status}${t.reason ? ` — ${t.reason}` : ''}`,
+      t.status !== 'active'
+        ? `${t.status}${t.reason ? ` — ${t.reason}` : ''}`
+        : bySlack[t.slackId]?.closedAt
+          ? `Left ${fmtDbDate(bySlack[t.slackId].closedAt).slice(0, 10)}`
+          : agedOut(t)
+            ? `Past ${TRACK_DAYS} days — no longer tracked`
+            : 'Active',
     ]);
   }
 
@@ -400,6 +474,11 @@ async function main() {
   // Where we can compute it, we do, and we show their published figure next to
   // ours. If the two disagree the formula is wrong and we need to know that
   // before he presents it, not after.
+  // NOTE — the scorecard is deliberately still per-class and hardcoded to August.
+  // A scorecard grades one class, so that is right. What is NOT yet decided is
+  // whether the sheet should show class against class side by side; Vee is asking
+  // Oscar. When the answer comes, this becomes a loop over CLASSES and every other
+  // tab already carries a Class column ready for it.
   const completed = AUG_2026.filter((t) => t.status === 'active');
   const left = AUG_2026.filter((t) => t.status !== 'active');
   const pctCompleted = completed.length / AUG_2026.length;
@@ -463,7 +542,7 @@ async function main() {
     // including the five who scored 0 because they never finished. So the formula is
     // confirmed — and it means he is graded on the quiz scores of people who quit or
     // were fired. Worth him knowing before the next review.
-    ['Quizzes Success Rate', '85%', `${quizAllHires.toFixed(2)}%`, '82.19%', Math.abs(quizAllHires - 82.19) < 0.05 ? '✅ formula confirmed' : '⚠️', `Average across ALL ${AUG_2026.length} hires, including the ${left.length} who did not finish (four of them scored 0). Counting only the ${completed.length} who completed, it is ${quizCompletedOnly.toFixed(2)}% — above the 85% goal rather than under it.`],
+    ['Quizzes Success Rate', '85%', pct100(quizAllHires), '82.19%', Math.abs(quizAllHires - 82.19) < 0.05 ? '✅ formula confirmed' : '⚠️', `Average across ALL ${AUG_2026.length} hires, including the ${left.length} who did not finish (four of them scored 0). Counting only the ${completed.length} who completed, it is ${pct100(quizCompletedOnly)} — above the 85% goal rather than under it.`],
     ...classChurn.map((c) => [
       `${c.days} day Churn Rate`,
       `under ${pctStr(churnGoal[c.days])}`,
