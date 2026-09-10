@@ -74,6 +74,33 @@ Variables to set:
 
 Set the variable, redeploy, read the sheet, remove the variable.
 
+## Running it daily
+
+`OPS_TASK` is one-shot: set it, redeploy, read the sheet, remove it. Good for probes
+and for anything you want to watch happen.
+
+For a standing refresh use **`OPS_DAILY`** instead, and leave it set:
+
+| Variable | Value | Meaning |
+| --- | --- | --- |
+| `OPS_DAILY` | `tracker` | tasks to run on a schedule, comma separated |
+| `OPS_DAILY_AT` | `0 6 * * *` | optional cron expression, default 6am |
+
+The schedule runs in **Eastern time**, not UTC. That is deliberate: in UTC a "6am" job
+would drift an hour twice a year against every date on the sheet, and a run landing
+either side of midnight would stamp the wrong day.
+
+Two guards worth knowing about:
+
+- An unknown task name in `OPS_DAILY` is logged and ignored, never guessed at.
+- If a run is somehow still going when the next one is due, the new one is skipped.
+  Two overlapping writes to the same tabs is how you end up with half a table.
+
+Every per-operator tab carries a **Last updated** line directly under its header, in
+Eastern, so nobody has to wonder whether they are reading this morning's numbers or
+last month's. It is one row rather than a column, because the whole tab is rewritten
+in a single pass — as a column it would print the same instant on every row.
+
 ## Op reports — how they get here
 
 The `#op_report` Slack channel (G8HDD60Q6) is where reviewers file a structured form

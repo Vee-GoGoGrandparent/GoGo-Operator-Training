@@ -256,6 +256,10 @@ async function main() {
 
   // --------------------------------------------------------------- 5. the tabs
   const asOf = nowET();
+  // build-tracker runs as its own process, so it reads the schedule from the
+  // environment rather than from the server that spawned it.
+  const onASchedule = Boolean(String(process.env.OPS_DAILY ?? '').trim());
+  const stamp = `Last updated ${asOf}${onASchedule ? ' · refreshes daily' : ''}`;
 
   // --- Churn Watch -------------------------------------------------------------
   //
@@ -392,12 +396,16 @@ async function main() {
   if (!allLeavers.length) watch.push(['Nobody from a tracked class has left yet.', '', '', '']);
   for (const l of allLeavers) watch.push([l.name, l.cls, l.left, l.reason || '(none recorded)']);
 
+  /** The same "when was this refreshed" line every tab gets, sized to that tab. */
+  const stampRow = (width) => [stamp, ...Array(Math.max(0, width - 1)).fill('')];
+
   // --- Hard Regs: everyone, the plain numbers ---
   const regs = [[
-    'Operator', 'Slack ID', 'Team lead', 'Cohort (first month on calls)', 'Weeks active',
+    'Operator', 'Slack ID', 'Team lead', 'Class', 'Weeks active',
     'Reg calls (4wk)', 'Hard regs (4wk)', 'Reg ratio (4wk)', 'Soft regs', 'Trials',
     'Annual', 'Value', 'Basic', 'Fixed income', 'Priority', 'Status',
   ]];
+  regs.push(stampRow(regs[0].length));
   for (const r of rows) {
     regs.push([
       name(r.o), r.o.slackId || '',
@@ -427,6 +435,7 @@ async function main() {
     if (r.verdict.level === 'Strong') t.strong += 1;
   }
   const leads = [['Team lead', 'Operators', 'Escalate', 'Watch', 'Strong', 'Reg calls (4wk)', 'Hard regs (4wk)', 'Team reg ratio', 'vs target', 'Who to talk to first']];
+  leads.push(stampRow(leads[0].length));
   for (const t of Object.values(byTl).sort((a, b) => b.escalate - a.escalate || b.ops - a.ops)) {
     const rr = ratio(t.hardRegs, t.regCalls);
     leads.push([
@@ -438,6 +447,7 @@ async function main() {
 
   // --- Weekly Trend: the shape of the ramp, week by week ---
   const trend = [['Operator', 'Slack ID', 'Team lead', ...weeks]];
+  trend.push(stampRow(trend[0].length));
   for (const r of rows) {
     trend.push([
       name(r.o), r.o.slackId || '',
@@ -507,10 +517,21 @@ async function main() {
     'Quiz %', 'SLI /300', 'Call handling', 'System nav', 'Training total',
     'Started calls', 'Days on phones',
     ...BLOCKS.flatMap((b) => [`Reg calls ${b.label}`, `Hard regs ${b.label}`, `Reg ratio ${b.label}`]),
-    'Priority', 'Days lasted', 'Status',
+    'Priority', 'Status',
   ]];
   const WIDTH = tvp[0].length;
   const banner = (text) => [text, ...Array(WIDTH - 1).fill('')];
+
+  // WHEN WAS THIS LAST REFRESHED — one row, not a column.
+  //
+  // Vee asked for a "last updated" where "Days lasted" used to be. As a column it
+  // would print the same instant on all forty rows, because the whole tab is
+  // rewritten in one go. So it goes once, directly under the header, where it is
+  // impossible to miss and cannot be mistaken for per-person data.
+  //
+  // It matters because a run can fail quietly. Without a stamp, last month's numbers
+  // and this morning's look identical.
+  tvp.push(banner(stamp));
 
   const perfBySlack = Object.fromEntries(rows.filter((r) => r.o.slackId).map((r) => [r.o.slackId, r]));
   // Separate from `rows`, which stops at 90 days. Someone past the window still needs
@@ -557,11 +578,6 @@ async function main() {
       // Priority is about people we are still coaching. Once someone is gone it is
       // noise, and "OK" next to a departure reads badly.
       left ? '' : (r ? r.verdict.level : ''),
-      // How long they lasted, in days from their first real call to the day their
-      // account was closed. Blank for anyone still here.
-      o && o.closedAt && startMsOf[o.id] !== undefined
-        ? Math.floor((dayNum(o.closedAt) - startMsOf[o.id]) / 86400000)
-        : '',
       t.status !== 'active'
         ? `${t.status}${t.reason ? ` — ${t.reason}` : ''}`
         : o && o.closedAt

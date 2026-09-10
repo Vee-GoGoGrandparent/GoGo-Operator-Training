@@ -8,6 +8,7 @@
 // behind on the marketing service cannot fire an operator job, and a variable
 // left behind here cannot fire a marketing one.
 
+import cron from 'node-cron';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +25,8 @@ const TASKS = {
   opreports: 'build-op-reports.js',
   star: 'probe-star.js',
 };
+
+let running = false;
 
 function run(script) {
   return new Promise((resolve) => {
@@ -55,6 +58,60 @@ http
   })
   .listen(port, () => console.log(`[server] listening on ${port}`));
 
+// ---------------------------------------------------------------- daily refresh
+//
+// Two different ways to run something, on purpose:
+//
+//   OPS_TASK   one shot. Set it, redeploy, read the sheet, remove it. This is for
+//              probes and for anything you want to watch happen.
+//
+//   OPS_DAILY  a standing schedule. Set it once and leave it. The service is
+//              already alive to satisfy Railway, so it may as well do the work.
+//
+// The schedule runs in EASTERN TIME, not UTC. If it ran in UTC, "6am" would drift
+// an hour twice a year against every date on the sheet, and a job that lands either
+// side of midnight would stamp the wrong day.
+const DAILY = String(process.env.OPS_DAILY ?? '')
+  .split(',')
+  .map((t) => t.trim())
+  .filter(Boolean)
+  .filter((t) => {
+    if (TASKS[t]) return true;
+    console.error(`[cron] ignoring unknown OPS_DAILY value: ${t}`);
+    return false;
+  });
+
+const DAILY_AT = process.env.OPS_DAILY_AT || '0 6 * * *'; // 6am Eastern
+
+if (DAILY.length) {
+  if (!cron.validate(DAILY_AT)) {
+    console.error(`[cron] OPS_DAILY_AT is not a valid cron expression: "${DAILY_AT}" — nothing scheduled.`);
+  } else {
+    cron.schedule(
+      DAILY_AT,
+      async () => {
+        // If a run is somehow still going, skip rather than stack two writes to the
+        // same tabs. Overlapping writes to one sheet is how you get half a table.
+        if (running) {
+          console.error('[cron] previous run still going — skipping this one.');
+          return;
+        }
+        running = true;
+        console.log(`[cron] daily run starting: ${DAILY.join(', ')}`);
+        try {
+          for (const t of DAILY) await run(TASKS[t]);
+        } finally {
+          running = false;
+        }
+      },
+      { timezone: 'America/New_York' },
+    );
+    console.log(`[cron] daily: ${DAILY.join(', ')} at "${DAILY_AT}" Eastern`);
+  }
+} else {
+  console.log('[cron] OPS_DAILY not set — no schedule.');
+}
+
 const requested = String(process.env.OPS_TASK ?? '')
   .split(',')
   .map((t) => t.trim())
@@ -69,7 +126,12 @@ if (unknown.length) {
 
 if (known.length) {
   (async () => {
-    for (const t of known) await run(TASKS[t]);
+    running = true;
+    try {
+      for (const t of known) await run(TASKS[t]);
+    } finally {
+      running = false;
+    }
     console.log('[task] all done — remove OPS_TASK from Railway now.');
   })();
 } else {
