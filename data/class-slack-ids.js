@@ -10,7 +10,7 @@
 
 export const CLASS_SLACK_IDS = [
   // ---- August 2026 class, group 1 (Oscar & Christene) ----
-  { slackId: 'U0BLV30S7C6', name: 'Berdannette Ranera', cohort: 'aug-2026-c1', status: 'active' },
+  { slackId: 'U0BLXBCK350', name: 'Berdannette Ranera', cohort: 'aug-2026-c1', status: 'active' },
   { slackId: 'U0BBS8MLYA2', name: 'Daryl Molina', cohort: 'aug-2026-c1', status: 'active' },
   { slackId: 'U0BLTP7UGG5', name: 'Dasheil Gonzaga', cohort: 'aug-2026-c1', status: 'active' },
   { slackId: 'U0BLQQMDK6F', name: 'Fely Mostajo', cohort: 'aug-2026-c1', status: 'active' },

@@ -27,7 +27,7 @@ export const CLASS_META = {
 // score out of 300. lates/absences counted off the daily attendance grid.
 export const AUG_2026 = [
   // ---------------- Group 1 (orientation leaders: Oscar & Christene) ----------------
-  { slackId: 'U0BLV30S7C6', name: 'Berdannette Ranera', group: 1, knowledge: 90.00, sli: 275, callHandling: 94, sysNav: 89, punctuality: 100, engagement: 98, techReadiness: 100, total: 93.10, personality: 'Owl', lates: 0, absences: 0, status: 'active' },
+  { slackId: 'U0BLXBCK350', name: 'Berdannette Ranera', group: 1, knowledge: 90.00, sli: 275, callHandling: 94, sysNav: 89, punctuality: 100, engagement: 98, techReadiness: 100, total: 93.10, personality: 'Owl', lates: 0, absences: 0, status: 'active' },
   { slackId: 'U0BBS8MLYA2', name: 'Daryl Molina', group: 1, knowledge: 89.11, sli: 285, callHandling: 90, sysNav: 90, punctuality: 100, engagement: 95, techReadiness: 100, total: 91.73, personality: 'Eagle', lates: 0, absences: 0, status: 'active' },
   { slackId: 'U0BLTP7UGG5', name: 'Dasheil Gonzaga', group: 1, knowledge: 89.56, sli: 295, callHandling: 86, sysNav: 95, punctuality: 100, engagement: 98, techReadiness: 100, total: 92.17, personality: 'Owl', lates: 1, absences: 0, status: 'active' },
   { slackId: 'U0BLXQWJMQA', name: 'Eleonor Andres', group: 1, knowledge: 85.33, sli: 255, callHandling: 93, sysNav: 90, punctuality: 100, engagement: 95, techReadiness: 100, total: 91.35, personality: 'Owl', lates: 0, absences: 0, status: 'active' },

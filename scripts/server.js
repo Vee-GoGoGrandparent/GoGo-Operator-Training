@@ -22,6 +22,7 @@ const TASKS = {
   tracker: 'build-tracker.js',
   reports: 'probe-reports.js',
   opreports: 'build-op-reports.js',
+  star: 'probe-star.js',
 };
 
 function run(script) {

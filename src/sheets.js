@@ -139,6 +139,14 @@ export const BRAND = {
   yellow: rgb('#FFC000'), // the number that matters / needs attention
   indigoTint: rgb('#E8E9F2'), // banded rows
   white: rgb('#FFFFFF'),
+
+  // Priority colours. Vee picked the two text colours by hand in the sheet; the
+  // backgrounds are the matching light tints from the same columns of the Google
+  // Sheets palette, so they read as a set rather than two unrelated reds.
+  badText: rgb('#990000'), //  dark red 2   — Escalate and Watch
+  badFill: rgb('#F4CCCC'), //  light red 3  — same column
+  goodText: rgb('#38761D'), // dark green 2 — Strong
+  goodFill: rgb('#D9EAD3'), // light green 3 — same column
 };
 
 /**
@@ -238,4 +246,51 @@ export async function bandRow(title, rowIndex, spreadsheetId = BUILD_SHEET_ID) {
       ],
     },
   });
+}
+
+/**
+ * Colour the Priority column by what it says.
+ *
+ * Deliberately CONDITIONAL formatting rather than painting cells. Every run rebuilds
+ * these tabs and the rows re-sort, so a colour baked onto row 8 would end up on
+ * whoever happens to land in row 8 next week. A rule that follows the word cannot
+ * drift. It also means a human editing the sheet by hand gets the same colours.
+ *
+ * Applies to the whole tab, so it catches the Priority column wherever it sits and
+ * the Status column when it says the same thing.
+ */
+export async function priorityColors(title, { spreadsheetId = BUILD_SHEET_ID } = {}) {
+  const api = sheets();
+  const meta = await api.spreadsheets.get({ spreadsheetId });
+  const tab = meta.data.sheets.find((s) => s.properties.title === title);
+  if (!tab) return;
+  const sheetId = tab.properties.sheetId;
+
+  // Drop any rules we added before, so repeated runs do not stack duplicates.
+  const existing = tab.conditionalFormats?.length ?? 0;
+  const requests = [];
+  for (let i = existing - 1; i >= 0; i -= 1) {
+    requests.push({ deleteConditionalFormatRule: { sheetId, index: i } });
+  }
+
+  const rule = (text, fg, bg) => ({
+    addConditionalFormatRule: {
+      index: 0,
+      rule: {
+        ranges: [{ sheetId, startRowIndex: 1 }],
+        booleanRule: {
+          condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: text }] },
+          format: { backgroundColor: bg, textFormat: { foregroundColor: fg, bold: true } },
+        },
+      },
+    },
+  });
+
+  requests.push(
+    rule('Escalate', BRAND.badText, BRAND.badFill),
+    rule('Watch', BRAND.badText, BRAND.badFill),
+    rule('Strong', BRAND.goodText, BRAND.goodFill),
+  );
+
+  await api.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
 }
