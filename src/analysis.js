@@ -89,12 +89,21 @@ export function assess({ recent, prior, peerMedianRatio, weeksActive, isSuspende
   }
 
   // A falling ratio only means something on enough calls to be real.
+  //
+  // And a fall is only an ESCALATION if it has taken them below the bar. Someone
+  // who dropped from 26% to 18% is still beating the 15% target — that is worth a
+  // conversation, not an alarm. The first run flagged people doing fine as
+  // Escalate purely because they came down off a high, and a list like that is
+  // one a trainer learns to ignore.
   if (rRatio !== null && pRatio !== null && recent.regCalls >= 25 && prior.regCalls >= 40) {
     const rel = 1 - rRatio / pRatio;
     if (rel >= 0.3) {
+      const stillAboveTarget = rRatio >= TARGET_HR_RATIO;
       flags.push({
-        level: 'Escalate',
-        text: `Reg ratio fell from ${pctStr(pRatio)} to ${pctStr(rRatio)} — down ${Math.round(rel * 100)}% against their own earlier work.`,
+        level: stillAboveTarget ? 'Watch' : 'Escalate',
+        text:
+          `Reg ratio fell from ${pctStr(pRatio)} to ${pctStr(rRatio)} — down ${Math.round(rel * 100)}% against their own earlier work.` +
+          (stillAboveTarget ? ` Still above the ${pctStr(TARGET_HR_RATIO)} target, so this is a trend to watch rather than a problem yet.` : ''),
       });
     }
   }
