@@ -94,7 +94,60 @@ export function sheets() {
  * Defaults to the BUILD sheet — writing to the team-facing tracker has to be
  * an explicit choice, never something that happens because a default drifted.
  */
-export async function writeTab(title, rows, spreadsheetId = BUILD_SHEET_ID) {
+/**
+ * Rewrite `rows` so its columns sit in whatever order the tab already uses.
+ *
+ * WHY THIS EXISTS
+ * Vee rearranges these tabs by hand — she moved Priority left so it is visible
+ * without scrolling. Every rebuild clears the values and writes them back, so
+ * without this her column order would be silently undone on the next run, every
+ * run. Rebuilding should refresh the numbers, not relitigate the layout.
+ *
+ * Matching is by header TEXT, so it survives columns moving around.
+ *   - A column she has moved keeps its new position.
+ *   - A column in our output that the tab does not have gets appended on the right,
+ *     where it is obvious something new turned up.
+ *
+ * That second rule cuts both ways, and it is a deliberate choice. A column missing
+ * from the tab is ambiguous: it might be one she deleted, or one we just started
+ * producing. The two are indistinguishable from here. Appending means a column she
+ * deleted comes back; dropping would mean data silently disappearing because of a
+ * header typo. Coming back is the cheaper mistake — she deletes it again and tells
+ * us, and we remove it at the source, which is exactly how Personality was handled.
+ *
+ * `headerRowIndex` is which row holds the headers — several tabs open with a title
+ * and a note before the real header row.
+ */
+export function matchExistingOrder(existingHeader, rows, headerRowIndex) {
+  if (!existingHeader?.length) return rows;
+  const header = rows[headerRowIndex];
+  if (!header?.length) return rows;
+
+  const norm = (v) => String(v ?? '').trim().toLowerCase();
+  const ours = header.map(norm);
+  // Only reorder when the tab genuinely looks like the same table. Otherwise the
+  // sheet has been rebuilt into something else and the old order means nothing.
+  const overlap = existingHeader.map(norm).filter((h) => h && ours.includes(h));
+  if (overlap.length < 2) return rows;
+
+  const order = [];
+  for (const h of existingHeader.map(norm)) {
+    const i = ours.indexOf(h);
+    if (h && i !== -1 && !order.includes(i)) order.push(i);
+  }
+  // Anything we produce that the tab has never had goes on the end.
+  for (let i = 0; i < ours.length; i += 1) if (!order.includes(i)) order.push(i);
+  if (order.length === ours.length && order.every((v, i) => v === i)) return rows;
+
+  return rows.map((r, ri) => (ri < headerRowIndex ? r : order.map((i) => r[i] ?? '')));
+}
+
+/**
+ * @param {object} [opts]
+ * @param {number} [opts.keepColumnOrderFromRow] header row index to match against the
+ *   tab's existing column order. Omit to write columns exactly as given.
+ */
+export async function writeTab(title, rows, spreadsheetId = BUILD_SHEET_ID, opts = {}) {
   const api = sheets();
   const meta = await api.spreadsheets.get({ spreadsheetId });
   const existing = meta.data.sheets.find((s) => s.properties.title === title);
@@ -105,6 +158,15 @@ export async function writeTab(title, rows, spreadsheetId = BUILD_SHEET_ID) {
       requestBody: { requests: [{ addSheet: { properties: { title } } }] },
     });
   } else {
+    // Read the header BEFORE clearing, so a hand-arranged column order can be kept.
+    if (typeof opts.keepColumnOrderFromRow === 'number') {
+      const hr = opts.keepColumnOrderFromRow + 1;
+      const cur = await api.spreadsheets.values.get({
+        spreadsheetId,
+        range: `'${title}'!A${hr}:ZZ${hr}`,
+      }).catch(() => null);
+      rows = matchExistingOrder(cur?.data?.values?.[0], rows, opts.keepColumnOrderFromRow);
+    }
     await api.spreadsheets.values.clear({ spreadsheetId, range: `'${title}'!A:ZZ` });
   }
 
@@ -143,10 +205,10 @@ export const BRAND = {
   // Priority colours. Vee picked the two text colours by hand in the sheet; the
   // backgrounds are the matching light tints from the same columns of the Google
   // Sheets palette, so they read as a set rather than two unrelated reds.
-  badText: rgb('#990000'), //  dark red 2   — Escalate and Watch
-  badFill: rgb('#F4CCCC'), //  light red 3  — same column
-  goodText: rgb('#38761D'), // dark green 2 — Strong
-  goodFill: rgb('#D9EAD3'), // light green 3 — same column
+  badText: rgb('#990000'), //  Escalate and Watch — Vee's choice
+  badFill: rgb('#FFF1F1'), //  her fill; deliberately paler than the palette tint
+  goodText: rgb('#38761D'), // Strong — Vee's choice
+  goodFill: rgb('#E9F4E5'), // her fill
 };
 
 /**
@@ -159,7 +221,6 @@ export async function formatHeader(title, { bandRows = false, spreadsheetId = BU
   const tab = meta.data.sheets.find((s) => s.properties.title === title);
   if (!tab) return;
   const sheetId = tab.properties.sheetId;
-  const cols = tab.properties.gridProperties.columnCount;
 
   const requests = [
     {
@@ -182,12 +243,14 @@ export async function formatHeader(title, { bandRows = false, spreadsheetId = BU
         fields: 'gridProperties.frozenRowCount',
       },
     },
-    {
-      autoResizeDimensions: {
-        dimensions: { sheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: Math.min(cols, 40) },
-      },
-    },
   ];
+
+  // Column widths and wrapping are DELIBERATELY not touched.
+  //
+  // There used to be an autoResizeDimensions call here. It had to go: Vee sets column
+  // widths and wrap by hand, and this job reruns on a schedule. Auto-resizing would
+  // quietly undo her layout every single time, and she would have to redo it. A
+  // rebuild refreshes the numbers; it does not get an opinion about the layout.
 
   if (bandRows) {
     requests.push({

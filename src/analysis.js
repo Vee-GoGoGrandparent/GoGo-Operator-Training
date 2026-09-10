@@ -37,7 +37,22 @@ export const median = (nums) => {
   return xs.length % 2 ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2;
 };
 
-export const pctStr = (r) => (r === null || r === undefined ? '' : `${(r * 100).toFixed(1)}%`);
+/**
+ * Percentages, without trailing zeros nobody needs.
+ *
+ * Vee's rule, and it is the right one: 95 should read "95%", not "95.00%". The
+ * decimals only earn their place when they carry information — 94.22% keeps both,
+ * 93.10% becomes 93.1%. Rounding happens first, then the padding is stripped, so
+ * nothing is silently truncated.
+ */
+const trimZeros = (n, dp) => String(Number(Number(n).toFixed(dp)));
+
+/** For ratios in the 0-1 range, e.g. hard regs / reg calls. */
+export const pctStr = (r) => (r === null || r === undefined ? '' : `${trimZeros(r * 100, 1)}%`);
+
+/** For scores already on a 0-100 scale, e.g. quiz, call handling, training total. */
+export const pct100 = (n) =>
+  n === null || n === undefined || n === '' ? '' : `${trimZeros(n, 2)}%`;
 
 /** ISO week key, so weeks sort correctly across a year boundary. */
 export function weekKey(date) {

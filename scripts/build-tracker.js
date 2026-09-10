@@ -17,8 +17,9 @@ import { connect, q, tryQ } from '../src/db.js';
 import { writeTab, formatHeader, priorityColors, TRACKER_SHEET_ID, BRAND } from '../src/sheets.js';
 import { notify } from '../src/slack.js';
 import { nowET, fmtDbDate } from '../src/time.js';
-import { regCallsOf, ratio, median, pctStr, weekKey, assess, TARGET_HR_RATIO } from '../src/analysis.js';
+import { regCallsOf, ratio, median, pctStr, pct100, weekKey, assess, TARGET_HR_RATIO } from '../src/analysis.js';
 import { AUG_2026, CLASS_META } from '../data/class-aug-2026.js';
+import { TRAINED_SLACK_IDS, TRAINED_WITHOUT_SLACK, earliestGradDate } from '../data/trained-roster.js';
 
 const WEEKS = 12; // 4 recent + 8 prior — the escalate/watch comparison
 const RECENT_WEEKS = 4;
@@ -26,8 +27,22 @@ const RECENT_WEEKS = 4;
 // The scorecard is graded at 30, 60 and 90 days, so the tracker reports on the same
 // clock. 98 days is pulled rather than 90 because the 12-week comparison above needs
 // 84 and the 90-day window needs 90 — one query has to cover both.
-const PULL_DAYS = 98;
-const WINDOWS = [30, 60, 90];
+// The scorecard is graded in 30-day blocks measured FROM GRADUATION, so the tracker
+// reports on the same clock.
+//
+// These are DISCRETE blocks, not running totals. Vee: "reg calls thirty days is the
+// first thirty days. Then reg calls sixty days is the following thirty days. It's
+// still only counting thirty days, not sixty days in total."
+//
+// A block that has not started yet is left blank rather than shown as 0 — a zero
+// reads as "they registered nothing", which is a very different thing from "that
+// month has not happened yet".
+const BLOCKS = [
+  { label: '30d', from: 0, to: 30 },
+  { label: '60d', from: 31, to: 60 },
+  { label: '90d', from: 61, to: 90 },
+];
+const WINDOWS = [30, 60, 90]; // churn milestones — those ARE cumulative
 
 const name = (o) => `${(o.firstName || '').trim()} ${(o.lastName || '').trim()}`.replace(/\s+/g, ' ').trim();
 
@@ -48,11 +63,18 @@ async function main() {
             tl.firstName AS tlFirst, tl.lastName AS tlLast
        FROM operators o
        LEFT JOIN operators tl ON tl.id = o.teamLeadId
-      WHERE o.closedAt IS NULL
-         OR o.closedAt >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)`,
-    [],
+      WHERE o.slackId IN (?)`,
+    [TRAINED_SLACK_IDS],
     40_000,
   );
+  // Everyone here went through a class we hold data for. Operators from other
+  // departments are deliberately not pulled at all — not fetched and then hidden,
+  // never fetched. Closed accounts stay in: churn is the point.
+  console.log(`[tracker] ${TRAINED_SLACK_IDS.length} trained operators on the roster, ${operators.length} matched in the database`);
+  if (TRAINED_WITHOUT_SLACK.length) {
+    console.log(`[tracker] no Slack ID, cannot be joined: ${TRAINED_WITHOUT_SLACK.join(', ')}`);
+  }
+
   const byId = Object.fromEntries(operators.map((o) => [o.id, o]));
   // Keyed off the FULL roster, not off the people with performance rows. Someone who
   // left before ever registering anything has no performance rows at all — and they
@@ -68,8 +90,8 @@ async function main() {
             hardRegs, softRegs, trialRegs,
             annualHardRegs, valueMonthlyHardRegs, basicMonthlyHardRegs, fixedIncomeMonthlyHardRegs
        FROM operatorPerformances
-      WHERE aggregationDate >= DATE_SUB(CURDATE(), INTERVAL ${PULL_DAYS} DAY)`,
-    [],
+      WHERE aggregationDate >= DATE_SUB(?, INTERVAL 14 DAY)`,
+    [earliestGradDate()],
     60_000,
   );
   console.log(`[tracker] ${perf.length} daily performance rows`);
@@ -89,22 +111,25 @@ async function main() {
   const weeks = [...new Set(perf.map((r) => weekKey(r.aggregationDate)))].sort();
   const recentWeeks = new Set(weeks.slice(-RECENT_WEEKS));
 
-  // "How many days ago was this row?" — aggregationDate is a stored DATE, so it is
-  // compared against today's date in UTC, matching how db.js parses it. Mixing a
-  // stored date against a real instant is the classic way to be off by a day.
+  // aggregationDate is a stored DATE, so it is compared against today's date in UTC,
+  // matching how db.js parses it. Mixing a stored date against a real instant is the
+  // classic way to end up a day out.
   const now = new Date();
   const todayUTC = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const daysAgo = (d) => Math.floor((todayUTC - Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())) / 86400000);
 
-  const agg = {}; // operatorId -> { recent, prior, byWeek, plans, win }
+  // Day 0 is GRADUATION, not today and not the hire date. Every block below is
+  // counted forward from there, which is the same clock the scorecard uses.
+  const gradMs = Date.parse(`${earliestGradDate()}T00:00:00Z`);
+  const dayAfterGrad = (d) =>
+    Math.floor((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - gradMs) / 86400000);
+  const daysSinceGrad = Math.floor((todayUTC - gradMs) / 86400000);
+
+  const agg = {}; // operatorId -> { recent, prior, byWeek, plans, block }
   const blank = () => ({ regCalls: 0, hardRegs: 0, softRegs: 0, trialRegs: 0 });
-  // Windows are CUMULATIVE and nested: 60 days includes the last 30, 90 includes the
-  // last 60. That matches how the scorecard reads — "churn by day 60" means everyone
-  // who left by then, not only those who left in days 31-60.
-  const blankWindows = () => Object.fromEntries(WINDOWS.map((d) => [d, { regCalls: 0, hardRegs: 0 }]));
+  const blankBlocks = () => Object.fromEntries(BLOCKS.map((b) => [b.label, { regCalls: 0, hardRegs: 0 }]));
 
   for (const r of perf) {
-    const a = (agg[r.operatorId] ??= { recent: blank(), prior: blank(), byWeek: {}, win: blankWindows(), plans: { annual: 0, value: 0, basic: 0, fixedIncome: 0 } });
+    const a = (agg[r.operatorId] ??= { recent: blank(), prior: blank(), byWeek: {}, block: blankBlocks(), plans: { annual: 0, value: 0, basic: 0, fixedIncome: 0 } });
     const calls = regCallsOf(r);
     const wk = weekKey(r.aggregationDate);
     const bucket = recentWeeks.has(wk) ? a.recent : a.prior;
@@ -118,12 +143,15 @@ async function main() {
     w.regCalls += calls;
     w.hardRegs += Number(r.hardRegs || 0);
 
-    const age = daysAgo(r.aggregationDate);
-    for (const d of WINDOWS) {
-      if (age < d) {
-        a.win[d].regCalls += calls;
-        a.win[d].hardRegs += Number(r.hardRegs || 0);
-      }
+    // Which 30-day block after graduation does this day belong to? Calls made during
+    // training week 3 land a few days BEFORE graduation; those count in block one
+    // rather than being thrown away, since they are real registrations by a real
+    // trainee. Nothing is double counted — each day lands in exactly one block.
+    const since = dayAfterGrad(r.aggregationDate);
+    const b = BLOCKS.find((x) => since <= x.to && (since >= x.from || x === BLOCKS[0]));
+    if (b) {
+      a.block[b.label].regCalls += calls;
+      a.block[b.label].hardRegs += Number(r.hardRegs || 0);
     }
 
     a.plans.annual += Number(r.annualHardRegs || 0);
@@ -162,8 +190,19 @@ async function main() {
   }
   console.log(`[tracker] ${rows.length} operators with activity in the last ${WEEKS} weeks`);
 
+  // Anyone who has left drops below everyone still here, on every per-operator tab,
+  // with the most recent departure at the top of that bottom group. Someone gone
+  // three months is not what a trainer needs to see first; someone gone last week is.
   const order = { Escalate: 0, Watch: 1, 'No data': 2, OK: 3, Strong: 4 };
-  rows.sort((x, y) => (order[x.verdict.level] - order[y.verdict.level]) || ((y.a.recent.regCalls) - (x.a.recent.regCalls)));
+  const closedKey = (r) => (r.o.closedAt ? fmtDbDate(r.o.closedAt).slice(0, 10) : null);
+  rows.sort((x, y) => {
+    const cx = closedKey(x);
+    const cy = closedKey(y);
+    if (!cx !== !cy) return cx ? 1 : -1;          // still here first
+    if (cx && cy && cx !== cy) return cy.localeCompare(cx); // most recent departure first
+    return (order[x.verdict.level] - order[y.verdict.level])
+        || (y.a.recent.regCalls - x.a.recent.regCalls);
+  });
 
   // --------------------------------------------------------------- 5. the tabs
   const asOf = nowET();
@@ -267,13 +306,17 @@ async function main() {
     ['Churn Watch', 'Only the operators who need attention, most urgent first. Each row says in plain words what we saw. Start here.'],
     ['Class Scorecard', 'The ten metrics management grades the class on. Where we can compute a number we show ours next to their published one, so a disagreement shows up before it is presented.'],
     ['Training vs Performance', 'The August 2026 class with their training scores beside what they have actually done on the phones. This is the raw material for forecasting who will struggle.'],
-    ['Hard Regs', 'Every active operator and their registration numbers for the last 4 weeks, including which plans they sell.'],
+    ['Hard Regs', 'Every operator from a tracked class and their registration numbers for the last 4 weeks, including which plans they sell.'],
     ['Team Leads', 'The same picture rolled up by team lead — how many of their people need help, and who to talk to first.'],
     ['Class Churn', 'The 30/60/90 day churn rate for the class, and the names behind it. A running window can only go up, so a rate quoted before the window closes is a floor.'],
     ['Weekly Trend', 'Each operator week by week, so you can see the shape: ramping up, flat, or falling.'],
     [],
     ['How to read it', ''],
+    ['Who is in here', 'ONLY operators who went through a class we hold training data for — right now the August 2026 class. Operators from other departments are not pulled at all. Adding the next class is one file.'],
     ['Reg ratio', 'Hard registrations divided by registration calls. Test calls are excluded. Management target is 15%.'],
+    ['30d / 60d / 90d', 'Separate 30-day blocks counted forward from graduation, not running totals. 60d means days 31-60, not the first 60 days. A block that has not started yet is left blank rather than shown as zero.'],
+    ['Order of the rows', 'People still here first. Anyone who has left sits at the bottom, most recent departure first.'],
+    ['Layout', 'Column widths, wrapping and column order are yours. The rebuild refreshes numbers and will not move your columns or resize them.'],
     ['Peer median', 'The middle reg ratio among operators who started taking calls the same month. A new operator is compared to other new operators, never to a veteran.'],
     ['Priority', 'Escalate = something clearly changed or they are well behind their peers. Watch = worth a conversation. Strong = doing notably well, worth learning from.'],
     [],
@@ -284,6 +327,7 @@ async function main() {
     ['Known gaps', ''],
     ['Hire date', 'The database only knows when an operator was entered into the system — usually about a week before their class starts. The real hire date is the first day of orientation, and it lives only in the class workbook. "Started calls" below is the first day they registered anything, which happens during training week 3.'],
     ['Training metrics', 'Completed training, quiz scores and trainee satisfaction come from the class workbook, not the database. Not connected yet.'],
+    ['Pre-graduation calls', 'Trainees take live calls in week 3, a few days before graduation. Those registrations are counted in the 30d block rather than discarded, so the first block covers about 35 days and the later two are exactly 30.'],
   ];
 
   // --- Training vs Performance: the two halves side by side ---
@@ -293,33 +337,61 @@ async function main() {
   // are shown as percentages like Quiz % beside them. SLI is out of 300 and stays a
   // raw number — a percentage there would be inventing a scale the team does not use.
   const tvp = [[
-    'Operator', 'Slack ID', 'Group', 'Personality', 'Lates', 'Absences',
+    'Operator', 'Slack ID', 'Group', 'Lates', 'Absences',
     'Quiz %', 'SLI /300', 'Call handling', 'System nav', 'Training total',
     'Started calls',
-    'Reg calls 30d', 'Hard regs 30d', 'Reg ratio 30d',
-    'Reg calls 60d', 'Hard regs 60d', 'Reg ratio 60d',
-    'Reg calls 90d', 'Hard regs 90d', 'Reg ratio 90d',
-    'Priority', 'Status',
+    ...BLOCKS.flatMap((b) => [`Reg calls ${b.label}`, `Hard regs ${b.label}`, `Reg ratio ${b.label}`]),
+    'Priority', 'Day left', 'Status',
   ]];
   const perfBySlack = Object.fromEntries(rows.filter((r) => r.o.slackId).map((r) => [r.o.slackId, r]));
-  for (const t of AUG_2026.sort((a, b) => b.total - a.total)) {
+  // Order: people still here first, best training score at the top. Anyone who has
+  // gone drops to the bottom of the tab — Vee's ask — and within that group the most
+  // recent departure sits at the top, because that is the one still worth talking
+  // about. Someone who left in week one is not what a trainer needs to see first.
+  const leftOn = (t) => {
+    const o = t.slackId ? bySlack[t.slackId] : null;
+    if (o?.closedAt) return fmtDbDate(o.closedAt).slice(0, 10);
+    return t.status !== 'active' ? 'during training' : null;
+  };
+  const sortedClass = [...AUG_2026].sort((a, b) => {
+    const la = leftOn(a);
+    const lb = leftOn(b);
+    if (!la && !lb) return b.total - a.total;      // both here: best score first
+    if (!la) return -1;                            // still here beats gone
+    if (!lb) return 1;
+    if (la === lb) return b.total - a.total;
+    return lb.localeCompare(la);                   // both gone: most recent first
+  });
+
+  for (const t of sortedClass) {
     const r = t.slackId ? perfBySlack[t.slackId] : null;
+    // A block that has not started yet stays blank. Vee: "I left 60 and 90 blank, we
+    // don't need anything there until it's the time."
     const winCells = [];
-    for (const d of WINDOWS) {
-      const w = r?.a.win[d];
-      winCells.push(w ? w.regCalls : '', w ? w.hardRegs : '', w ? pctStr(ratio(w.hardRegs, w.regCalls)) : '');
+    for (const b of BLOCKS) {
+      const started = daysSinceGrad >= b.from;
+      const w = started ? r?.a.block[b.label] : null;
+      winCells.push(
+        w ? w.regCalls : '',
+        w ? w.hardRegs : '',
+        w ? pctStr(ratio(w.hardRegs, w.regCalls)) : '',
+      );
     }
+    const left = leftOn(t);
     tvp.push([
-      t.name, t.slackId || '(no slack id)', t.group, t.personality || '',
+      t.name, t.slackId || '(no slack id)', t.group,
       t.lates, t.absences,
-      t.knowledge ? `${t.knowledge.toFixed(2)}%` : '',
+      pct100(t.knowledge),
       t.sli || '',
-      t.callHandling ? `${t.callHandling.toFixed(2)}%` : '',
-      t.sysNav ? `${t.sysNav.toFixed(2)}%` : '',
-      t.total ? `${t.total.toFixed(2)}%` : '',
+      pct100(t.callHandling),
+      pct100(t.sysNav),
+      pct100(t.total),
       r?.first ? fmtDbDate(r.first) : (t.status === 'active' ? '(not started)' : ''),
       ...winCells,
       r ? r.verdict.level : '',
+      left && left !== 'during training' && bySlack[t.slackId]?.closedAt
+        ? dayAfterGrad(bySlack[t.slackId].closedAt)
+        : '',
       t.status === 'active' ? (r?.o.closedAt ? `Left ${fmtDbDate(r.o.closedAt).slice(0, 10)}` : 'Active') : `${t.status}${t.reason ? ` — ${t.reason}` : ''}`,
     ]);
   }
@@ -344,8 +416,8 @@ async function main() {
   // class is not counted as churn, they are counted as not having completed.
   //
   // The clock starts at GRADUATION, not at hire.
-  const gradMs = gradDate.getTime();
-  const daysSinceGrad = Math.floor((todayUTC - gradMs) / 86400000);
+  // gradMs and daysSinceGrad are defined up with the block aggregation — the churn
+  // clock and the registration clock are the same clock, and must not drift apart.
 
   const classChurn = WINDOWS.map((d) => {
     // Who from this class has a closedAt, and was it inside the window?
@@ -355,7 +427,7 @@ async function main() {
       .map(({ t, o }) => ({
         name: t.name,
         left: fmtDbDate(o.closedAt).slice(0, 10),
-        day: Math.floor((Date.UTC(o.closedAt.getUTCFullYear(), o.closedAt.getUTCMonth(), o.closedAt.getUTCDate()) - gradMs) / 86400000),
+        day: dayAfterGrad(o.closedAt),
         reason: (o.deactivationReason || '').trim(),
       }))
       .filter((x) => x.day >= 0 && x.day <= d)
@@ -438,14 +510,17 @@ async function main() {
     ['This counts people whose operator record was closed. Someone who has stopped taking calls but has not been closed out does not appear here — check Churn Watch for those.'],
   ];
 
+  // keepColumnOrderFromRow: these tabs get rearranged by hand, so the rebuild writes
+  // columns in whatever order the tab already has rather than forcing its own.
+  const keepTop = { keepColumnOrderFromRow: 0 };
   await writeTab('README', readme, TRACKER_SHEET_ID);
-  await writeTab('Churn Watch', watch, TRACKER_SHEET_ID);
-  await writeTab('Class Scorecard', scorecard, TRACKER_SHEET_ID);
+  await writeTab('Churn Watch', watch, TRACKER_SHEET_ID, keepTop);
+  await writeTab('Class Scorecard', scorecard, TRACKER_SHEET_ID, keepTop);
   await writeTab('Class Churn', churnTab, TRACKER_SHEET_ID);
-  await writeTab('Training vs Performance', tvp, TRACKER_SHEET_ID);
-  await writeTab('Hard Regs', regs, TRACKER_SHEET_ID);
-  await writeTab('Team Leads', leads, TRACKER_SHEET_ID);
-  await writeTab('Weekly Trend', trend, TRACKER_SHEET_ID);
+  await writeTab('Training vs Performance', tvp, TRACKER_SHEET_ID, keepTop);
+  await writeTab('Hard Regs', regs, TRACKER_SHEET_ID, keepTop);
+  await writeTab('Team Leads', leads, TRACKER_SHEET_ID, keepTop);
+  await writeTab('Weekly Trend', trend, TRACKER_SHEET_ID, keepTop);
 
   for (const t of ['README', 'Churn Watch', 'Class Scorecard', 'Class Churn', 'Training vs Performance', 'Hard Regs', 'Team Leads', 'Weekly Trend']) {
     await formatHeader(t, { spreadsheetId: TRACKER_SHEET_ID, bandRows: t !== 'README' }).catch(() => {});

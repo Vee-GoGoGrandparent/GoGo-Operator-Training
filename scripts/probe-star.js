@@ -16,11 +16,14 @@
 // "90 day star model — goal 3.70+". A 3.70 on a 5-point scale is an average rating.
 // So we are looking for a per-operator (or per-ride, averageable) numeric rating.
 //
-// This searches the entire database schema, not a guessed list of tables.
+// This searches the entire database SCHEMA, because a column could be anywhere. But
+// any actual numbers it reports back are scoped to operators who went through a class
+// we track — per Vee, this project is only about the training department.
 //
 // Read-only. Touches nothing marketing.
 
 import { connect, tryQ } from '../src/db.js';
+import { TRAINED_SLACK_IDS } from '../data/trained-roster.js';
 import { writeTab, formatHeader } from '../src/sheets.js';
 import { notify } from '../src/slack.js';
 import { nowET, fmtDbDate } from '../src/time.js';
@@ -139,6 +142,9 @@ async function main() {
       'No column or table in the entire database is named like a star rating. If the Ride Star Model exists, it is either computed outside the database (a spreadsheet or a BI tool), stored under a name nobody would guess, or lives in a different system entirely. The next step is asking Ops for the definition rather than searching harder.',
     ]);
   }
+
+  // If a rating turns up on something operator-shaped, show it for OUR people only.
+  out.push(['— Scope —', `Schema search covers the whole database. Any operator numbers are limited to the ${TRAINED_SLACK_IDS.length} operators on the trained roster.`]);
 
   out.push(['— What we still need from a human —', '']);
   out.push([
