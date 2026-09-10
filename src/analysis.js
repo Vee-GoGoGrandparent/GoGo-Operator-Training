@@ -47,8 +47,14 @@ export const median = (nums) => {
  */
 const trimZeros = (n, dp) => String(Number(Number(n).toFixed(dp)));
 
-/** For ratios in the 0-1 range, e.g. hard regs / reg calls. */
-export const pctStr = (r) => (r === null || r === undefined ? '' : `${trimZeros(r * 100, 1)}%`);
+/**
+ * For ratios in the 0-1 range, e.g. hard regs / reg calls.
+ *
+ * One decimal by default, which is all a reg ratio needs. Churn passes 2, because
+ * management publishes 6.52% and our number has to land on theirs exactly — 6.5%
+ * would look like a disagreement with his own scorecard.
+ */
+export const pctStr = (r, dp = 1) => (r === null || r === undefined ? '' : `${trimZeros(r * 100, dp)}%`);
 
 /** For scores already on a 0-100 scale, e.g. quiz, call handling, training total. */
 export const pct100 = (n) =>
