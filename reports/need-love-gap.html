@@ -1,0 +1,494 @@
+<title>The Need Love Gap</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+
+<style>
+  :root {
+    --indigo:      #1A1A4C;
+    --cornflower:  #454EBD;
+    --yellow:      #FFC000;
+
+    --ground:      #FBFAFD;
+    --surface:     #FFFFFF;
+    --surface-2:   #F2F2F8;
+    --ink:         #14142E;
+    --ink-muted:   #62668B;
+    --rule:        #DDDDEA;
+    --rule-strong: #B9BAD2;
+
+    --gap:         #A8321C;
+    --gap-soft:    #FBEDEA;
+    --covered:     #1B6B51;
+    --covered-soft:#EAF3EF;
+
+    --bar:         #454EBD;
+    --bar-dim:     #C9CCEA;
+
+    --shadow: 0 1px 2px rgba(20,20,46,.06), 0 8px 24px -12px rgba(20,20,46,.18);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #101024;
+      --surface:     #171733;
+      --surface-2:   #1E1E40;
+      --ink:         #ECECF6;
+      --ink-muted:   #9DA1C4;
+      --rule:        #2C2C55;
+      --rule-strong: #414173;
+
+      --gap:         #F0917C;
+      --gap-soft:    #34191A;
+      --covered:     #6FCBA8;
+      --covered-soft:#12302A;
+
+      --bar:         #7B84E0;
+      --bar-dim:     #2E3060;
+      --cornflower:  #8B93E8;
+
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:      #101024;
+    --surface:     #171733;
+    --surface-2:   #1E1E40;
+    --ink:         #ECECF6;
+    --ink-muted:   #9DA1C4;
+    --rule:        #2C2C55;
+    --rule-strong: #414173;
+
+    --gap:         #F0917C;
+    --gap-soft:    #34191A;
+    --covered:     #6FCBA8;
+    --covered-soft:#12302A;
+
+    --bar:         #7B84E0;
+    --bar-dim:     #2E3060;
+    --cornflower:  #8B93E8;
+
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size: 16.5px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px 96px; }
+  .measure { max-width: 66ch; }
+
+  /* ---------- masthead ---------- */
+  .masthead {
+    border-bottom: 3px solid var(--indigo);
+    padding: 44px 0 22px;
+    margin-bottom: 34px;
+  }
+  :root[data-theme="dark"] .masthead,
+  :root:not([data-theme="light"]) .masthead { border-bottom-color: var(--cornflower); }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .masthead { border-bottom-color: var(--indigo); } }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11.5px; font-weight: 500;
+    letter-spacing: .16em; text-transform: uppercase;
+    color: var(--cornflower);
+    margin: 0 0 14px;
+  }
+  h1 {
+    font-family: Archivo, ui-sans-serif, system-ui, sans-serif;
+    font-weight: 700; font-size: clamp(2.4rem, 6vw, 3.7rem);
+    line-height: 1.02; letter-spacing: -.028em;
+    text-wrap: balance; margin: 0 0 18px; color: var(--ink);
+  }
+  .standfirst { font-size: 1.18rem; color: var(--ink-muted); margin: 0; max-width: 60ch; }
+
+  .provenance {
+    display: flex; flex-wrap: wrap; gap: 0 30px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11.5px; color: var(--ink-muted);
+    margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--rule);
+  }
+  .provenance b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- sections ---------- */
+  section { margin-top: 68px; }
+  h2 {
+    font-family: Archivo, sans-serif; font-weight: 600;
+    font-size: 1.62rem; letter-spacing: -.018em; line-height: 1.2;
+    margin: 0 0 8px; text-wrap: balance;
+  }
+  h3 {
+    font-family: Archivo, sans-serif; font-weight: 600;
+    font-size: 1.06rem; letter-spacing: -.01em;
+    margin: 0 0 6px;
+  }
+  .sub { color: var(--ink-muted); font-size: .95rem; margin: 0 0 26px; max-width: 62ch; }
+  p { margin: 0 0 16px; }
+  strong { font-weight: 600; }
+
+  /* ---------- the headline finding ---------- */
+  .finding {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 5px solid var(--yellow);
+    border-radius: 3px;
+    padding: 30px 34px;
+    box-shadow: var(--shadow);
+  }
+  .finding p { font-size: 1.3rem; line-height: 1.45; margin: 0; text-wrap: balance; }
+  .finding .hi {
+    background: linear-gradient(transparent 62%, var(--yellow) 62%);
+    padding: 0 2px; font-weight: 600;
+  }
+  :root[data-theme="dark"] .finding .hi,
+  :root:not([data-theme="light"]) .finding .hi { color: #14142E; background: var(--yellow); }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) .finding .hi { color: inherit; background: linear-gradient(transparent 62%, var(--yellow) 62%); }
+  }
+
+  /* ---------- module chart ---------- */
+  .chart { margin-top: 8px; }
+  .chart-scale {
+    display: grid; grid-template-columns: 190px 1fr 62px;
+    gap: 0 16px; align-items: center;
+    font-family: "IBM Plex Mono", monospace; font-size: 10.5px;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--ink-muted);
+    padding-bottom: 8px; border-bottom: 1px solid var(--rule); margin-bottom: 12px;
+  }
+  .row {
+    display: grid; grid-template-columns: 190px 1fr 62px;
+    gap: 0 16px; align-items: center;
+    padding: 5px 0;
+  }
+  .row .name { font-size: .9rem; text-align: right; color: var(--ink-muted); }
+  .row.worst .name { color: var(--ink); font-weight: 600; }
+  .track { position: relative; height: 22px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }
+  .fill { position: absolute; inset: 0 auto 0 0; background: var(--bar-dim); border-radius: 2px; }
+  .row.worst .fill { background: var(--yellow); }
+  .row.high .fill { background: var(--bar); }
+  .row .count {
+    font-family: "IBM Plex Mono", monospace; font-size: .84rem;
+    font-variant-numeric: tabular-nums; color: var(--ink-muted);
+  }
+  .row.worst .count { color: var(--ink); font-weight: 600; }
+  .chart-note {
+    font-size: .87rem; color: var(--ink-muted);
+    margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--rule);
+  }
+
+  /* ---------- what reports are about ---------- */
+  .breakdown { display: grid; gap: 2px; margin-top: 4px; }
+  .brow {
+    display: grid; grid-template-columns: 1fr 54px 140px;
+    gap: 16px; align-items: center;
+    padding: 11px 14px; background: var(--surface); border: 1px solid var(--rule);
+  }
+  .brow.nl { background: var(--gap-soft); border-color: color-mix(in srgb, var(--gap) 30%, transparent); }
+  .brow .label { font-size: .95rem; }
+  .brow .n {
+    font-family: "IBM Plex Mono", monospace; font-weight: 600;
+    font-variant-numeric: tabular-nums; text-align: right; font-size: .95rem;
+  }
+  .brow .meter { height: 8px; background: var(--surface-2); border-radius: 99px; overflow: hidden; }
+  .brow .meter i { display: block; height: 100%; background: var(--bar-dim); }
+  .brow.nl .meter i { background: var(--gap); }
+  .nl-total {
+    margin-top: 14px; padding: 16px 18px;
+    background: var(--gap-soft); border: 1px solid color-mix(in srgb, var(--gap) 34%, transparent);
+    font-size: 1.02rem;
+  }
+  .nl-total b { color: var(--gap); font-family: Archivo, sans-serif; font-size: 1.28rem; }
+
+  /* ---------- op report facsimile ---------- */
+  .facsimile {
+    background: var(--surface); border: 1px solid var(--rule-strong);
+    border-radius: 3px; padding: 0; overflow: hidden; box-shadow: var(--shadow);
+  }
+  .facsimile header {
+    background: var(--indigo); color: #fff;
+    padding: 10px 18px;
+    font-family: "IBM Plex Mono", monospace; font-size: 11px;
+    letter-spacing: .14em; text-transform: uppercase;
+  }
+  :root[data-theme="dark"] .facsimile header,
+  :root:not([data-theme="light"]) .facsimile header { background: var(--cornflower); color: #0B0B1C; }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) .facsimile header { background: var(--indigo); color: #fff; }
+  }
+  .fields { display: grid; gap: 0; }
+  .f { display: grid; grid-template-columns: 210px 1fr; gap: 18px; padding: 9px 18px; border-top: 1px solid var(--rule); }
+  .f:first-child { border-top: 0; }
+  .f dt {
+    font-family: "IBM Plex Mono", monospace; font-size: 11px;
+    color: var(--ink-muted); letter-spacing: .04em; margin: 0; padding-top: 3px;
+  }
+  .f dd { margin: 0; font-size: .95rem; }
+  .f dd.quote { font-style: italic; color: var(--ink-muted); }
+
+  /* ---------- gap cards ---------- */
+  .gaps { display: grid; gap: 16px; margin-top: 4px; }
+  .gapcard {
+    background: var(--surface); border: 1px solid var(--rule);
+    border-top: 3px solid var(--gap); border-radius: 3px;
+    padding: 22px 26px;
+  }
+  .gapcard .tag {
+    font-family: "IBM Plex Mono", monospace; font-size: 10.5px;
+    letter-spacing: .13em; text-transform: uppercase; color: var(--gap);
+    display: block; margin-bottom: 7px;
+  }
+  .gapcard p:last-child { margin-bottom: 0; }
+  .evidence {
+    font-family: "IBM Plex Mono", monospace; font-size: .82rem; line-height: 1.6;
+    background: var(--surface-2); border-left: 2px solid var(--rule-strong);
+    padding: 12px 16px; margin: 14px 0 0; color: var(--ink-muted);
+    overflow-x: auto;
+  }
+
+  /* ---------- covered / not covered ---------- */
+  .cover { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 4px; }
+  .col { border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; background: var(--surface); }
+  .col > h3 {
+    padding: 11px 18px; margin: 0; font-size: .82rem;
+    font-family: "IBM Plex Mono", monospace; letter-spacing: .12em; text-transform: uppercase;
+  }
+  .col.yes > h3 { background: var(--covered-soft); color: var(--covered); }
+  .col.no  > h3 { background: var(--gap-soft); color: var(--gap); }
+  .col ul { list-style: none; margin: 0; padding: 6px 0; }
+  .col li { padding: 7px 18px; font-size: .93rem; border-top: 1px solid var(--rule); }
+  .col li:first-child { border-top: 0; }
+
+  /* ---------- honesty ---------- */
+  .caveats {
+    background: var(--surface-2); border: 1px dashed var(--rule-strong);
+    border-radius: 3px; padding: 24px 28px;
+  }
+  .caveats ul { margin: 0; padding-left: 20px; }
+  .caveats li { margin-bottom: 9px; }
+  .caveats li:last-child { margin-bottom: 0; }
+
+  /* ---------- do next ---------- */
+  ol.actions { counter-reset: a; list-style: none; padding: 0; margin: 4px 0 0; display: grid; gap: 12px; }
+  ol.actions li {
+    counter-increment: a; position: relative;
+    padding: 18px 24px 18px 66px;
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 3px;
+  }
+  ol.actions li::before {
+    content: counter(a);
+    position: absolute; left: 22px; top: 17px;
+    font-family: Archivo, sans-serif; font-weight: 700; font-size: 1.25rem;
+    color: var(--cornflower);
+  }
+  ol.actions .why { color: var(--ink-muted); font-size: .9rem; display: block; margin-top: 4px; }
+
+  footer {
+    margin-top: 76px; padding-top: 22px; border-top: 1px solid var(--rule);
+    font-family: "IBM Plex Mono", monospace; font-size: 11px;
+    color: var(--ink-muted); letter-spacing: .04em;
+  }
+
+  @media (max-width: 720px) {
+    .wrap { padding: 0 18px 64px; }
+    .chart-scale, .row { grid-template-columns: 128px 1fr 50px; gap: 0 10px; }
+    .row .name { font-size: .82rem; }
+    .brow { grid-template-columns: 1fr 48px; }
+    .brow .meter { display: none; }
+    .cover { grid-template-columns: 1fr; }
+    .f { grid-template-columns: 1fr; gap: 2px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <div class="masthead">
+    <p class="eyebrow">Operator Training · Gap Analysis</p>
+    <h1>The Need Love Gap</h1>
+    <p class="standfirst">What the August class was taught, set against what operators were actually written up for last week.</p>
+    <div class="provenance">
+      <span><b>99</b> op reports · Sept 4–10, 2026</span>
+      <span><b>36</b> trainees · August 2026 class</span>
+      <span><b>13</b> quiz modules</span>
+      <span><b>27</b>-page registration deck</span>
+    </div>
+  </div>
+
+  <section style="margin-top:0">
+    <div class="finding">
+      <p>The single biggest source of write-ups is the <span class="hi">one module the class scored worst on</span> — and it is the only module where the class average fell below the pass mark.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Where the class was weakest</h2>
+    <p class="sub">Each module is scored out of 150. The pass mark is 120. This counts how many of the 36 trainees fell below it.</p>
+
+    <div class="chart">
+      <div class="chart-scale">
+        <span style="text-align:right">Module</span>
+        <span>Trainees below the 120 pass mark</span>
+        <span style="text-align:right">Avg</span>
+      </div>
+
+      <div class="row worst"><span class="name">Need Love</span><span class="track"><i class="fill" style="width:100%"></i></span><span class="count">119.9</span></div>
+      <div class="row"><span class="name">Partnership</span><span class="track"><i class="fill" style="width:93.3%"></i></span><span class="count">122.1</span></div>
+      <div class="row"><span class="name">Registration</span><span class="track"><i class="fill" style="width:73.3%"></i></span><span class="count">123.5</span></div>
+      <div class="row"><span class="name">Payments</span><span class="track"><i class="fill" style="width:66.7%"></i></span><span class="count">121.4</span></div>
+      <div class="row"><span class="name">Right Panel DB</span><span class="track"><i class="fill" style="width:26.7%"></i></span><span class="count">127.5</span></div>
+      <div class="row"><span class="name">Rides</span><span class="track"><i class="fill" style="width:26.7%"></i></span><span class="count">133.8</span></div>
+      <div class="row"><span class="name">Fraud</span><span class="track"><i class="fill" style="width:20%"></i></span><span class="count">132.8</span></div>
+      <div class="row"><span class="name">Upselling &amp; Other Depts</span><span class="track"><i class="fill" style="width:20%"></i></span><span class="count">135.3</span></div>
+      <div class="row"><span class="name">Slack</span><span class="track"><i class="fill" style="width:6.7%"></i></span><span class="count">137.4</span></div>
+      <div class="row high"><span class="name">DB Left Panel Categories</span><span class="track"><i class="fill" style="width:0"></i></span><span class="count">136.8</span></div>
+      <div class="row high"><span class="name">Intro / Departments</span><span class="track"><i class="fill" style="width:0"></i></span><span class="count">138.2</span></div>
+      <div class="row high"><span class="name">Rapport / Empathy</span><span class="track"><i class="fill" style="width:0"></i></span><span class="count">144.4</span></div>
+      <div class="row high"><span class="name">Dashboard Navigation</span><span class="track"><i class="fill" style="width:0"></i></span><span class="count">144.9</span></div>
+
+      <p class="chart-note"><strong>15 of 36 trainees — 42% — scored below the pass mark on Need Love.</strong> The lowest was 80 out of 150. Four modules had nobody fail at all.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>What operators were written up for</h2>
+    <p class="sub">Every op report filed in one week, sorted into one bucket each.</p>
+
+    <div class="breakdown">
+      <div class="brow"><span class="label">Wrong address or drop-off location</span><span class="n">21</span><span class="meter"><i style="width:100%"></i></span></div>
+      <div class="brow"><span class="label">Fee or fare not explained (surge, wait fee, concierge)</span><span class="n">20</span><span class="meter"><i style="width:95%"></i></span></div>
+      <div class="brow nl"><span class="label">Need Love ticket — duplicate filing</span><span class="n">15</span><span class="meter"><i style="width:71%"></i></span></div>
+      <div class="brow nl"><span class="label">Need Love ticket — wrong category</span><span class="n">14</span><span class="meter"><i style="width:67%"></i></span></div>
+      <div class="brow"><span class="label">Other</span><span class="n">14</span><span class="meter"><i style="width:67%"></i></span></div>
+      <div class="brow nl"><span class="label">Need Love ticket — other errors</span><span class="n">6</span><span class="meter"><i style="width:29%"></i></span></div>
+      <div class="brow"><span class="label">Membership or plan wording</span><span class="n">5</span><span class="meter"><i style="width:24%"></i></span></div>
+      <div class="brow"><span class="label">Accessibility needs not verified</span><span class="n">3</span><span class="meter"><i style="width:14%"></i></span></div>
+      <div class="brow"><span class="label">Wrong customer name or number</span><span class="n">1</span><span class="meter"><i style="width:5%"></i></span></div>
+    </div>
+
+    <p class="nl-total"><b>35 of 99</b> — more than a third of all write-ups — are Need Love ticket errors. No other single skill comes close.</p>
+  </section>
+
+  <section>
+    <h2>What one looks like</h2>
+    <p class="sub">Op reports arrive in the Slack channel as a structured form. Every field is consistent, and most carry a CallLog ID that points at the exact call.</p>
+
+    <div class="facsimile">
+      <header>Op Report · filed 2026-09-10</header>
+      <dl class="fields">
+        <div class="f"><dt>Service Department</dt><dd>Transportation — On Demand</dd></div>
+        <div class="f"><dt>Contractor Name</dt><dd>Sabrina Daan</dd></div>
+        <div class="f"><dt>Team Leader's Name</dt><dd>Pamela Mesias</dd></div>
+        <div class="f"><dt>CallLog ID</dt><dd>52655521</dd></div>
+        <div class="f"><dt>What happened</dt><dd class="quote">Operator tagged the NL as Driver Canceled But Took Caller Anyway instead of False Trip.</dd></div>
+        <div class="f"><dt>Handled differently</dt><dd class="quote">Please review the issue details carefully and ensure the correct NL category is selected before submitting.</dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <section>
+    <h2>Three gaps worth closing</h2>
+    <p class="sub">Each one is drawn from the reports themselves, not from an opinion about the training.</p>
+
+    <div class="gaps">
+
+      <div class="gapcard">
+        <span class="tag">Gap 01 — the deciding rule is never taught</span>
+        <h3>False Trip, Cancellation Fee, or Fare Review</h3>
+        <p>The reports show the same three categories being confused over and over. And the corrections all point at the same deciding factor — <strong>the ride status</strong> — which is exactly the thing the write-up has to spell out each time.</p>
+        <div class="evidence">tagged False Trip           → should be Cancellation Fee   ×4<br>tagged False Trip           → should be Fare Review        ×2<br>tagged Fare Review          → should be False Trip<br>tagged Cancellation Fee     → should be False Trip<br>tagged Driver Canceled…     → should be False Trip</div>
+        <p style="margin-top:14px">A one-page decision rule — <em>if the ride status is X, file Y</em> — would answer nearly every one of these.</p>
+      </div>
+
+      <div class="gapcard">
+        <span class="tag">Gap 02 — no "check first" step</span>
+        <h3>Fifteen duplicate tickets in one week</h3>
+        <p>Duplicates are the largest single sub-category, and reviewers keep writing the same instruction back. That repetition is the tell: operators aren't being careless, they were never given the step.</p>
+        <div class="evidence">"Please check for an existing complaint before submitting a new NL."<br>"Please check carefully for an existing NL before submitting a new one."<br>"Please carefully check the account to confirm whether an NL has been filed."</div>
+      </div>
+
+      <div class="gapcard">
+        <span class="tag">Gap 03 — taught the fee, not the surprise</span>
+        <h3>Surge pricing and wait fees</h3>
+        <p>The registration deck is thorough on the $0.27 per-minute concierge fee and walks through it word for word. It does not cover <strong>surge pricing</strong> or <strong>multi-stop wait fees</strong> — and both show up in the reports as customers hit with a bill they weren't warned about.</p>
+        <div class="evidence">"The operator failed to inform the customer that the fare was affected by a<br>surge factor, resulting in a higher fare than expected."  — filed twice, two operators<br><br>"OP failed to educate the customer who requested a multi-stop trip, which<br>resulted in a Wait Fee Tip to Driver of $12.35 being applied."</div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>The registration deck is not the problem</h2>
+    <p class="sub">It is genuinely thorough. It is simply aimed at the part of the job that generates the fewest write-ups.</p>
+
+    <div class="cover">
+      <div class="col yes">
+        <h3>Covered, and covered well</h3>
+        <ul>
+          <li>Full call structure, intro through confirmation</li>
+          <li>Concierge fee, disclosed word for word</li>
+          <li>Plan pricing with the dollar savings worked out</li>
+          <li>Confirming addresses back to the customer</li>
+          <li>Mobility and accessibility questions</li>
+          <li>The $1 pre-authorization hold</li>
+          <li>Two recorded calls to listen to</li>
+        </ul>
+      </div>
+      <div class="col no">
+        <h3>Not in anything I could see</h3>
+        <ul>
+          <li>Which Need Love category to file, and why</li>
+          <li>Checking for an existing ticket first</li>
+          <li>Surge pricing</li>
+          <li>Multi-stop wait fees</li>
+          <li>What ride status means for the ticket</li>
+        </ul>
+      </div>
+    </div>
+
+    <p style="margin-top:22px" class="measure">Registration errors account for <strong>5 of 99</strong> write-ups. The training weight and the error weight are pointed in opposite directions.</p>
+  </section>
+
+  <section>
+    <h2>The quiz score does not predict the mistake</h2>
+    <p class="measure">Of the August class members who appear in last week's reports, the person who <strong>scored highest on the Need Love module — 140 out of 150 —</strong> still filed a ticket under the wrong category. Two others who passed did the same.</p>
+    <p class="measure">That points at something more useful than a low score: the quiz is testing whether someone can recall the categories, not whether they can pick the right one while a customer is on the line. Those are different skills, and only one of them shows up in a write-up.</p>
+  </section>
+
+  <section>
+    <h2>What I could not see</h2>
+    <div class="caveats">
+      <ul>
+        <li><strong>Only four training decks.</strong> New material is being written that I don't have access to — a Need Love module may already exist, or be in progress.</li>
+        <li><strong>One week of reports.</strong> 99 is enough to show a pattern, not enough to call it a trend. A full quarter would settle it.</li>
+        <li><strong>Nine people overlap.</strong> Only nine August-class members appear in last week's reports — far too few to link an individual's quiz score to an individual's error. The class-level pattern is the finding; the person-level one is not.</li>
+        <li><strong>Quiz columns were read off a PDF.</strong> The module order comes from the sheet header. Worth a glance to confirm Need Love is the ninth column.</li>
+        <li><strong>No call recordings yet.</strong> This is built on what reviewers wrote, not on what was said. The transcripts exist and would sharpen all of it.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>What I would do first</h2>
+    <ol class="actions">
+      <li><strong>Write the Need Love decision rule as one page.</strong><span class="why">If the ride status is X, file Y. Nine of the wrong-category reports name the ride status as the deciding factor.</span></li>
+      <li><strong>Add a "check for an existing ticket" step before filing.</strong><span class="why">Fifteen duplicates in one week, and the same correction written back every time.</span></li>
+      <li><strong>Put surge and wait fees into the registration script.</strong><span class="why">The deck already handles the concierge fee beautifully. These two just need the same treatment.</span></li>
+      <li><strong>Make the Need Love quiz practical, not recall-based.</strong><span class="why">Give them five real tickets to categorize. The top scorer still got it wrong live.</span></li>
+      <li><strong>Track NL error rate per operator, per month.</strong><span class="why">Every report carries the operator name, the team lead, and a CallLog ID. It can be counted automatically.</span></li>
+    </ol>
+  </section>
+
+  <footer>
+    Sources — 99 op reports from #op_report, Sept 4–10 2026 · August 2026 class quiz scores, 36 trainees, 13 modules · "Registration Structure" training deck, 27 pages · Prepared 2026-09-10
+  </footer>
+
+</div>

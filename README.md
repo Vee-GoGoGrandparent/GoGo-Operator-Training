@@ -66,5 +66,40 @@ Variables to set:
 | `OPS_TASK` | Script | What it does |
 | --- | --- | --- |
 | `discover` | `scripts/discover.js` | Read-only. Inventories every operator table, proves the Slack-ID join, and writes the findings to the sheet. Writes nothing to the database. |
+| `transcripts` | `scripts/probe-transcripts.js` | Read-only. Finds out whether call transcripts exist and are readable. |
+| `link` | `scripts/probe-link.js` | Read-only. Tries to connect a transcript back to the call it came from. |
+| `reports` | `scripts/probe-reports.js` | Read-only. Asks whether the database knows anything about op reports. (Answer: no — they live in Slack.) |
+| `tracker` | `scripts/build-tracker.js` | Builds the churn-watch and performance tabs on the tracker sheet. Needs the database. |
+| `opreports` | `scripts/build-op-reports.js` | Turns the archived `#op_report` forms into three tabs on the tracker sheet. **Needs no database** — so it runs even while the IP allowlist is broken. |
 
 Set the variable, redeploy, read the sheet, remove the variable.
+
+## Op reports — how they get here
+
+The `#op_report` Slack channel (G8HDD60Q6) is where reviewers file a structured form
+every time they catch something on a call. It is the richest signal we have about what
+operators actually get wrong, and far better than the `qualityAssurances` table, which
+flags 93.4% of calls positive.
+
+The pipeline is deliberately half-manual, and the README says so rather than implying
+otherwise:
+
+1. **Collecting — by hand.** Reading a private Slack channel needs a bot token with
+   history scope, which we do not have. Reports are pulled manually and saved as JSON
+   under `data/op-reports/`, one file per pull, named by date range. Files are merged
+   and deduped by Slack message timestamp, so overlapping pulls are safe.
+2. **Counting — automatic.** `src/op-reports.js` does all of it. Every number in any
+   report we hand to a trainer comes from there and can be re-derived.
+3. **Publishing — automatic.** `OPS_TASK=opreports`.
+
+**No customer PII.** The Slack form carries customer name, phone number, and the number
+they called from. The archive does not contain those fields and nothing here writes them.
+
+**Known limit.** The Slack reader truncates long fields with `...` — 124 of the first 281
+reports arrive with text cut off. Theme counts survive it; individual corrections may be
+half-sentences. A real bot token calling `conversations.history` would fix it.
+
+**Themes are multi-label on purpose.** A report is counted under every theme it mentions.
+The first version forced one theme per report and the ranking changed depending on which
+keyword list ran first — 94 of 281 reports are about two things at once. Totals therefore
+add to more than the number of reports.

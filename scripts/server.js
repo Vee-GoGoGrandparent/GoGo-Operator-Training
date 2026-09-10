@@ -21,6 +21,7 @@ const TASKS = {
   link: 'probe-link.js',
   tracker: 'build-tracker.js',
   reports: 'probe-reports.js',
+  opreports: 'build-op-reports.js',
 };
 
 function run(script) {
