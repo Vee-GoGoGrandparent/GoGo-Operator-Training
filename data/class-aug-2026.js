@@ -16,6 +16,7 @@
 
 export const CLASS_META = {
   cohort: 'aug-2026',
+  label: 'August',
   classStart: '2026-08-03', // the HIRE DATE the team uses — first day of orientation
   classEnd: '2026-08-21',   // graduation; the 90-day clock starts after this
   weeks: 3,

@@ -357,3 +357,41 @@ export async function priorityColors(title, { spreadsheetId = BUILD_SHEET_ID } =
 
   await api.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
 }
+
+/**
+ * Paint a set of rows as section banners: cornflower ground, white bold text.
+ *
+ * The colour is not a guess — it was read back off the tab after Vee styled a row by
+ * hand (#454EBD, which is already the GoGo cornflower in BRAND). Section headings are
+ * generated now rather than typed in, because every rebuild rewrites the rows and a
+ * hand-added banner would vanish on the next run.
+ *
+ * `rowIndices` are 0-based over the values written, so index 1 is the second row.
+ */
+export async function formatBanners(title, rowIndices, { spreadsheetId = BUILD_SHEET_ID } = {}) {
+  if (!rowIndices?.length) return;
+  const api = sheets();
+  const meta = await api.spreadsheets.get({ spreadsheetId });
+  const tab = meta.data.sheets.find((s) => s.properties.title === title);
+  if (!tab) return;
+  const sheetId = tab.properties.sheetId;
+
+  await api.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: rowIndices.map((i) => ({
+        repeatCell: {
+          range: { sheetId, startRowIndex: i, endRowIndex: i + 1 },
+          cell: {
+            userEnteredFormat: {
+              textFormat: { bold: true, foregroundColor: BRAND.white },
+              backgroundColor: BRAND.cornflower,
+              verticalAlignment: 'MIDDLE',
+            },
+          },
+          fields: 'userEnteredFormat(textFormat,backgroundColor,verticalAlignment)',
+        },
+      })),
+    },
+  });
+}

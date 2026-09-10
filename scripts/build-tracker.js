@@ -14,13 +14,13 @@
 // trainer says it is often wrong. Grading is not his job and it is not ours.
 
 import { connect, q, tryQ } from '../src/db.js';
-import { writeTab, formatHeader, priorityColors, TRACKER_SHEET_ID, BRAND } from '../src/sheets.js';
+import { writeTab, formatHeader, priorityColors, formatBanners, TRACKER_SHEET_ID, BRAND } from '../src/sheets.js';
 import { notify } from '../src/slack.js';
 import { nowET, fmtDbDate } from '../src/time.js';
 import { regCallsOf, ratio, median, pctStr, pct100, weekKey, assess, TARGET_HR_RATIO } from '../src/analysis.js';
 import { AUG_2026, CLASS_META } from '../data/class-aug-2026.js';
 import {
-  CLASSES, CLASSES_WITHOUT_ROSTER, TRAINED, TRAINED_SLACK_IDS,
+  CLASSES, CLASSES_WITHOUT_ROSTER, TRAINED_SLACK_IDS,
   TRAINED_WITHOUT_SLACK, TRAINEE_BY_SLACK, earliestGradDate, milestoneDate,
 } from '../data/trained-roster.js';
 
@@ -477,7 +477,10 @@ async function main() {
     ['Training calls', 'Not counted anywhere. Practice calls taken during class are dropped before any number on this sheet is worked out, because the business does not count them either.'],
     ['Two different clocks', 'Registrations are measured from the day that person first took a real call, because people join the schedule at different speeds after class. Churn is measured from the last day of class, because that is how management dates it.'],
     ['We stop at 90 days', 'An operator drops off the per-person tabs 90 days after their first real call. The class tabs keep their numbers — a class scorecard is a permanent record.'],
-    ['Order of the rows', 'People still here first. Anyone who has left sits at the bottom, most recent departure first.'],
+    ['Order of the rows', 'Training vs Performance is split into class sections, newest class at the top. Inside a class: people still here first with the strongest training score at the top, then a NO LONGER AT GOGO banner and that class’s own departures, most recent first. Each class keeps its own leavers — September’s never sit under August’s heading.'],
+    ['Section headings', 'Generated on every run, not typed in. A heading added by hand would be wiped, because writing a tab clears its values first.'],
+    ['Days lasted', 'For someone who has gone: days from their first real call to the day their account was closed. Blank while they are still here. This is how LONG they lasted, not why they left — the reason, where one is recorded, is in Status and on Churn Watch.'],
+    ['Priority', 'Left blank once someone has gone. A priority next to a departure is noise.'],
     ['Layout', 'Column widths, wrapping and column order are yours. The rebuild refreshes numbers and will not move your columns or resize them.'],
     ['Peer median', 'The middle reg ratio among operators who started taking calls the same month. A new operator is compared to other new operators, never to a veteran.'],
     ['Priority', 'Escalate = something clearly changed or they are well behind their peers. Watch = worth a conversation. Strong = doing notably well, worth learning from.'],
@@ -500,16 +503,18 @@ async function main() {
   // are shown as percentages like Quiz % beside them. SLI is out of 300 and stays a
   // raw number — a percentage there would be inventing a scale the team does not use.
   const tvp = [[
-    'Operator', 'Class', 'Slack ID', 'Group', 'Lates', 'Absences',
+    'Operator', 'Slack ID', 'Group', 'Lates', 'Absences',
     'Quiz %', 'SLI /300', 'Call handling', 'System nav', 'Training total',
     'Started calls', 'Days on phones',
     ...BLOCKS.flatMap((b) => [`Reg calls ${b.label}`, `Hard regs ${b.label}`, `Reg ratio ${b.label}`]),
-    'Priority', 'Day left', 'Status',
+    'Priority', 'Days lasted', 'Status',
   ]];
+  const WIDTH = tvp[0].length;
+  const banner = (text) => [text, ...Array(WIDTH - 1).fill('')];
+
   const perfBySlack = Object.fromEntries(rows.filter((r) => r.o.slackId).map((r) => [r.o.slackId, r]));
   // Separate from `rows`, which stops at 90 days. Someone past the window still needs
-  // a row on this tab saying why they have no numbers, rather than blank cells that
-  // look like a bug.
+  // a row saying why they have no numbers, rather than blank cells that look broken.
   const daysWorkedBySlack = Object.fromEntries(
     operators.filter((o) => o.slackId).map((o) => [o.slackId, daysWorkedOf(o.id)]),
   );
@@ -517,68 +522,105 @@ async function main() {
     const d = t.slackId ? daysWorkedBySlack[t.slackId] : null;
     return d != null && d > TRACK_DAYS;
   };
-  // Order: people still here first, best training score at the top. Anyone who has
-  // gone drops to the bottom of the tab — Vee's ask — and within that group the most
-  // recent departure sits at the top, because that is the one still worth talking
-  // about. Someone who left in week one is not what a trainer needs to see first.
+
+  /** The date someone left, or null if they are still here. */
   const leftOn = (t) => {
     const o = t.slackId ? bySlack[t.slackId] : null;
-    if (o?.closedAt) return fmtDbDate(o.closedAt).slice(0, 10);
+    if (o && o.closedAt) return fmtDbDate(o.closedAt).slice(0, 10);
     return t.status !== 'active' ? 'during training' : null;
   };
-  const sortedClass = [...TRAINED].sort((a, b) => {
-    const la = leftOn(a);
-    const lb = leftOn(b);
-    if (!la && !lb) return b.total - a.total;      // both here: best score first
-    if (!la) return -1;                            // still here beats gone
-    if (!lb) return 1;
-    if (la === lb) return b.total - a.total;
-    return lb.localeCompare(la);                   // both gone: most recent first
-  });
 
-  for (const t of sortedClass) {
+  const rowFor = (t) => {
     const r = t.slackId ? perfBySlack[t.slackId] : null;
     // A block that has not started yet stays blank. Vee: "I left 60 and 90 blank, we
-    // don't need anything there until it's the time."
-    //
-    // Whether it has started is THIS operator's question, not the class's. Someone who
-    // waited three days after class to get on the schedule reaches their day 30 three
-    // days after someone who started immediately.
-    const winCells = [];
+    // don't need anything there until it's the time." Whether it has started is THIS
+    // operator's question — people join the schedule at different speeds after class.
+    const cells = [];
     for (const b of BLOCKS) {
-      const started = r?.daysWorked != null && r.daysWorked >= b.from;
+      const started = r && r.daysWorked != null && r.daysWorked >= b.from;
       const w = started ? r.a.block[b.label] : null;
-      winCells.push(
-        w ? w.regCalls : '',
-        w ? w.hardRegs : '',
-        w ? pctStr(ratio(w.hardRegs, w.regCalls)) : '',
-      );
+      cells.push(w ? w.regCalls : '', w ? w.hardRegs : '', w ? pctStr(ratio(w.hardRegs, w.regCalls)) : '');
     }
+    const o = t.slackId ? bySlack[t.slackId] : null;
     const left = leftOn(t);
-    tvp.push([
-      t.name, t.cohort, t.slackId || '(no slack id)', t.group,
+    return [
+      t.name, t.slackId || '(no slack id)', t.group,
       t.lates, t.absences,
       pct100(t.knowledge),
       t.sli || '',
       pct100(t.callHandling),
       pct100(t.sysNav),
       pct100(t.total),
-      r?.first ? fmtDbDate(r.first).slice(0, 10) : (t.status === 'active' ? '(not started)' : ''),
-      r?.daysWorked ?? '',
-      ...winCells,
-      r ? r.verdict.level : '',
-      left && left !== 'during training' && bySlack[t.slackId]?.closedAt
-        ? dayAfterGrad(bySlack[t.slackId].closedAt)
+      r && r.first ? fmtDbDate(r.first).slice(0, 10) : (t.status === 'active' ? '(not started)' : ''),
+      r && r.daysWorked != null ? r.daysWorked : '',
+      ...cells,
+      // Priority is about people we are still coaching. Once someone is gone it is
+      // noise, and "OK" next to a departure reads badly.
+      left ? '' : (r ? r.verdict.level : ''),
+      // How long they lasted, in days from their first real call to the day their
+      // account was closed. Blank for anyone still here.
+      o && o.closedAt && startMsOf[o.id] !== undefined
+        ? Math.floor((dayNum(o.closedAt) - startMsOf[o.id]) / 86400000)
         : '',
       t.status !== 'active'
         ? `${t.status}${t.reason ? ` — ${t.reason}` : ''}`
-        : bySlack[t.slackId]?.closedAt
-          ? `Left ${fmtDbDate(bySlack[t.slackId].closedAt).slice(0, 10)}`
+        : o && o.closedAt
+          ? `Left ${fmtDbDate(o.closedAt).slice(0, 10)}`
           : agedOut(t)
             ? `Past ${TRACK_DAYS} days — no longer tracked`
             : 'Active',
-    ]);
+    ];
+  };
+
+  // --- One section per class, newest class on top ------------------------------
+  //
+  // Vee: "when a new class starts, that new class should be at the top, and then the
+  // older class should move at the bottom. And then have a heading that separates
+  // them… each class will have its own little thing."
+  //
+  // So every class gets its own banner, its own people, and its OWN leavers list.
+  // September's departures must never sit under August's heading.
+  //
+  // The banners are generated, not typed in. A heading added by hand would be wiped
+  // by the next rebuild, because writing a tab clears its values first.
+  const bannerRows = [];
+  const classesNewestFirst = [...CLASSES].reverse();
+
+  for (const cls of classesNewestFirst) {
+    if (!cls.trainees.length) continue; // no roster, so nobody to list
+
+    const year = cls.meta.classEnd.slice(0, 4);
+    const label = `${cls.meta.label || cls.meta.cohort} ${year} CLASS`.toUpperCase();
+    bannerRows.push(tvp.length);
+    tvp.push(banner(label));
+
+    const members = cls.trainees.map((t) => ({ t, left: leftOn(t) }));
+
+    // Still here: strongest training score first.
+    members
+      .filter((m) => !m.left)
+      .sort((a, b) => b.t.total - a.t.total)
+      .forEach((m) => tvp.push(rowFor(m.t)));
+
+    // Gone: most recent departure first, then the people who never finished the class.
+    const gone = members.filter((m) => m.left);
+    if (gone.length) {
+      bannerRows.push(tvp.length);
+      tvp.push(banner('NO LONGER AT GOGO'));
+      gone
+        .sort((a, b) => {
+          const ad = a.left === 'during training';
+          const bd = b.left === 'during training';
+          if (ad !== bd) return ad ? 1 : -1;            // left during training goes last
+          if (ad && bd) return b.t.total - a.t.total;   // among those, best score first
+          return b.left.localeCompare(a.left);          // otherwise most recent first
+        })
+        .forEach((m) => tvp.push(rowFor(m.t)));
+    }
+
+    tvp.push(banner('')); // a blank line between classes
   }
+  if (tvp[tvp.length - 1] && tvp[tvp.length - 1][0] === '') tvp.pop();
 
   // --- Class Scorecard: the ten metrics his management grades him on ---
   // Where we can compute it, we do, and we show their published figure next to
@@ -691,6 +733,9 @@ async function main() {
   }
 
   // Escalate / Watch in red, Strong in green — wherever those words appear.
+  await formatBanners('Training vs Performance', bannerRows, { spreadsheetId: TRACKER_SHEET_ID })
+    .catch((e) => console.error('[tracker] class banners:', e.message));
+
   for (const t of ['Churn Watch', 'Training vs Performance', 'Hard Regs', 'Team Leads']) {
     await priorityColors(t, { spreadsheetId: TRACKER_SHEET_ID }).catch((e) => console.error(`[tracker] colours on ${t}:`, e.message));
   }
