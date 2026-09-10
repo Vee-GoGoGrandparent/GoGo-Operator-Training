@@ -105,11 +105,12 @@ async function main() {
             hardRegs, softRegs, trialRegs,
             annualHardRegs, valueMonthlyHardRegs, basicMonthlyHardRegs, fixedIncomeMonthlyHardRegs
        FROM operatorPerformances
-      WHERE aggregationDate >= DATE_SUB(?, INTERVAL 14 DAY)`,
-    [earliestGradDate()],
+      WHERE aggregationDate >= DATE_SUB(?, INTERVAL 14 DAY)
+        AND operatorId IN (?)`,
+    [earliestGradDate(), operators.map((o) => o.id)],
     60_000,
   );
-  console.log(`[tracker] ${perf.length} daily performance rows`);
+  console.log(`[tracker] ${perf.length} daily performance rows for our operators`);
 
   // There used to be a second query here for MIN(aggregationDate) across all history.
   // It is gone: that answer includes practice calls taken during training, and those
@@ -144,9 +145,18 @@ async function main() {
   // Post-training rows only, then each operator's first working day is the earliest
   // of what is left. Two passes, because the anchor has to be known before any row
   // can be placed in a block.
+  // An unknown operator is DROPPED, not kept.
+  //
+  // This used to read `end === undefined || ...`, which let through every row whose
+  // operator we could not place. Combined with a query that pulled the whole table,
+  // that put strangers' weeks into the Weekly Trend header — which is exactly why
+  // W32 and W33 showed up as empty columns before anyone from this class had taken
+  // a single call. Defaulting to "keep" is the wrong default when the question is
+  // "is this one of ours".
   const working = perf.filter((r) => {
     const end = classEndByOpId[r.operatorId];
-    return end === undefined || dayNum(r.aggregationDate) > end;
+    if (end === undefined) return false;
+    return dayNum(r.aggregationDate) > end;
   });
   const startMsOf = {};
   for (const r of working) {
@@ -158,7 +168,10 @@ async function main() {
 
   console.log(`[tracker] ${perf.length - working.length} training-period rows excluded, ${working.length} kept`);
 
+  // Weeks come from the rows that survived, so the trend starts the week the first
+  // person actually took a real call — never earlier.
   const weeks = [...new Set(working.map((r) => weekKey(r.aggregationDate)))].sort();
+  console.log(`[tracker] weekly trend spans ${weeks[0] ?? '(none)'} to ${weeks[weeks.length - 1] ?? '(none)'}`);
   const recentWeeks = new Set(weeks.slice(-RECENT_WEEKS));
 
   const agg = {}; // operatorId -> { recent, prior, byWeek, plans, block }
@@ -261,18 +274,13 @@ async function main() {
   const onASchedule = Boolean(String(process.env.OPS_DAILY ?? '').trim());
   const stamp = `Last updated ${asOf}${onASchedule ? ' · refreshes daily' : ''}`;
 
-  // --- Churn Watch -------------------------------------------------------------
+  // The "Churn Watch" tab was removed. Vee: "I don't think we need this churn watch
+  // tab. It's unnecessary... it's just repeating the same thing."
   //
-  // This tab is a copy of the scorecard upper management hands the trainers, in their
-  // column order, plus the part their version cannot have: who to keep an eye on.
-  //
-  // Vee: "churn watch is how many people have stayed from the class... we wanna keep
-  // as much information on there that we had." So the top of this tab deliberately
-  // looks like their sheet. If it looks different he has to translate it in his head
-  // before a meeting, and that is exactly when mistakes get made.
-  //
-  // Milestone dates are CALENDAR MONTHS from the last day of class, not 30-day steps.
-  // Their own published dates prove it - see milestoneDate() for the working.
+  // She was right. Once Class Scorecard covered every class and Training vs
+  // Performance carried Priority per person, the tab was a third copy of both. The
+  // one thing only it had — the reason someone was let go — moved onto the Status
+  // cell in Training vs Performance, where the person actually is.
 
   /** Everyone from one class who is confirmed gone, most recent first. */
   const leaversOf = (cls) => cls.trainees
@@ -287,114 +295,6 @@ async function main() {
     .sort((a, b) => b.left.localeCompare(a.left));
 
   const todayISO = fmtDbDate(new Date(todayUTC)).slice(0, 10);
-
-  /** One class as a row, in management's own column order. */
-  const scorecardRowFor = (cls) => {
-    const pub = cls.published;
-    const roster = cls.trainees;
-    const label = cls.meta.label || cls.meta.cohort;
-    const period = `${cls.meta.classStart} to ${cls.meta.classEnd}`;
-
-    // A class with no roster can be reported, never recomputed.
-    if (!roster.length) {
-      return [
-        `${label} (${period})`,
-        (pub && pub.newHires) || '', (pub && pub.completedTraining) || '',
-        (pub && pub.pctCompletedTraining) || '', (pub && pub.traineeSatisfaction) || '',
-        (pub && pub.quizSuccessRate) || '',
-        (pub && pub.churn30) || '', (pub && pub.churn60) || '', (pub && pub.churn90) || '',
-        (pub && pub.regRate90) || '', (pub && pub.starModel90) || '',
-        'Published figures only. No roster for this class, so nothing here is recomputed. Ask Oscar for the class workbook.',
-      ];
-    }
-
-    const done = roster.filter((t) => t.status === 'active');
-    const gone = leaversOf(cls);
-    const churnCell = (months) => {
-      const due = milestoneDate(cls.meta.classEnd, months);
-      const n = gone.filter((l) => l.left <= due).length;
-      const rate = done.length ? n / done.length : null;
-      if (todayISO < due) {
-        return n ? `${n} (${pctStr(rate)}) so far, closes ${due}` : `closes ${due}`;
-      }
-      return `${n} (${pctStr(rate, 2)})`;
-    };
-
-    const quizAll = roster.reduce((acc, t) => acc + t.knowledge, 0) / roster.length;
-    return [
-      `${label} (${period})`,
-      roster.length,
-      done.length,
-      pctStr(done.length / roster.length, 2),
-      (pub && pub.traineeSatisfaction) || 'not in the database, comes from the trainee survey',
-      pct100(quizAll),
-      churnCell(1), churnCell(2), churnCell(3),
-      `due ${milestoneDate(cls.meta.classEnd, 3)}`,
-      `due ${milestoneDate(cls.meta.classEnd, 3)}`,
-      '',
-    ];
-  };
-
-  const watch = [
-    ['Class retention: the scorecard management grades him on'],
-    [`Run ${asOf}. Same columns in the same order as the sheet upper management sent, so nothing has to be translated in a meeting.`],
-    [''],
-    ['', 'Goal:', '', '90%', '97%', '85%', 'Less than 5%', 'Less than 10%', 'Less than 15%', '+15%', '3.70+', ''],
-    [
-      'Class', 'New hires', 'Completed Training', '% Completed Training',
-      'Trainee Satisfaction', 'Quizzes Success Rate',
-      '30 day Churn Rate', '60 day Churn Rate', '90 day Churn Rate',
-      '90 day reg rate', '90 day star model', 'Notes',
-    ],
-    ...CLASSES.map(scorecardRowFor),
-    [''],
-    ['How to read the churn cells'],
-    ['A window that has not closed yet shows what it is SO FAR plus the date it closes. That number can only go up, never down, so treat it as a floor and not a result.'],
-    ['The denominator is Completed Training, not New hires. Confirmed against their own July figure: 3 out of 46 is 6.52%, exactly what their sheet shows.'],
-    ['Milestone dates are calendar months from the last day of class, which is how management dates them. July ends 07-10 so its 60 day mark is 09-10. August ends 08-21 so its 30 day mark is 09-21.'],
-    [''],
-    ['Still open'],
-    ['90 day reg rate: is "+15%" the reg ratio across the whole 90 days, or the improvement from the first month to the third? Vee raised this and it changes the formula completely. Needs an answer from management before anything is computed.'],
-    ['90 day star model: the 3.70 target. Not found in the operator tables so far, and the formula is not written down anywhere we can read. OPS_TASK=star searches the whole database, but the definition has to come from Ops.'],
-    ...(CLASSES_WITHOUT_ROSTER.length
-      ? [[`No roster for: ${CLASSES_WITHOUT_ROSTER.map((c) => c.meta.label || c.meta.cohort).join(', ')}. Their published numbers show above, but nothing per-person can be worked out until Oscar sends the class workbook.`]]
-      : []),
-    [''],
-    [''],
-    ['Who to look out for'],
-    ['The part their sheet cannot have. People still inside their first 90 days whose numbers moved, in sentences a team lead can act on.'],
-    [''],
-    ['Priority', 'Operator', 'Class', 'Team lead', 'Started calls', 'Days on phones', 'Reg ratio', 'What we see', 'Status'],
-  ];
-
-  const needsAttention = rows.filter((r) => r.verdict.level !== 'OK' && r.verdict.level !== 'Strong');
-  if (!needsAttention.length) {
-    watch.push(['-', 'Nobody is flagged right now.', '', '', '', '', '', 'Everyone inside their first 90 days is at or above the 15% target and nobody has gone quiet.', '']);
-  }
-  for (const r of needsAttention) {
-    watch.push([
-      r.verdict.level,
-      name(r.o),
-      r.cohort,
-      r.o.teamLeadId ? `${(r.o.tlFirst || '').trim()} ${(r.o.tlLast || '').trim()}`.trim() : '(none assigned)',
-      r.first ? fmtDbDate(r.first).slice(0, 10) : '',
-      r.daysWorked === null || r.daysWorked === undefined ? '' : r.daysWorked,
-      pctStr(r.verdict.recentRatio),
-      r.verdict.flags.map((f) => `- ${f.text}`).join('\n'),
-      r.o.closedAt ? `Left ${fmtDbDate(r.o.closedAt).slice(0, 10)}` : r.o.suspendedAt ? 'Suspended' : 'Active',
-    ]);
-  }
-
-  // Departures are news even when the person was never flagged. Somebody quietly
-  // leaving is exactly what this tab exists to surface.
-  const allLeavers = CLASSES
-    .flatMap((c) => leaversOf(c).map((l) => ({ ...l, cls: c.meta.label || c.meta.cohort })))
-    .sort((a, b) => b.left.localeCompare(a.left));
-  watch.push(['']);
-  watch.push(['Who has left']);
-  watch.push(['Operator', 'Class', 'Date left', 'Reason on record']);
-  if (!allLeavers.length) watch.push(['Nobody from a tracked class has left yet.', '', '', '']);
-  for (const l of allLeavers) watch.push([l.name, l.cls, l.left, l.reason || '(none recorded)']);
 
   /** The same "when was this refreshed" line every tab gets, sized to that tab. */
   const stampRow = (width) => [stamp, ...Array(Math.max(0, width - 1)).fill('')];
@@ -473,7 +373,7 @@ async function main() {
     ['Strong', counts.Strong || 0],
     [],
     ['Tab', 'What it is'],
-    ['Churn Watch', 'Only the operators who need attention, most urgent first. Each row says in plain words what we saw. Start here.'],
+    ['Class Scorecard', 'The ten metrics management grades him on, one section per class, newest class at the top. Our figure sits beside their published one so a disagreement shows up before a meeting rather than during one.'],
     ['Class Scorecard', 'The ten metrics management grades the class on. Where we can compute a number we show ours next to their published one, so a disagreement shows up before it is presented.'],
     ['Training vs Performance', 'The August 2026 class with their training scores beside what they have actually done on the phones. This is the raw material for forecasting who will struggle.'],
     ['Hard Regs', 'Every operator from a tracked class and their registration numbers for the last 4 weeks, including which plans they sell.'],
@@ -489,7 +389,7 @@ async function main() {
     ['We stop at 90 days', 'An operator drops off the per-person tabs 90 days after their first real call. The class tabs keep their numbers — a class scorecard is a permanent record.'],
     ['Order of the rows', 'Training vs Performance is split into class sections, newest class at the top. Inside a class: people still here first with the strongest training score at the top, then a NO LONGER AT GOGO banner and that class’s own departures, most recent first. Each class keeps its own leavers — September’s never sit under August’s heading.'],
     ['Section headings', 'Generated on every run, not typed in. A heading added by hand would be wiped, because writing a tab clears its values first.'],
-    ['Days lasted', 'For someone who has gone: days from their first real call to the day their account was closed. Blank while they are still here. This is how LONG they lasted, not why they left — the reason, where one is recorded, is in Status and on Churn Watch.'],
+    ['Status', 'For anyone who has gone, this carries the date AND the reason on record together, e.g. "Left 2026-09-02 — Call Avoidance". Where no reason was recorded, only the date shows.'],
     ['Priority', 'Left blank once someone has gone. A priority next to a departure is noise.'],
     ['Layout', 'Column widths, wrapping and column order are yours. The rebuild refreshes numbers and will not move your columns or resize them.'],
     ['Peer median', 'The middle reg ratio among operators who started taking calls the same month. A new operator is compared to other new operators, never to a veteran.'],
@@ -580,8 +480,11 @@ async function main() {
       left ? '' : (r ? r.verdict.level : ''),
       t.status !== 'active'
         ? `${t.status}${t.reason ? ` — ${t.reason}` : ''}`
+        // Date and reason together, in one cell. Vee liked seeing "Call Avoidance"
+        // and "attendance" on the old Churn Watch, and that tab is gone — so the
+        // reason moves onto the person it belongs to instead of being lost.
         : o && o.closedAt
-          ? `Left ${fmtDbDate(o.closedAt).slice(0, 10)}`
+          ? `Left ${fmtDbDate(o.closedAt).slice(0, 10)}${(o.deactivationReason || '').trim() ? ` — ${(o.deactivationReason || '').trim()}` : ''}`
           : agedOut(t)
             ? `Past ${TRACK_DAYS} days — no longer tracked`
             : 'Active',
@@ -638,121 +541,133 @@ async function main() {
   }
   if (tvp[tvp.length - 1] && tvp[tvp.length - 1][0] === '') tvp.pop();
 
-  // --- Class Scorecard: the ten metrics his management grades him on ---
-  // Where we can compute it, we do, and we show their published figure next to
-  // ours. If the two disagree the formula is wrong and we need to know that
-  // before he presents it, not after.
-  // NOTE — the scorecard is deliberately still per-class and hardcoded to August.
-  // A scorecard grades one class, so that is right. What is NOT yet decided is
-  // whether the sheet should show class against class side by side; Vee is asking
-  // Oscar. When the answer comes, this becomes a loop over CLASSES and every other
-  // tab already carries a Class column ready for it.
-  const completed = AUG_2026.filter((t) => t.status === 'active');
-  const left = AUG_2026.filter((t) => t.status !== 'active');
-  const pctCompleted = completed.length / AUG_2026.length;
-  const quizAllHires = AUG_2026.reduce((s, t) => s + t.knowledge, 0) / AUG_2026.length;
-  const quizCompletedOnly = completed.reduce((s, t) => s + t.knowledge, 0) / completed.length;
-  // --- Churn, on management's own clock ----------------------------------------
+  // --- Class Scorecard: one section per class, newest at the top ---------------
   //
-  // Two things here were verified rather than assumed, and both were wrong at first.
+  // Vee: "that class scorecard would need to have the newest at the top... when
+  // September comes, you put it at the top."
   //
-  // 1. THE DENOMINATOR is Completed Training, not New hires. Their July row reads
-  //    3 churned and 6.52%, and 3/46 completed is exactly 6.52%. 3/50 hires would be
-  //    6.00%, which is not what they print.
-  //
-  // 2. THE DATES are calendar months from the last day of class, not 30-day steps.
-  //    Every published milestone matches month arithmetic; none match day arithmetic.
-  //    See milestoneDate() for the full working. Counting days would have put each
-  //    due date one or two days early and quietly disagreed with his own scorecard.
+  // Each class gets the same ten metrics management grades him on, with our figure
+  // beside their published one. Where the two disagree, our formula is wrong and he
+  // needs to know that before he presents it, not after.
   const CHURN_MONTHS = [1, 2, 3];
   const churnGoal = { 1: 0.05, 2: 0.10, 3: 0.15 };
-  const dueDate = (months) => milestoneDate(CLASS_META.classEnd, months);
-
-  const classChurn = CHURN_MONTHS.map((months) => {
-    const due = dueDate(months);
-    const leavers = completed
-      .map((t) => ({ t, o: t.slackId ? bySlack[t.slackId] : null }))
-      .filter(({ o }) => o && o.closedAt)
-      .map(({ t, o }) => ({
-        name: t.name,
-        left: fmtDbDate(o.closedAt).slice(0, 10),
-        day: dayAfterGrad(o.closedAt),
-        reason: (o.deactivationReason || '').trim(),
-      }))
-      .filter((x) => x.left <= due && x.day >= 0)
-      .sort((a, b) => a.left.localeCompare(b.left));
-    return {
-      months,
-      due,
-      label: `${months * 30} day Churn Rate`,
-      n: leavers.length,
-      rate: completed.length ? leavers.length / completed.length : null,
-      closed: todayISO >= due,
-      leavers,
-    };
-  });
-
-  const churnCell = (c) => {
-    if (c.closed) return `${c.n} (${pctStr(c.rate, 2)})`;
-    return c.n ? `${c.n} (${pctStr(c.rate, 2)}) so far` : 'none yet';
-  };
-  const churnNote = (c) => {
-    const who = c.leavers.length
-      ? ` Left so far: ${c.leavers.map((l) => `${l.name} on ${l.left}, day ${l.day}${l.reason ? `, ${l.reason}` : ''}`).join('; ')}.`
-      : '';
-    if (c.closed) return `Window closed ${c.due}. Goal is under ${pctStr(churnGoal[c.months])}.${who}`;
-    return `RUNNING, closes ${c.due}. This can only go up, so read it as a floor.${who}`;
-  };
 
   const scorecard = [
     ['Metric', 'Goal', 'Ours', 'Their published figure', 'Match?', 'Notes'],
-    ['New hires', '—', AUG_2026.length, 40, AUG_2026.length === 40 ? '✅' : '⚠️', 'Class of Aug 3–21, 2026.'],
-    ['Completed Training', '—', completed.length, 35, completed.length === 35 ? '✅' : '⚠️', `${left.length} did not finish: ${left.map((t) => `${t.name} (${t.status})`).join(', ')}`],
-    ['% Completed Training', '90%', pctStr(pctCompleted, 2), '87.50%', Math.abs(pctCompleted - 0.875) < 0.001 ? '✅' : '⚠️', pctCompleted < 0.9 ? 'Under goal.' : 'At goal.'],
-    ['Trainee Satisfaction', '97%', '—', 'Aug 21', '—', 'A survey of the trainees. Measures the TRAINER, not the operators. Not in the database.'],
-    // Their published 82.19% reproduces exactly as the average across ALL 40 hires,
-    // including the five who scored 0 because they never finished. So the formula is
-    // confirmed — and it means he is graded on the quiz scores of people who quit or
-    // were fired. Worth him knowing before the next review.
-    ['Quizzes Success Rate', '85%', pct100(quizAllHires), '82.19%', Math.abs(quizAllHires - 82.19) < 0.05 ? '✅ formula confirmed' : '⚠️', `Average across ALL ${AUG_2026.length} hires, including the ${left.length} who did not finish (four of them scored 0). Counting only the ${completed.length} who completed, it is ${pct100(quizCompletedOnly)} — above the 85% goal rather than under it.`],
-    ...classChurn.map((c) => [
-      c.label,
-      `under ${pctStr(churnGoal[c.months])}`,
-      churnCell(c),
-      c.closed ? '' : `due ${c.due}`,
-      c.rate === null
-        ? '—'
-        : c.closed
-          ? (c.rate <= churnGoal[c.months] ? '✅ met' : '❌ missed')
-          : (c.rate > churnGoal[c.months] ? '⚠️ already over goal' : 'on track'),
-      churnNote(c),
-    ]),
-    ['90 day reg rate', '+15%', 'pending', dueDate(3), '—', 'FORMULA NOT SETTLED. Is +15% the reg ratio across the whole 90 days, or the improvement from the first month to the third? Those are different numbers and management has not said which. Nothing is computed until they do.'],
-    ['90 day star model', '3.70+', 'pending', dueDate(3), '—', 'Not found in the operator tables so far, and the formula is not written down anywhere we can read. OPS_TASK=star searches the whole database; the definition has to come from Ops (Aleesa).'],
   ];
+  const scorecardBanners = [];
 
-  // The old "Class Churn" tab was removed. Everything it held — the rate at each
-  // milestone and the names behind it — now sits at the top of Churn Watch, which is
-  // where Vee asked for it. Three tabs saying overlapping things about the same class
-  // is worse than one that says it properly.
+  for (const cls of [...CLASSES].reverse()) {
+    const meta = cls.meta;
+    const pub = cls.published;
+    const roster = cls.trainees;
+    const year = meta.classEnd.slice(0, 4);
+    const dueDate = (months) => milestoneDate(meta.classEnd, months);
+
+    scorecardBanners.push(scorecard.length);
+    scorecard.push([
+      `${meta.label || meta.cohort} ${year} CLASS`.toUpperCase(),
+      `${meta.classStart} to ${meta.classEnd}`, '', '', '', '',
+    ]);
+
+    // No roster means we can report their numbers but never check them.
+    if (!roster.length) {
+      const only = (label, goal, value) => scorecard.push([
+        label, goal, 'no roster', value ?? 'not published yet', '—',
+        'Published figure only. We have no names or Slack IDs for this class, so nothing here is recomputed or checked. Ask Oscar for the class workbook.',
+      ]);
+      only('New hires', '—', pub && pub.newHires);
+      only('Completed Training', '—', pub && pub.completedTraining);
+      only('% Completed Training', '90%', pub && pub.pctCompletedTraining);
+      only('Trainee Satisfaction', '97%', pub && pub.traineeSatisfaction);
+      only('Quizzes Success Rate', '85%', pub && pub.quizSuccessRate);
+      only('30 day Churn Rate', 'under 5%', pub && pub.churn30);
+      only('60 day Churn Rate', 'under 10%', (pub && pub.churn60) || `due ${dueDate(2)}`);
+      only('90 day Churn Rate', 'under 15%', (pub && pub.churn90) || `due ${dueDate(3)}`);
+      only('90 day reg rate', '+15%', (pub && pub.regRate90) || `due ${dueDate(3)}`);
+      only('90 day star model', '3.70+', (pub && pub.starModel90) || `due ${dueDate(3)}`);
+      scorecard.push(['', '', '', '', '', '']);
+      continue;
+    }
+
+    const done = roster.filter((t) => t.status === 'active');
+    const quit = roster.filter((t) => t.status !== 'active');
+    const pctDone = done.length / roster.length;
+    const quizAll = roster.reduce((acc, t) => acc + t.knowledge, 0) / roster.length;
+    const quizDone = done.reduce((acc, t) => acc + t.knowledge, 0) / done.length;
+    const gone = leaversOf(cls);
+    const same = (ours, theirs) => (theirs == null ? '—' : ours === theirs ? '✅' : '⚠️');
+
+    scorecard.push(
+      ['New hires', '—', roster.length, (pub && pub.newHires) ?? '', same(roster.length, pub && pub.newHires),
+        `Class of ${meta.classStart} to ${meta.classEnd}.`],
+      ['Completed Training', '—', done.length, (pub && pub.completedTraining) ?? '', same(done.length, pub && pub.completedTraining),
+        `${quit.length} did not finish: ${quit.map((t) => `${t.name} (${t.status})`).join(', ') || 'nobody'}`],
+      ['% Completed Training', '90%', pctStr(pctDone, 2), (pub && pub.pctCompletedTraining) ?? '', '',
+        pctDone < 0.9 ? 'Under goal.' : 'At goal.'],
+      ['Trainee Satisfaction', '97%', 'not in the database', (pub && pub.traineeSatisfaction) ?? '', '—',
+        'A survey of the trainees. Measures the TRAINER, not the operators, and lives outside the database.'],
+      // Their 82.19% reproduces exactly as the average across ALL hires, including
+      // the ones who scored 0 because they never finished. So the formula is
+      // confirmed, and it means he is graded on the quiz scores of people who quit
+      // or were fired. Worth him knowing before the next review.
+      ['Quizzes Success Rate', '85%', pct100(quizAll), (pub && pub.quizSuccessRate) ?? '', '',
+        `Average across ALL ${roster.length} hires, including the ${quit.length} who did not finish. Counting only the ${done.length} who completed, it is ${pct100(quizDone)}.`],
+    );
+
+    for (const months of CHURN_MONTHS) {
+      const due = dueDate(months);
+      const n = gone.filter((l) => l.left <= due).length;
+      const rate = done.length ? n / done.length : null;
+      const closed = todayISO >= due;
+      const who = gone.filter((l) => l.left <= due)
+        .map((l) => `${l.name} on ${l.left}${l.reason ? `, ${l.reason}` : ''}`).join('; ');
+      scorecard.push([
+        `${months * 30} day Churn Rate`,
+        `under ${pctStr(churnGoal[months])}`,
+        closed ? `${n} (${pctStr(rate, 2)})` : (n ? `${n} (${pctStr(rate, 2)}) so far` : 'none yet'),
+        '',
+        rate === null ? '—'
+          : closed ? (rate <= churnGoal[months] ? '✅ met' : '❌ missed')
+          : (rate > churnGoal[months] ? '⚠️ already over goal' : 'on track'),
+        (closed ? `Window closed ${due}.` : `RUNNING, closes ${due}. Can only go up, so read it as a floor.`)
+          + (who ? ` Left: ${who}.` : ''),
+      ]);
+    }
+
+    scorecard.push(
+      ['90 day reg rate', '+15%', 'pending', `due ${dueDate(3)}`, '—',
+        'FORMULA NOT SETTLED. Is +15% the reg ratio across the whole 90 days, or the improvement from the first month to the third? Different numbers. Nothing is computed until management says which.'],
+      ['90 day star model', '3.70+', 'pending', `due ${dueDate(3)}`, '—',
+        'Not found in the operator tables so far, and the formula is not written down anywhere we can read. OPS_TASK=star searches the whole database; the definition has to come from Ops (Aleesa).'],
+      ['', '', '', '', '', ''],
+    );
+  }
+  if (scorecard[scorecard.length - 1][0] === '') scorecard.pop();
+
+  // Two tabs were removed along the way: "Class Churn" and then "Churn Watch". Both
+  // said things Class Scorecard and Training vs Performance already say. What each
+  // one uniquely held was moved rather than dropped — the churn rate per milestone
+  // into Class Scorecard, the reason someone was let go onto their own Status cell.
 
   await writeTab('README', readme, TRACKER_SHEET_ID);
-  await writeTab('Churn Watch', watch, TRACKER_SHEET_ID);
   await writeTab('Class Scorecard', scorecard, TRACKER_SHEET_ID, keepTop);
   await writeTab('Training vs Performance', tvp, TRACKER_SHEET_ID, keepTop);
   await writeTab('Hard Regs', regs, TRACKER_SHEET_ID, keepTop);
   await writeTab('Team Leads', leads, TRACKER_SHEET_ID, keepTop);
   await writeTab('Weekly Trend', trend, TRACKER_SHEET_ID, keepTop);
 
-  for (const t of ['README', 'Churn Watch', 'Class Scorecard', 'Training vs Performance', 'Hard Regs', 'Team Leads', 'Weekly Trend']) {
+  for (const t of ['README', 'Class Scorecard', 'Training vs Performance', 'Hard Regs', 'Team Leads', 'Weekly Trend']) {
     await formatHeader(t, { spreadsheetId: TRACKER_SHEET_ID, bandRows: t !== 'README' }).catch(() => {});
   }
 
   // Escalate / Watch in red, Strong in green — wherever those words appear.
   await formatBanners('Training vs Performance', bannerRows, { spreadsheetId: TRACKER_SHEET_ID })
     .catch((e) => console.error('[tracker] class banners:', e.message));
+  await formatBanners('Class Scorecard', scorecardBanners, { spreadsheetId: TRACKER_SHEET_ID })
+    .catch((e) => console.error('[tracker] scorecard banners:', e.message));
 
-  for (const t of ['Churn Watch', 'Training vs Performance', 'Hard Regs', 'Team Leads']) {
+  for (const t of ['Training vs Performance', 'Hard Regs', 'Team Leads']) {
     await priorityColors(t, { spreadsheetId: TRACKER_SHEET_ID }).catch((e) => console.error(`[tracker] colours on ${t}:`, e.message));
   }
 
