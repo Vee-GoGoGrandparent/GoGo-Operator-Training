@@ -13,7 +13,7 @@
 // Deliberately NOT here: any quality score. The AI grading is unreviewed and the
 // trainer says it is often wrong. Grading is not his job and it is not ours.
 
-import { connect, q } from '../src/db.js';
+import { connect, q, tryQ } from '../src/db.js';
 import { writeTab, formatHeader, TRACKER_SHEET_ID, BRAND } from '../src/sheets.js';
 import { notify } from '../src/slack.js';
 import { nowET, fmtDbDate } from '../src/time.js';
@@ -322,6 +322,27 @@ async function main() {
   for (const t of ['README', 'Churn Watch', 'Class Scorecard', 'Training vs Performance', 'Hard Regs', 'Team Leads', 'Weekly Trend']) {
     await formatHeader(t, { spreadsheetId: TRACKER_SHEET_ID, bandRows: t !== 'README' }).catch(() => {});
   }
+
+  // While we are connected and it is working, answer the question the flaky link
+  // probe keeps failing to answer: can we still READ the transcript tables?
+  //
+  // The link probe dies at the front door on a bad IP, so it never gets far enough
+  // to tell us whether the tables themselves are still readable. This job connects
+  // reliably, so it piggybacks the check — one cheap row from each table — and
+  // records the answer where we can see it. Costs nothing, and it separates "the
+  // IP is flaky" from "our access was taken away", which are very different
+  // problems with very different fixes.
+  const accessCheck = [['Table', 'Can we still read it?', 'Checked at']];
+  for (const t of ['deepgramCalls', 'callLogs', 'callSummary', 'qualityAssurances', 'operatorActivities']) {
+    const probe = await tryQ(conn, `SELECT 1 FROM \`${t}\` LIMIT 1`, [], 10_000);
+    accessCheck.push([
+      t,
+      probe.error ? `❌ NO — ${probe.error.slice(0, 160)}` : '✅ yes',
+      asOf,
+    ]);
+  }
+  await writeTab('08 Access Check', accessCheck).catch((e) => console.error('[access check] could not write:', e.message));
+  await formatHeader('08 Access Check').catch(() => {});
 
   await conn.end();
 
