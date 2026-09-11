@@ -1,0 +1,239 @@
+<title>Operator Tracker Status</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+
+<style>
+  :root{
+    --indigo:#1A1A4C; --cornflower:#454EBD; --yellow:#FFC000;
+    --ground:#FBFAFD; --surface:#FFFFFF; --surface-2:#F2F2F8;
+    --ink:#14142E; --muted:#62668B;
+    --rule:#DDDDEA; --rule-strong:#B9BAD2;
+    --go:#1B6B51; --go-soft:#EAF3EF;
+    --wait:#8A5A12; --wait-soft:#FDF4E3;
+    --stop:#A8321C; --stop-soft:#FBEDEA;
+    --shadow:0 1px 2px rgba(20,20,46,.06), 0 8px 24px -14px rgba(20,20,46,.18);
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+    --ground:#101024; --surface:#171733; --surface-2:#1E1E40;
+    --ink:#ECECF6; --muted:#9DA1C4; --rule:#2C2C55; --rule-strong:#414173;
+    --go:#6FCBA8; --go-soft:#12302A; --wait:#E2B663; --wait-soft:#332715;
+    --stop:#F0917C; --stop-soft:#34191A; --cornflower:#8B93E8;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -16px rgba(0,0,0,.7);
+  }}
+  :root[data-theme="dark"]{
+    --ground:#101024; --surface:#171733; --surface-2:#1E1E40;
+    --ink:#ECECF6; --muted:#9DA1C4; --rule:#2C2C55; --rule-strong:#414173;
+    --go:#6FCBA8; --go-soft:#12302A; --wait:#E2B663; --wait-soft:#332715;
+    --stop:#F0917C; --stop-soft:#34191A; --cornflower:#8B93E8;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -16px rgba(0,0,0,.7);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);
+    font-family:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;font-size:16.5px;line-height:1.6;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:960px;margin:0 auto;padding:0 26px 90px}
+
+  header.top{border-bottom:3px solid var(--cornflower);padding:42px 0 20px;margin-bottom:14px}
+  .eyebrow{font-family:"IBM Plex Mono",monospace;font-size:11.5px;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--cornflower);margin:0 0 12px}
+  h1{font-family:Archivo,sans-serif;font-weight:700;font-size:clamp(2.1rem,5.5vw,3.2rem);
+    line-height:1.03;letter-spacing:-.028em;margin:0 0 14px;text-wrap:balance}
+  .stand{font-size:1.12rem;color:var(--muted);margin:0;max-width:58ch}
+
+  h2{font-family:Archivo,sans-serif;font-weight:600;font-size:1.5rem;letter-spacing:-.018em;
+    margin:54px 0 6px;text-wrap:balance}
+  .sub{color:var(--muted);font-size:.95rem;margin:0 0 22px;max-width:62ch}
+  p{margin:0 0 14px}
+
+  /* the one-thing box */
+  .keystone{background:var(--surface);border:1px solid var(--rule);border-left:5px solid var(--yellow);
+    border-radius:3px;padding:26px 30px;box-shadow:var(--shadow);margin-top:26px}
+  .keystone h3{font-family:Archivo,sans-serif;font-size:1.16rem;margin:0 0 10px}
+  .keystone p:last-child{margin-bottom:0}
+
+  /* item rows */
+  .items{display:grid;gap:10px}
+  .item{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+    padding:16px 20px;display:grid;grid-template-columns:96px 1fr;gap:0 18px;align-items:start}
+  .item .chip{font-family:"IBM Plex Mono",monospace;font-size:9.5px;letter-spacing:.09em;
+    text-transform:uppercase;padding:4px 0;border-radius:2px;text-align:center;font-weight:600;margin-top:2px}
+  .chip.go{background:var(--go-soft);color:var(--go)}
+  .chip.wait{background:var(--wait-soft);color:var(--wait)}
+  .chip.stop{background:var(--stop-soft);color:var(--stop)}
+  .item .name{font-weight:600;display:block;margin-bottom:3px}
+  .item .body{font-size:.94rem;color:var(--muted)}
+  .item .need{display:block;margin-top:7px;font-size:.88rem}
+  .item .need b{color:var(--ink);font-weight:600}
+  .who{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--cornflower)}
+
+  /* ask list */
+  ol.asks{counter-reset:a;list-style:none;padding:0;margin:0;display:grid;gap:11px}
+  ol.asks li{counter-increment:a;position:relative;padding:17px 22px 17px 60px;
+    background:var(--surface);border:1px solid var(--rule);border-radius:3px}
+  ol.asks li::before{content:counter(a);position:absolute;left:22px;top:16px;
+    font-family:Archivo,sans-serif;font-weight:700;font-size:1.2rem;color:var(--cornflower)}
+  ol.asks b{display:block;margin-bottom:2px}
+  ol.asks .why{color:var(--muted);font-size:.9rem}
+
+  .note{background:var(--surface-2);border:1px dashed var(--rule-strong);border-radius:3px;
+    padding:20px 24px;font-size:.94rem}
+  .note ul{margin:0;padding-left:19px}
+  .note li{margin-bottom:8px}
+  .note li:last-child{margin-bottom:0}
+
+  footer{margin-top:64px;padding-top:20px;border-top:1px solid var(--rule);
+    font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted)}
+
+  @media (max-width:640px){
+    .wrap{padding:0 16px 60px}
+    .item{grid-template-columns:1fr;gap:8px}
+    .item .chip{justify-self:start;padding:4px 10px}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<header class="top">
+  <p class="eyebrow">Operator Training Tracker · 2026-09-10</p>
+  <h1>Where we are, what's missing</h1>
+  <p class="stand">Built from reading back all 62 messages in this project, not from memory. Every item below is either running, waiting on a named person, or not started.</p>
+</header>
+
+<div class="keystone">
+  <h3>One blocker sits under almost everything left</h3>
+  <p>Reviewing calls. Comparing what operators <em>say</em> against what the training <em>teaches</em>. Better forecasting. Coaching notes that point at real calls. <strong>All of it needs the words from a call</strong>, and right now we cannot get them.</p>
+  <p>The transcripts exist — 1,158,255 of them, with speaker separation. But the column that links a transcript to its call (<span style="font-family:'IBM Plex Mono',monospace;font-size:.86em">callLogs.deepgramTranscriptId</span>) is <strong>empty on all 290,705 recent calls</strong>. So we can see transcripts and we can see calls, and we cannot tell which belongs to which.</p>
+  <p>Until that's solved, the op reports are the substitute — a human writing down what went wrong and what should have happened. That works, and it's what everything built so far runs on.</p>
+</div>
+
+<h2>Running right now</h2>
+<p class="sub">In the tracker sheet, refreshing itself at 6am Eastern every day.</p>
+<div class="items">
+  <div class="item"><span class="chip go">Working</span><div>
+    <span class="name">The scorecard</span>
+    <span class="body">Management's own layout, their column names, their date format. Both classes, newest on top. September lands on top automatically.</span></div></div>
+  <div class="item"><span class="chip go">Working</span><div>
+    <span class="name">Training vs Performance</span>
+    <span class="body">87 operators across June and August, in class sections, each class with its own NO LONGER AT GOGO list. Training scores beside real call numbers.</span></div></div>
+  <div class="item"><span class="chip go">Working</span><div>
+    <span class="name">Churn at 30, 60 and 90 days</span>
+    <span class="body">Counted from the last day of class, in calendar months, the way management dates it. Formula confirmed against their own published figure.</span></div></div>
+  <div class="item"><span class="chip go">Working</span><div>
+    <span class="name">Who to watch</span>
+    <span class="body">Escalate / Watch / Strong, in plain sentences a team lead can act on. Only fires when someone is below the 15% goal.</span></div></div>
+  <div class="item"><span class="chip go">Working</span><div>
+    <span class="name">Op reports, counted</span>
+    <span class="body">281 reports across three tabs — themes, who and when, and every report with its CallLog ID. This is the closest thing we have to knowing what happens on calls.</span></div></div>
+</div>
+
+<h2>Waiting on someone</h2>
+<p class="sub">Built or answerable, but stuck until a person does something. Nothing here needs more code first.</p>
+<div class="items">
+
+  <div class="item"><span class="chip wait">Waiting</span><div>
+    <span class="name">The Ride Star Model</span>
+    <span class="body">Scorecard wants 3.70+. The probe is written and searches the whole database. Your last deploy of it failed and I never saw the error.</span>
+    <span class="need"><b>Needs:</b> one line from the Railway log. Separately, the <em>formula</em> — which rides, what window, why 3.70 — has to come from Ops. It is not discoverable from column names. <span class="who">Vee · Aleesa</span></span></div></div>
+
+  <div class="item"><span class="chip wait">Waiting</span><div>
+    <span class="name">The 90-day reg rate formula</span>
+    <span class="body">Goal is "+15%". Two readings: the reg ratio across the whole 90 days, or the improvement from month one to month three. Different numbers.</span>
+    <span class="need"><b>Needs:</b> management to say which. Nothing is computed until they do. <span class="who">Management</span></span></div></div>
+
+  <div class="item"><span class="chip wait">Waiting</span><div>
+    <span class="name">Two numbers that disagree with their sheet</span>
+    <span class="body">June head count: the workbook has 51 people, their scorecard says 50. And the quiz percentage was calculated differently for June than for August — about a five-point swing.</span>
+    <span class="need"><b>Needs:</b> Oscar to ask which is right, before either figure is presented. <span class="who">Oscar</span></span></div></div>
+
+  <div class="item"><span class="chip wait">Waiting</span><div>
+    <span class="name">June Class 2 attendance</span>
+    <span class="body">The PDF only shows the final week for that group. 23 people have blank lates and absences rather than a zero that would look like perfect attendance.</span>
+    <span class="need"><b>Needs:</b> the first two weeks of that tab. <span class="who">Oscar</span></span></div></div>
+
+  <div class="item"><span class="chip wait">Waiting</span><div>
+    <span class="name">All the training material</span>
+    <span class="body">I have four decks. New material is being written that I have not seen. Every "not in the deck" finding really means "not in the four decks I have."</span>
+    <span class="need"><b>Needs:</b> the rest of the Canva material, or a folder. <span class="who">Oscar</span></span></div></div>
+
+  <div class="item"><span class="chip wait">Waiting</span><div>
+    <span class="name">The class workbooks</span>
+    <span class="body">June and August were typed in by hand from PDFs. That does not survive a new class every month.</span>
+    <span class="need"><b>Needs:</b> the class sheets shared with the service account, so each new class reads itself in. <span class="who">Oscar</span></span></div></div>
+
+  <div class="item"><span class="chip wait">Waiting</span><div>
+    <span class="name">Op reports collect themselves</span>
+    <span class="body">Counting them is automatic. Collecting them is not — I pull them by hand because reading a private Slack channel needs a bot token.</span>
+    <span class="need"><b>Needs:</b> a Slack bot token with history access on #op_report. Also fixes the 124 reports whose text arrives cut off. <span class="who">Vee</span></span></div></div>
+
+  <div class="item"><span class="chip wait">Waiting</span><div>
+    <span class="name">Department on every row</span>
+    <span class="body">Found it — <span style="font-family:'IBM Plex Mono',monospace;font-size:.86em">operators.departments</span> covers rides, home services, gourmet and groceries. Not added to the sheet yet.</span>
+    <span class="need"><b>Needs:</b> nothing external. One change, ready when you want it. <span class="who">Me</span></span></div></div>
+
+</div>
+
+<h2>Ideas we have not built</h2>
+<p class="sub">These are yours, pulled back out of the conversation. Listed in the order I would do them.</p>
+<div class="items">
+
+  <div class="item"><span class="chip stop">Not built</span><div>
+    <span class="name">A practical Need Love quiz</span>
+    <span class="body">Oscar asked whether feeding questions to the AI would help. The stronger answer: he already has ~47 real mis-tagged tickets with the reviewer's correct answer attached. Those <em>are</em> the quiz — nothing invented.</span>
+    <span class="need"><b>How:</b> pull them out of the op reports we already hold into a practice sheet. No new access needed. <strong>This one could be done this week.</strong></span></div></div>
+
+  <div class="item"><span class="chip stop">Not built</span><div>
+    <span class="name">Forecasting, not just flagging</span>
+    <span class="body">Your original idea, from the second message you ever sent me: spot who is going to struggle <em>before</em> they struggle. What exists today is reactive — it tells you someone already dropped.</span>
+    <span class="need"><b>How:</b> we now have two classes with training scores and real outcomes. That is the first point where "did training scores predict what happened" can actually be tested. Needs a third class to be worth trusting.</span></div></div>
+
+  <div class="item"><span class="chip stop">Not built</span><div>
+    <span class="name">Coaching notes that point at real calls</span>
+    <span class="body">"Here are the calls we reviewed for this operator, here is what was found, here is what they could do better." Not QA, not grading — finding the gap.</span>
+    <span class="need"><b>How:</b> partly possible now from op reports (they carry CallLog IDs). Properly needs the transcript link. Payment silence is never used, per your rule.</span></div></div>
+
+  <div class="item"><span class="chip stop">Not built</span><div>
+    <span class="name">Training material vs what actually happens</span>
+    <span class="body">Done once, by hand — that is the report you sent Oscar. It is not automated and not repeatable yet.</span>
+    <span class="need"><b>How:</b> with all the decks and automatic op report collection, this becomes a monthly page that rebuilds itself instead of a one-off.</span></div></div>
+
+  <div class="item"><span class="chip stop">Not built</span><div>
+    <span class="name">Comparing calls to the script</span>
+    <span class="body">The biggest idea, and the most blocked. What operators are supposed to say versus what they actually say.</span>
+    <span class="need"><b>How:</b> needs the transcript link first. Everything else is ready for it.</span></div></div>
+
+  <div class="item"><span class="chip stop">Not built</span><div>
+    <span class="name">Coaching summaries — unanswered</span>
+    <span class="body">You asked whether they are AI-written and whether we can get the operator's actual wording. Never answered. The table holds 21 rows across 1,920 operators, and recently-fired people have none.</span>
+    <span class="need"><b>How:</b> a short probe, same shape as the star one. Small job.</span></div></div>
+
+</div>
+
+<h2>What I would ask for, in this order</h2>
+<ol class="asks">
+  <li><b>Richard — why is the transcript link empty?</b><span class="why">This one unlocks the most. Ask whether <span style="font-family:'IBM Plex Mono',monospace;font-size:.86em">callLogs.deepgramTranscriptId</span> is populated anywhere, or whether transcripts connect to calls a different way.</span></li>
+  <li><b>Oscar — share the class sheets folder.</b><span class="why">Stops the hand-typing. Every future class reads itself in, and your class-vs-class comparison becomes possible.</span></li>
+  <li><b>Oscar — all the training material.</b><span class="why">Turns "not in the four decks I have" into a real answer.</span></li>
+  <li><b>Oscar — ask about the two mismatched numbers.</b><span class="why">The head count and the quiz formula. Both affect figures he presents.</span></li>
+  <li><b>You — the star probe error.</b><span class="why">One line from the Railway log tells me whether it never deployed or died on the database.</span></li>
+  <li><b>You — a Slack bot token for #op_report.</b><span class="why">Makes op report collection automatic and fixes the cut-off text.</span></li>
+  <li><b>Management — the 90-day reg rate formula.</b><span class="why">Last blank on the scorecard that we could otherwise fill.</span></li>
+</ol>
+
+<h2>Things I am deliberately not doing</h2>
+<div class="note">
+  <ul>
+    <li><strong>No grading calls.</strong> Not his job, and the company's AI QA flags 93.4% of calls positive — a detector that says yes to nearly everything tells you nothing.</li>
+    <li><strong>Nothing about payment audio.</strong> The system mutes it. Silence there is never treated as a finding.</li>
+    <li><strong>No mixing with marketing.</strong> Separate repo, separate sheets, separate trigger variable. Only Railway and the database are shared.</li>
+    <li><strong>No guessing a number to fill a blank.</strong> Where our figure and theirs disagree, the sheet says so instead of quietly printing a different one.</li>
+  </ul>
+</div>
+
+<footer>
+  Built by reading all 62 messages in this project · GoGo-Operator-Training · 2026-09-10
+</footer>
+
+</div>

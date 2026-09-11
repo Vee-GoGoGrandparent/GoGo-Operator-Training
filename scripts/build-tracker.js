@@ -14,7 +14,7 @@
 // trainer says it is often wrong. Grading is not his job and it is not ours.
 
 import { connect, q, tryQ } from '../src/db.js';
-import { writeTab, formatHeader, priorityColors, formatBanners, TRACKER_SHEET_ID, BRAND } from '../src/sheets.js';
+import { writeTab, formatHeader, priorityColors, formatBanners, formatScorecard, moveTab, TRACKER_SHEET_ID, BRAND } from '../src/sheets.js';
 import { notify } from '../src/slack.js';
 import { nowET, fmtDbDate } from '../src/time.js';
 import { regCallsOf, ratio, median, pctStr, pct100, weekKey, assess, TARGET_HR_RATIO } from '../src/analysis.js';
@@ -582,7 +582,12 @@ async function main() {
      'Goal: Less than 5%', 'Goal: Less than 10%', 'Goal: Less than 15%',
      'Goal: +15%', 'Goal: 3.70+'],
   ];
-  const scorecardBanners = [];
+  // Row kinds are tracked separately because this tab is not one table: a goal row,
+  // then a block per class, then notes. Each gets its own colour, all three read back
+  // off the sheet after Vee styled it by hand.
+  const classRows = [];
+  const headerRows = [];
+  const sectionRows = [];
   const checks = []; // where our figure disagrees with theirs — shown below, not inline
 
   for (const cls of [...CLASSES].reverse()) {
@@ -598,8 +603,9 @@ async function main() {
       ? `   (their sheet calls this row "${meta.managementLabel}")`
       : '';
 
-    scorecardBanners.push(scorecard.length);
+    classRows.push(scorecard.length);
     scorecard.push([`${label} (${span})${alias}`, ...Array(SCORECARD_HEADERS.length - 1).fill('')]);
+    headerRows.push(scorecard.length);
     scorecard.push([...SCORECARD_HEADERS]);
 
     const publishedChurn = (months) => [null, pub && pub.churn30, pub && pub.churn60, pub && pub.churn90][months];
@@ -639,6 +645,33 @@ async function main() {
 
     const done = roster.filter((t) => t.status === 'active');
     const quizAll = roster.reduce((a, t) => a + t.knowledge, 0) / roster.length;
+
+    // 90 DAY REG RATE — answered by Vee on 2026-09-10: "the whole 90 days".
+    //
+    // So it is the class's registration ratio across everyone's first 90 days on the
+    // phones, not the improvement from month one to month three. Goal is 15%, the same
+    // number every operator is measured against individually.
+    //
+    // The three blocks added together ARE the first 90 days, which is why they are
+    // discrete and not cumulative. Blocks that have not started contribute nothing, so
+    // before the window closes this is a real running figure rather than a guess.
+    let regCalls90 = 0;
+    let hardRegs90 = 0;
+    for (const t of roster) {
+      const r = t.slackId ? perfBySlack[t.slackId] : null;
+      if (!r) continue;
+      for (const b of BLOCKS) {
+        regCalls90 += r.a.block[b.label].regCalls;
+        hardRegs90 += r.a.block[b.label].hardRegs;
+      }
+    }
+    const regRate90 = regCalls90 > 0 ? hardRegs90 / regCalls90 : null;
+    const regDue = milestoneDate(meta.classEnd, 3);
+    const regCell = regRate90 === null
+      ? longDate(regDue)
+      : todayISO >= regDue
+        ? pctStr(regRate90)
+        : `${pctStr(regRate90)} so far, closes ${longDate(regDue)}`;
     const sat = roster.filter((t) => t.knowledge > 0);
     const quizSat = sat.length ? sat.reduce((a, t) => a + t.knowledge, 0) / sat.length : null;
 
@@ -649,7 +682,7 @@ async function main() {
       (pub && pub.traineeSatisfaction) || 'not in the database',
       pct100(quizAll),
       churnCell(1), churnCell(2), churnCell(3),
-      longDate(milestoneDate(meta.classEnd, 3)),
+      regCell,
       longDate(milestoneDate(meta.classEnd, 3)),
     ]);
     scorecard.push(Array(SCORECARD_HEADERS.length).fill(''));
@@ -669,17 +702,15 @@ async function main() {
   if (scorecard[scorecard.length - 1].every((c) => c === '')) scorecard.pop();
 
   scorecard.push(Array(SCORECARD_HEADERS.length).fill(''));
-  scorecardBanners.push(scorecard.length);
+  sectionRows.push(scorecard.length);
   scorecard.push(['Where our figures and theirs disagree', ...Array(SCORECARD_HEADERS.length - 1).fill('')]);
   if (!checks.length) checks.push(['Everything reconciles.']);
   for (const c of checks) scorecard.push([c[0], ...Array(SCORECARD_HEADERS.length - 1).fill('')]);
 
   scorecard.push(Array(SCORECARD_HEADERS.length).fill(''));
-  scorecardBanners.push(scorecard.length);
+  sectionRows.push(scorecard.length);
   scorecard.push(['Still open', ...Array(SCORECARD_HEADERS.length - 1).fill('')]);
-  scorecard.push(['90 day reg rate: is "+15%" the reg ratio across the whole 90 days, or the improvement from the first month to the third? Those are different numbers and management has not said which. Nothing is computed until they do.']);
   scorecard.push(['90 day star model: the 3.70 target. Not found in the operator tables so far, and the formula is not written down anywhere we can read. OPS_TASK=star searches the whole database; the definition has to come from Ops.']);
-  scorecard.push(['A churn cell showing a date is a window still running. It shows the figure once that window closes, the same way their sheet does.']);
 
   // Two tabs were removed along the way: "Class Churn" and then "Churn Watch". Both
   // said things the Scorecard and Training vs Performance already say. What each
@@ -693,15 +724,20 @@ async function main() {
   await writeTab('Team Leads', leads, TRACKER_SHEET_ID, keepTop);
   await writeTab('Weekly Trend', trend, TRACKER_SHEET_ID, keepTop);
 
-  for (const t of ['README', 'Scorecard', 'Training vs Performance', 'Hard Regs', 'Team Leads', 'Weekly Trend']) {
+  for (const t of ['README', 'Training vs Performance', 'Hard Regs', 'Team Leads', 'Weekly Trend']) {
     await formatHeader(t, { spreadsheetId: TRACKER_SHEET_ID, bandRows: t !== 'README' }).catch(() => {});
   }
 
   // Escalate / Watch in red, Strong in green — wherever those words appear.
   await formatBanners('Training vs Performance', bannerRows, { spreadsheetId: TRACKER_SHEET_ID })
     .catch((e) => console.error('[tracker] class banners:', e.message));
-  await formatBanners('Scorecard', scorecardBanners, { spreadsheetId: TRACKER_SHEET_ID })
-    .catch((e) => console.error('[tracker] scorecard banners:', e.message));
+  await formatScorecard('Scorecard', {
+    goalRow: 0, classRows, headerRows, sectionRows, spreadsheetId: TRACKER_SHEET_ID,
+  }).catch((e) => console.error('[tracker] scorecard colours:', e.message));
+
+  // Scorecard first. It is the tab anyone else opens this sheet to look at.
+  await moveTab('Scorecard', 0, { spreadsheetId: TRACKER_SHEET_ID })
+    .catch((e) => console.error('[tracker] tab order:', e.message));
 
   for (const t of ['Training vs Performance', 'Hard Regs', 'Team Leads']) {
     await priorityColors(t, { spreadsheetId: TRACKER_SHEET_ID }).catch((e) => console.error(`[tracker] colours on ${t}:`, e.message));

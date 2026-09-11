@@ -200,7 +200,9 @@ export const BRAND = {
   cornflower: rgb('#454EBD'), // sub-headers / section bands
   yellow: rgb('#FFC000'), // the number that matters / needs attention
   indigoTint: rgb('#E8E9F2'), // banded rows
+  lavender: rgb('#E6E6FA'),   // column-header rows inside a tab — Vee's pick
   white: rgb('#FFFFFF'),
+  black: rgb('#000000'),
 
   // Priority colours. Vee picked the two text colours by hand in the sheet; the
   // backgrounds are the matching light tints from the same columns of the Google
@@ -392,6 +394,69 @@ export async function formatBanners(title, rowIndices, { spreadsheetId = BUILD_S
           fields: 'userEnteredFormat(textFormat,backgroundColor,verticalAlignment)',
         },
       })),
+    },
+  });
+}
+
+/**
+ * The Scorecard's own paint job.
+ *
+ * That tab is not one table — it is a goal row, then a block per class, then notes.
+ * Generic header formatting cannot express that, and banding actively fights it.
+ * These three colours were read back off the sheet after Vee styled it by hand, not
+ * guessed: #1A1A4C for the goal row, #454EBD for a class title, #E6E6FA for the
+ * column headers inside each class. Section headings are bold with no fill.
+ *
+ * All row indices are 0-based over the values written.
+ */
+export async function formatScorecard(title, { goalRow, classRows, headerRows, sectionRows, spreadsheetId = BUILD_SHEET_ID } = {}) {
+  const api = sheets();
+  const meta = await api.spreadsheets.get({ spreadsheetId });
+  const tab = meta.data.sheets.find((s) => s.properties.title === title);
+  if (!tab) return;
+  const sheetId = tab.properties.sheetId;
+
+  const paint = (i, bg, fg, bold) => ({
+    repeatCell: {
+      range: { sheetId, startRowIndex: i, endRowIndex: i + 1 },
+      cell: {
+        userEnteredFormat: {
+          textFormat: { bold, foregroundColor: fg },
+          ...(bg ? { backgroundColor: bg } : {}),
+          verticalAlignment: 'MIDDLE',
+          wrapStrategy: 'WRAP',
+        },
+      },
+      fields: `userEnteredFormat(textFormat,verticalAlignment,wrapStrategy${bg ? ',backgroundColor' : ''})`,
+    },
+  });
+
+  const requests = [];
+  if (typeof goalRow === 'number') requests.push(paint(goalRow, BRAND.indigo, BRAND.white, true));
+  for (const i of classRows ?? []) requests.push(paint(i, BRAND.cornflower, BRAND.white, true));
+  for (const i of headerRows ?? []) requests.push(paint(i, BRAND.lavender, BRAND.black, true));
+  for (const i of sectionRows ?? []) requests.push(paint(i, null, BRAND.black, true));
+  if (!requests.length) return;
+
+  await api.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
+}
+
+/** Put a tab at a given position. Vee wants the Scorecard first — it is the tab
+ *  anyone else opens the sheet to look at. */
+export async function moveTab(title, index, { spreadsheetId = BUILD_SHEET_ID } = {}) {
+  const api = sheets();
+  const meta = await api.spreadsheets.get({ spreadsheetId });
+  const tab = meta.data.sheets.find((s) => s.properties.title === title);
+  if (!tab || tab.properties.index === index) return;
+  await api.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [{
+        updateSheetProperties: {
+          properties: { sheetId: tab.properties.sheetId, index },
+          fields: 'index',
+        },
+      }],
     },
   });
 }
