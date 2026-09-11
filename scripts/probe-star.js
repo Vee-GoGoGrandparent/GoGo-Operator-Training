@@ -164,7 +164,27 @@ async function main() {
   await notify('Star model probe finished — see tab "09 Star Model" on the build sheet.');
 }
 
-main().catch((err) => {
+// A probe that writes nothing when it fails is indistinguishable from a probe that
+// never ran — which is exactly what happened the first time this was fired. Every
+// other probe in this repo writes a FAILED tab; this one now does too, so the sheet
+// says WHY instead of just staying empty.
+main().catch(async (err) => {
   console.error('[star] failed:', err);
+  try {
+    await writeTab('09 Star Model', [
+      ['Is the Ride Star Model in the database?'],
+      ['Status', '❌ FAILED — the probe started but could not finish'],
+      ['Error', err.message],
+      ['Run at', nowET()],
+      [''],
+      ['What this usually means'],
+      ['"connect ETIMEDOUT" or "ECONNREFUSED" — the outbound IP of this Railway container is not on the database allowlist. Send the DBA the IPs from Railway → Settings → Networking.'],
+      ['"Missing OPS_BUILD_SHEET_ID" — the build sheet variable is not set on Railway.'],
+      ['"Access denied" — the database user cannot read information_schema, which is what this probe searches.'],
+    ]);
+  } catch (e) {
+    console.error('[star] could not write the failure either:', e.message);
+  }
+  await notify(`❌ Star model probe failed: ${err.message}`);
   process.exit(1);
 });

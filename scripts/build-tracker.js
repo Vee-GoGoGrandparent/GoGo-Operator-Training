@@ -615,7 +615,18 @@ async function main() {
       if (todayISO < due) return longDate(due); // still running — their sheet shows the date
       if (!roster.length) return publishedChurn(months) || longDate(due);
 
+      // CUMULATIVE, and deliberately unlike the reg-call blocks beside it.
+      //
+      // Vee: "we have to count the thirty days, then the ENTIRE sixty days. It's not
+      // thirty by thirty on this particular tab." So 60 day counts everyone gone by
+      // the 60 day mark including the 30 day people, and 90 day includes both. The
+      // `<=` is what makes it cumulative — the number can only ever go up.
+      //
+      // The reg calls in the next columns ARE thirty-by-thirty. Two different rules
+      // sitting side by side, both correct, which is why this says so out loud.
       const gone = leaversOf(cls).filter((l) => l.left <= due);
+      // Denominator is who COMPLETED training. Confirmed against their own July
+      // figure: 3 of 46 completers is 6.52%, which is what they publish.
       const done = roster.filter((t) => t.status === 'active');
       const ours = `${gone.length} (${pctStr(done.length ? gone.length / done.length : null, 2)})`;
 
