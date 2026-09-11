@@ -43,7 +43,37 @@ const DEFAULT_SA = 'C:/Users/K_jah/Documents/AI/GoGo-Reviews/google-service-acco
  * be a deliberate choice, never something that happens because a default drifted.
  */
 export const BUILD_SHEET_ID = process.env.OPS_BUILD_SHEET_ID || process.env.OPS_SHEET_ID || '';
-export const TRACKER_SHEET_ID = process.env.OPS_TRACKER_SHEET_ID || '';
+
+/**
+ * ONE TRACKER SHEET PER YEAR — Vee, 2026-09-11.
+ *
+ *   OPS_TRACKER_SHEET_ID          the 2026 sheet, the original
+ *   OPS_TRACKER_SHEET_ID_<YYYY>   every later year — OPS_TRACKER_SHEET_ID_2027, and so on
+ *
+ * Which sheet a CLASS is written to is decided in data/trained-roster.js
+ * (yearsToWrite). TRACKER_SHEET_ID is the sheet for the year it is right now in Eastern
+ * time, which is where things that are not about a class go: the team Run Log.
+ */
+const FIRST_TRACKER_YEAR = 2026;
+export const TRACKER_SHEETS = Object.fromEntries([
+  ...(process.env.OPS_TRACKER_SHEET_ID ? [[FIRST_TRACKER_YEAR, process.env.OPS_TRACKER_SHEET_ID.trim()]] : []),
+  ...Object.entries(process.env)
+    .filter(([k, v]) => /^OPS_TRACKER_SHEET_ID_\d{4}$/.test(k) && String(v ?? '').trim())
+    .map(([k, v]) => [Number(k.slice(-4)), v.trim()]),
+]);
+
+/** The calendar year right now in Eastern time — the sheet switches at midnight Jan 1 ET. */
+export const easternYear = (d = new Date()) =>
+  Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric' }).format(d));
+
+/** The tracker sheet for a year, or a clear error saying which Railway variable is missing. */
+export function trackerSheetFor(year) {
+  const id = TRACKER_SHEETS[year];
+  if (!id) throw new Error(`No tracker sheet for ${year}. Create it and set OPS_TRACKER_SHEET_ID_${year} in Railway.`);
+  return id;
+}
+
+export const TRACKER_SHEET_ID = TRACKER_SHEETS[easternYear()] || '';
 
 /** Back-compat for code written before the split. Points at the build sheet. */
 export const OPS_SHEET_ID = BUILD_SHEET_ID;
@@ -64,13 +94,15 @@ function assertOurSheet(id) {
   if (!BUILD_SHEET_ID) {
     throw new Error('Missing OPS_BUILD_SHEET_ID. Set it in Railway before running anything.');
   }
-  const allowed = [BUILD_SHEET_ID, TRACKER_SHEET_ID].filter(Boolean);
+  // Build Notes plus every yearly tracker sheet — not just this year's, because a class
+  // that graduated late last year finishes on last year's sheet.
+  const allowed = [BUILD_SHEET_ID, ...Object.values(TRACKER_SHEETS)].filter(Boolean);
   if (!allowed.includes(id)) {
     throw new Error(
       `BLOCKED: refused to touch spreadsheet ${id}.\n` +
         `This project may only write to:\n` +
-        `  OPS_BUILD_SHEET_ID   = ${BUILD_SHEET_ID}\n` +
-        `  OPS_TRACKER_SHEET_ID = ${TRACKER_SHEET_ID || '(not set)'}\n` +
+        `  OPS_BUILD_SHEET_ID = ${BUILD_SHEET_ID}\n` +
+        Object.entries(TRACKER_SHEETS).map(([y, s]) => `  tracker ${y} = ${s}\n`).join('') +
         `If that id belongs to a marketing sheet, this guard just did its job.`,
     );
   }
@@ -555,6 +587,7 @@ const clone = (f) => (f ? JSON.parse(JSON.stringify(f)) : null);
 export async function restyleRows(title, {
   spreadsheetId = BUILD_SHEET_ID, oldKinds = [], newKinds, width, newColsFrom = null,
   defaults = {}, fallback = {}, mergesByKind = {}, adjust = {}, oldMerges = null,
+  templateFrom = null,
 } = {}) {
   const api = sheets();
   const head = await api.spreadsheets.get({
@@ -568,6 +601,7 @@ export async function restyleRows(title, {
   // to column X on Hard Regs, and a banner's colour left behind in Q:X would still sit
   // on a person's row after a re-sort.
   const cols = Math.max(width, tab.properties.gridProperties?.columnCount ?? 0);
+  const rowCount = tab.properties.gridProperties?.rowCount ?? 0;
   const inCols = (m) => (m.startColumnIndex ?? 0) < cols;
   // `merges` = what is merged right now, to take apart. `before` = what was merged when
   // the run started, to copy from. They differ when writeTab already unmerged
@@ -588,43 +622,80 @@ export async function restyleRows(title, {
   }
   const formatsOf = (i) => Array.from({ length: cols }, (_, c) => rowData[i]?.values?.[c]?.userEnteredFormat ?? null);
 
-  const templates = {};
-  const pick = (kind) => {
-    if (kind in templates) return templates[kind];
-    const tally = new Map();
-    oldKinds.forEach((k, i) => {
-      if (k !== kind) return;
-      const key = JSON.stringify(formatsOf(i));
-      if (!tally.has(key)) tally.set(key, { i, n: 0 });
-      tally.get(key).n += 1;
-    });
-    if (!tally.size) return (templates[kind] = null);
-    const row = [...tally.values()].sort((a, b) => b.n - a.n || a.i - b.i)[0].i;
-    return (templates[kind] = {
-      cells: formatsOf(row),
-      merges: before
-        .filter((m) => m.startRowIndex === row && m.endRowIndex === row + 1)
-        .map((m) => [m.startColumnIndex ?? 0, Math.min(m.endColumnIndex ?? cols, cols)]),
-    });
+  /** A picker: for a kind, the most common look among rows of that kind, and its merges. */
+  const makePicker = (kindsList, formatsAt, mergeList) => {
+    const cache = {};
+    return (kind) => {
+      if (kind in cache) return cache[kind];
+      const tally = new Map();
+      kindsList.forEach((k, i) => {
+        if (k !== kind) return;
+        const key = JSON.stringify(formatsAt(i));
+        if (!tally.has(key)) tally.set(key, { i, n: 0 });
+        tally.get(key).n += 1;
+      });
+      if (!tally.size) return (cache[kind] = null);
+      const row = [...tally.values()].sort((a, b) => b.n - a.n || a.i - b.i)[0].i;
+      return (cache[kind] = {
+        cells: formatsAt(row),
+        merges: mergeList
+          .filter((m) => m.startRowIndex === row && m.endRowIndex === row + 1)
+          .map((m) => [m.startColumnIndex ?? 0, Math.min(m.endColumnIndex ?? cols, cols)]),
+      });
+    };
   };
+  const pick = makePicker(oldKinds, formatsOf, before);
+
+  // LAST YEAR'S SHEET as a pattern book. A brand-new year's sheet is blank below its
+  // headers (Vee, 2026-09-11: "keep headers, clear the rest"), so it has no class banner
+  // or person row to copy a look from. Rather than fall back to built-in defaults — which
+  // would throw away how she styled every kind of row — the same tab on the previous
+  // year's sheet is read, and only for kinds this sheet does not have yet.
+  let pickTemplate = () => null;
+  const neededKinds = [...new Set(newKinds)];
+  const missing = neededKinds.filter((k) => !pick(k) && !(fallback[k] && pick(fallback[k])));
+  if (missing.length && templateFrom?.spreadsheetId && templateFrom.spreadsheetId !== spreadsheetId) {
+    const tValues = await readTab(title, { spreadsheetId: templateFrom.spreadsheetId });
+    if (tValues.length) {
+      const tKinds = templateFrom.classify(tValues);
+      const tg = await api.spreadsheets.get({
+        spreadsheetId: templateFrom.spreadsheetId,
+        ranges: [`'${title}'!A1:${colLetter(cols)}${tValues.length}`],
+        includeGridData: true,
+        fields: 'sheets(merges,data(rowData(values(userEnteredFormat))))',
+      });
+      const tRows = tg.data.sheets[0].data?.[0]?.rowData ?? [];
+      const tMerges = (tg.data.sheets[0].merges ?? []).filter(inCols);
+      pickTemplate = makePicker(
+        tKinds,
+        (i) => Array.from({ length: cols }, (_, c) => tRows[i]?.values?.[c]?.userEnteredFormat ?? null),
+        tMerges,
+      );
+    }
+  }
 
   const looks = {};
   const lookOf = (kind) => {
     if (looks[kind]) return looks[kind];
     const own = pick(kind);
     const borrowed = !own && fallback[kind] ? pick(fallback[kind]) : null;
+    const fromLastYear = !own && !borrowed
+      ? pickTemplate(kind) || (fallback[kind] ? pickTemplate(fallback[kind]) : null)
+      : null;
     let cells;
     if (own) cells = own.cells.map(clone);
     else if (borrowed) cells = borrowed.cells.map(clone);
+    else if (fromLastYear) cells = fromLastYear.cells.map(clone);
     else cells = Array.from({ length: cols }, () => clone(defaults[kind] ?? null));
     if (newColsFrom !== null && newColsFrom > 0) {
       for (let c = newColsFrom; c < width; c += 1) cells[c] = clone(cells[newColsFrom - 1]);
     }
     if (adjust[kind]) cells = cells.map((f) => adjust[kind](f ?? {}));
-    // A kind's merges come from Vee's rows of that kind when there are any. A kind
-    // this code introduced (the who-left list) uses its own.
+    // A kind's merges come from Vee's rows of that kind when there are any — on this
+    // sheet, or last year's. A kind this code introduced (the who-left list) uses its own.
     const ownMerges = own && own.merges.length ? own.merges : null;
-    return (looks[kind] = { cells, merges: ownMerges ?? mergesByKind[kind] ?? [] });
+    const lastYearMerges = fromLastYear && fromLastYear.merges.length ? fromLastYear.merges : null;
+    return (looks[kind] = { cells, merges: ownMerges ?? lastYearMerges ?? mergesByKind[kind] ?? [] });
   };
 
   const requests = [];
@@ -651,14 +722,16 @@ export async function restyleRows(title, {
     }
   });
 
-  // Rows the tab no longer uses lose their old look too, or a banner colour would sit
-  // on empty rows below the data.
-  const lastOld = Math.max(oldRows, ...merges.map((m) => m.endRowIndex ?? 0));
-  for (let i = newKinds.length; i < lastOld; i += 1) {
+  // Every row below the data loses its old look, in one step, down to the bottom of the
+  // tab. Nothing is written down there, so any look left there is a leftover: a banner
+  // colour from before a re-sort, or last year's row styles on a sheet that was blanked
+  // for the new year (the 2027 sheet kept 2026's formatting under its headers).
+  // Banding is not cell formatting and is not affected.
+  if (rowCount > newKinds.length) {
     requests.push({
-      updateCells: {
-        start: { sheetId, rowIndex: i, columnIndex: 0 },
-        rows: [{ values: Array.from({ length: cols }, () => ({ userEnteredFormat: {} })) }],
+      repeatCell: {
+        range: { sheetId, startRowIndex: newKinds.length, endRowIndex: rowCount, startColumnIndex: 0, endColumnIndex: cols },
+        cell: { userEnteredFormat: {} },
         fields: 'userEnteredFormat',
       },
     });

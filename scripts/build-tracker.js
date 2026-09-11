@@ -1,8 +1,9 @@
 // OPS_TASK=tracker
 //
 // Builds the team-facing tracker: who is registering, who is falling behind, who
-// needs a team lead to step in. Writes to OPS_TRACKER_SHEET_ID — the clean sheet —
-// and nowhere else.
+// needs a team lead to step in. Writes to the yearly tracker sheets — one per year,
+// each showing only its own year's classes (see yearsToWrite) — plus working detail
+// on Build Notes, and nowhere else.
 //
 // What the trainer asked for, in his words: "focus on the hard regs, and who's not
 // registering, who could be churn, who could get fired… we're gonna have access to
@@ -18,7 +19,7 @@ import { connect, q, tryQ } from '../src/db.js';
 import { logRun } from '../src/run-log.js';
 import {
   sheets, writeTab, formatHeader, restyleRows, ruleColors, extendBanding, widenColumns,
-  TRACKER_SHEET_ID, BUILD_SHEET_ID, BRAND,
+  TRACKER_SHEET_ID, TRACKER_SHEETS, trackerSheetFor, easternYear, BUILD_SHEET_ID, BRAND,
 } from '../src/sheets.js';
 import { notify } from '../src/slack.js';
 import { nowET, fmtDbDate } from '../src/time.js';
@@ -26,9 +27,10 @@ import { regCallsOf, ratio, pctStr, pct100, weekKey, priorityOf, TARGET_HR_RATIO
 import { loadArchive, isReportAbout } from '../src/op-reports.js';
 import {
   CLASSES, TRAINED_SLACK_IDS, TRAINED_WITHOUT_SLACK, TRAINEE_BY_SLACK, earliestGradDate, milestoneDate,
+  yearsToWrite,
 } from '../data/trained-roster.js';
 
-const RECENT_WEEKS = 4; // the "(4wk)" columns on Hard Regs
+const RECENT_WEEKS = 4; // the "(4wk)" columns on Team Leads
 
 // REGISTRATIONS COUNT IN CALENDAR MONTHS FROM GRADUATION — Vee, 2026-09-11.
 //
@@ -355,474 +357,513 @@ async function main() {
   const stamp = `Last updated ${asOf}${onASchedule ? ' · refreshes daily' : ''}`;
   const stampRow = (width) => [stamp, ...Array(Math.max(0, width - 1)).fill('')];
 
-  const classesNewestFirst = [...CLASSES].reverse().filter((c) => c.trainees.length);
-  const classBanner = (cls) => `${cls.meta.label || cls.meta.cohort} ${cls.meta.classEnd.slice(0, 4)} CLASS`.toUpperCase();
+  const trackedAll = tracked;
 
   /**
-   * A per-person tab split by class, newest class on top — the layout Vee built by
-   * hand on Hard Regs on 2026-09-11: header, "Last updated", then for each class still
-   * inside its 3 months a banner and that class's people, leavers at the bottom of
-   * their own class. No blank row between classes, no "NO LONGER AT GOGO" banner.
-   */
-  const splitByClass = (header, rowOf) => {
-    const values = [header, stampRow(header.length)];
-    const kinds = ['header', 'stamp'];
-    for (const cls of classesNewestFirst) {
-      if (classOver(cls.meta.classEnd)) continue;
-      const members = tracked.filter((r) => r.cohort === cls.meta.cohort);
-      if (!members.length) continue;
-      values.push([classBanner(cls), ...Array(header.length - 1).fill('')]);
-      kinds.push('classBanner');
-      for (const r of members) {
-        values.push(rowOf(r));
-        kinds.push(r.o.closedAt ? 'gone' : 'active');
-      }
-    }
-    return { values, kinds };
-  };
-
-  /** Everyone from one class who completed training and has since been closed, most recent first. */
-  const leaversOf = (cls) => cls.trainees
-    .filter((t) => t.status === 'active')
-    .map((t) => ({ t, o: t.slackId ? bySlack[t.slackId] : null }))
-    .filter(({ o }) => o && o.closedAt)
-    .map(({ t, o }) => ({ name: t.name, left: isoOf(o.closedAt), reason: (o.deactivationReason || '').trim() }))
-    .sort((a, b) => b.left.localeCompare(a.left));
-
-  /**
-   * The 30 / 60 / 90 day cells for one operator, the same numbers Training vs
-   * Performance shows: a month that has not started is blank, never 0.
-   */
-  const monthCells = (r, gradDate) => {
-    const cells = [];
-    let calls3 = 0;
-    let hard3 = 0;
-    for (const b of BLOCKS) {
-      const started = todayISO >= milestoneDate(gradDate, b.month - 1);
-      const w = started && r ? r.a.block[b.month] : null;
-      if (w) { calls3 += w.regCalls; hard3 += w.hardRegs; }
-      cells.push(w ? w.regCalls : '', w ? w.hardRegs : '', w ? pctStr(ratio(w.hardRegs, w.regCalls)) : '');
-    }
-    return { cells, all3: calls3 > 0 ? pctStr(ratio(hard3, calls3)) : '' };
-  };
-  const MONTH_HEADERS = BLOCKS.flatMap((b) => [`Reg calls ${b.label}`, `Hard regs ${b.label}`, `Reg ratio ${b.label}`]);
-
-  // --- Hard Regs: the plain numbers, one section per class ---
-  // 30 / 60 / 90 day columns replaced the 4-week ones (Vee, 2026-09-11), so the ratio
-  // Priority is judged on is actually on the row. Soft regs and Trials count since
-  // graduation, like the plan columns beside them.
-  const regs = splitByClass([
-    'Operator', 'Slack ID', 'Team lead', 'Class', 'Weeks active',
-    ...MONTH_HEADERS, 'Reg ratio all 3 months', 'Soft regs', 'Trials',
-    'Annual', 'Value', 'Basic', 'Fixed income', 'Priority', 'Status',
-  ], (r) => {
-    const m = monthCells(r, r.t.gradDate);
-    return [
-      name(r.o), r.o.slackId || '', teamLeadOf(r.o), r.cohort, r.weeksActive || '',
-      ...m.cells, m.all3,
-      r.a.sinceGrad.softRegs, r.a.sinceGrad.trialRegs,
-      r.a.plans.annual, r.a.plans.value, r.a.plans.basic, r.a.plans.fixedIncome,
-      r.level,
-      r.o.closedAt ? `Left ${isoOf(r.o.closedAt)}` : r.o.suspendedAt ? 'Suspended' : 'Active',
-    ];
-  });
-
-  // --- Weekly Trend: the shape of the ramp, week by week, one section per class ---
-  // Only weeks in which somebody from a still-tracked class took a real call.
-  const weeks = [...new Set(tracked.flatMap((r) => Object.keys(r.a.byWeek)))].sort();
-  const trend = splitByClass(['Operator', 'Slack ID', 'Team lead', ...weeks], (r) => [
-    name(r.o), r.o.slackId || '', teamLeadOf(r.o),
-    ...weeks.map((w) => {
-      const wk = r.a.byWeek[w];
-      if (!wk || wk.regCalls === 0) return '';
-      return pctStr(ratio(wk.hardRegs, wk.regCalls));
-    }),
-  ]);
-
-  // --- Team Leads: the accountability view ---
-  const byTl = {};
-  for (const r of tracked) {
-    const key = r.o.teamLeadId || '(none)';
-    const t = (byTl[key] ??= {
-      name: r.o.teamLeadId ? teamLeadOf(r.o) : '(no team lead assigned)',
-      ops: 0, escalate: 0, watch: 0, strong: 0, regCalls: 0, hardRegs: 0, names: [],
-    });
-    t.ops += 1;
-    t.regCalls += r.a.recent.regCalls;
-    t.hardRegs += r.a.recent.hardRegs;
-    if (r.level === 'Escalate') { t.escalate += 1; t.names.push(name(r.o)); }
-    if (r.level === 'Watch') t.watch += 1;
-    if (r.level === 'Strong') t.strong += 1;
-  }
-  const leadsHeader = ['Team lead', 'Operators', 'Escalate', 'Watch', 'Strong', 'Reg calls (4wk)', 'Hard regs (4wk)', 'Team reg ratio', 'vs target', 'Who to talk to first'];
-  const leads = { values: [leadsHeader, stampRow(leadsHeader.length)], kinds: ['header', 'stamp'] };
-  for (const t of Object.values(byTl).sort((a, b) => b.escalate - a.escalate || b.ops - a.ops)) {
-    const rr = ratio(t.hardRegs, t.regCalls);
-    leads.values.push([
-      t.name, t.ops, t.escalate, t.watch, t.strong, t.regCalls, t.hardRegs, pctStr(rr),
-      rr === null ? '' : rr >= TARGET_HR_RATIO ? '✅ at or above' : `⚠️ ${pctStr(TARGET_HR_RATIO - rr)} under`,
-      t.names.slice(0, 6).join(', '),
-    ]);
-    leads.kinds.push('active');
-  }
-
-  // --- Training vs Performance: the two halves side by side ---
-  // The database knows what an operator DID. Only the class workbook knows what they
-  // looked like beforehand. Forecasting needs both, so here they are joined.
-  // Call handling, System nav and Training total are all scored out of 100, so they
-  // are shown as percentages like Quiz % beside them. SLI is out of 300 and stays a
-  // raw number — a percentage there would be inventing a scale the team does not use.
-
-  // OP REPORTS per person (Vee, 2026-09-11): reports AND observations together — "notify
-  // if any op reports have been filed on a particular op". Counted from graduation. The
-  // archive only holds what has been pulled from #op_report, so the header carries its
-  // dates; the part in brackets is ignored when matching her column order, so the
-  // column stays where she puts it as the dates move.
-  const reports = loadArchive();
-  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const shortDate = (iso) => `${MON[Number(iso.slice(5, 7)) - 1]} ${Number(iso.slice(8, 10))}`;
-  const opReportsHeader = reports.length
-    ? `Op reports (${shortDate(reports[0].date)} to ${shortDate(reports[reports.length - 1].date)})`
-    : 'Op reports';
-  const opReportsFor = (t) => reports.filter((r) => r.date >= t.gradDate && isReportAbout(t.name, r.contractor));
-
-  const tvpHeader = [
-    'Operator', 'Slack ID', 'Group', 'Lates', 'Absences',
-    'Quiz %', 'SLI /300', 'Call handling', 'System nav', 'Training total',
-    'Started calls', 'Days on phones',
-    ...BLOCKS.flatMap((b) => [`Reg calls ${b.label}`, `Hard regs ${b.label}`, `Reg ratio ${b.label}`]),
-    'Priority', 'Status',
-    // Vee: "a reg ratio for all the three months, not just the thirty days on that
-    // third month". New columns land on the right; she can move them and they stay.
-    'Reg ratio all 3 months', opReportsHeader,
-  ];
-  const WIDTH = tvpHeader.length;
-  const banner = (text) => [text, ...Array(WIDTH - 1).fill('')];
-  const tvp = { values: [tvpHeader, banner(stamp)], kinds: ['header', 'stamp'] };
-
-  const perfBySlack = Object.fromEntries(rows.filter((r) => r.o.slackId).map((r) => [r.o.slackId, r]));
-
-  /** The date someone left, or null if they are still here. */
-  const leftOn = (t) => {
-    const o = t.slackId ? bySlack[t.slackId] : null;
-    if (o && o.closedAt) return isoOf(o.closedAt);
-    return t.status !== 'active' ? 'during training' : null;
-  };
-
-  const rowFor = (t) => {
-    const r = t.slackId ? perfBySlack[t.slackId] : null;
-    // The same month cells as Hard Regs, from the same function, so the two tabs can
-    // never show different numbers for one person.
-    const { cells, all3 } = monthCells(r, t.gradDate);
-    const o = t.slackId ? bySlack[t.slackId] : null;
-    const left = leftOn(t);
-    return [
-      t.name, t.slackId || '(no slack id)', t.group,
-      t.lates, t.absences,
-      pct100(t.knowledge),
-      t.sli || '',
-      pct100(t.callHandling),
-      pct100(t.sysNav),
-      pct100(t.total),
-      r && r.a.first ? r.a.first : (t.status === 'active' ? '(not started)' : ''),
-      r && r.daysWorked != null ? r.daysWorked : '',
-      ...cells,
-      // Priority is about people we are still coaching. Once someone is gone it is
-      // noise, and "OK" next to a departure reads badly.
-      left ? '' : (r ? r.level : ''),
-      t.status !== 'active'
-        ? `${t.status}${t.reason ? ` — ${t.reason}` : ''}`
-        : o && o.closedAt
-          ? `Left ${isoOf(o.closedAt)}${(o.deactivationReason || '').trim() ? ` — ${(o.deactivationReason || '').trim()}` : ''}`
-          : classOver(t.gradDate)
-            ? 'Past 90 days — no longer tracked'
-            : 'Active',
-      all3,
-      t.status === 'active' ? opReportsFor(t).length : '',
-    ];
-  };
-
-  // One section per class, newest class on top, each with its OWN leavers list —
-  // September's departures must never sit under August's heading.
-  // A class workbook row does not carry its graduation date — the class does.
-  const withClass = (cls) => cls.trainees.map((t) => ({ ...t, cohort: cls.meta.cohort, gradDate: cls.meta.classEnd }));
-
-  for (const cls of classesNewestFirst) {
-    tvp.values.push(banner(classBanner(cls)));
-    tvp.kinds.push('classBanner');
-
-    const members = withClass(cls).map((t) => ({ t, left: leftOn(t) }));
-    // Still here: LOWEST ratio first (Vee, 2026-09-11) — "that way we know who are the
-    // people we need to talk to" at the start of the month. Same ratio as Priority and
-    // the same order as Hard Regs. Anyone with no ratio yet goes after them. This
-    // replaces "best training total first".
-    const ratioOf = (t) => (t.slackId ? perfBySlack[t.slackId]?.priorityRatio ?? null : null);
-    members
-      .filter((m) => !m.left)
-      .sort((a, b) => {
-        const x = ratioOf(a.t);
-        const y = ratioOf(b.t);
-        if ((x === null) !== (y === null)) return x === null ? 1 : -1;
-        return (x ?? 0) - (y ?? 0);
-      })
-      .forEach((m) => { tvp.values.push(rowFor(m.t)); tvp.kinds.push('active'); });
-
-    // Gone: most recent departure first, then the people who never finished the class.
-    const gone = members.filter((m) => m.left);
-    if (gone.length) {
-      tvp.values.push(banner('NO LONGER AT GOGO'));
-      tvp.kinds.push('goneBanner');
-      gone
-        .sort((a, b) => {
-          const ad = a.left === 'during training';
-          const bd = b.left === 'during training';
-          if (ad !== bd) return ad ? 1 : -1;
-          if (ad && bd) return b.t.total - a.t.total;
-          return b.left.localeCompare(a.left);
-        })
-        .forEach((m) => { tvp.values.push(rowFor(m.t)); tvp.kinds.push('gone'); });
-    }
-
-    tvp.values.push(banner(''));
-    tvp.kinds.push('blank');
-  }
-  if (tvp.kinds[tvp.kinds.length - 1] === 'blank') { tvp.values.pop(); tvp.kinds.pop(); }
-
-  // --- Scorecard: management's own sheet, in management's own shape ------------
-  //
-  // Their sheet, column for column: one goal row across the top, then per class a
-  // title, a header row and a single row of figures. Newest class first — the one
-  // deliberate difference from theirs. Under each class, WHO left and WHEN (Vee,
-  // 2026-09-11), so the churn number can be checked against real people.
-  //
-  // Their date format is kept too ("September 21st", not 2026-09-21). A window that
-  // has closed shows the figure; one still running shows the date it closes.
-  const CHURN_MONTHS = [1, 2, 3];
-  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
-                  'July', 'August', 'September', 'October', 'November', 'December'];
-  const ordinal = (d) => {
-    if (d > 3 && d < 21) return `${d}th`;
-    return `${d}${{ 1: 'st', 2: 'nd', 3: 'rd' }[d % 10] || 'th'}`;
-  };
-  /** "2026-09-21" -> "September 21st", matching how their sheet writes dates. */
-  const longDate = (iso) => {
-    const [, m, d] = iso.split('-').map(Number);
-    return `${MONTHS[m - 1]} ${ordinal(d)}`;
-  };
-
-  const SCORECARD_HEADERS = [
-    'New hires', 'Completed Training', '% Completed Training',
-    'Trainee Satisfaction Scores', 'Quizzes Sucess Rate',
-    '30 day Churn Rate', '60 day Chun Rate', '90 day Churn Rate',
-    '90 day reg rate', '90 day star model',
-  ];
-  const SW = SCORECARD_HEADERS.length;
-  const sc = { values: [], kinds: [] };
-  const addSc = (kind, cells) => { sc.values.push([...cells, ...Array(Math.max(0, SW - cells.length)).fill('')]); sc.kinds.push(kind); };
-
-  addSc('goal', ['', '', 'Goal: 90%', 'Goal: 97%', 'Goal: 85%',
-    'Goal: Less than 5%', 'Goal: Less than 10%', 'Goal: Less than 15%',
-    'Goal: +15%', 'Goal: 3.70+']);
-  const checks = []; // where our figure disagrees with theirs — shown below, not inline
-
-  // CHURN COUNTS FROM THE FIRST DAY OF TRAINING — Vee, 2026-09-11, and it reproduces
-  // management's June figure exactly. Someone who STARTED training and then left
-  // counts: "Jessa Mae Odac, training total 26.07%, and Jovin Laud, 10%… so that's how
-  // you determine." A 0% training total means they never started, so they do not
-  // count (Fernando Pazzetti, Daniel Mendoza; and in August, by her ruling, Ezra Pagtan
-  // and Laurence Sindol). June: Jessa + Jovin + Oliver Castaneda (closed Jul 22) = 3.
-  //
-  // The windows still CLOSE at graduation + 1, 2 and 3 calendar months, because those
-  // are the due dates their sheet prints (July class: Sep 10, Oct 10).
-  //
-  // CUMULATIVE, unlike the registration months: the 60 day figure includes the 30 day
-  // people. Denominator is who COMPLETED training — 3 of their 46 is 6.52%, exactly
-  // what they publish.
-  const startedTraining = (t) => Number(t.total) > 0;
-
-  for (const cls of [...CLASSES].reverse()) {
-    const meta = cls.meta;
-    const pub = cls.published;
-    const roster = cls.trainees;
-    const label = `${meta.label} ${meta.classEnd.slice(0, 4)}`;
-    const span = `${longDate(meta.classStart)} - ${longDate(meta.classEnd)}`;
-    // If management labels the same class differently, say so on the row itself
-    // rather than letting two sheets quietly disagree about which class this is.
-    const alias = meta.managementLabel && meta.managementLabel !== meta.label
-      ? `   (their sheet calls this row "${meta.managementLabel}")`
-      : '';
-
-    addSc('classTitle', [`${label} (${span})${alias}`]);
-    addSc('colHeader', SCORECARD_HEADERS);
-
-    const publishedChurn = (months) => [null, pub && pub.churn30, pub && pub.churn60, pub && pub.churn90][months];
-    const done = roster.filter((t) => t.status === 'active');
-    const countedInTraining = roster.filter((t) => t.status !== 'active' && startedTraining(t));
-    const gone = leaversOf(cls);
-
-    const churnCell = (months) => {
-      const due = milestoneDate(meta.classEnd, months);
-      if (todayISO < due) return longDate(due); // still running — their sheet shows the date
-      if (!roster.length) return publishedChurn(months) || longDate(due);
-      const n = countedInTraining.length + gone.filter((l) => l.left <= due).length;
-      const ours = `${n} (${pctStr(done.length ? n / done.length : null, 2)})`;
-      const theirs = publishedChurn(months);
-      if (theirs && theirs !== ours) {
-        checks.push(parseInt(theirs, 10) === n
-          ? `${label} ${months * 30} day churn: the same ${n} people as their sheet. Theirs reads ${theirs} and ours ${ours} only because the class workbook has ${done.length} people who completed training and their sheet has ${pub.completedTraining}.`
-          : `${label} ${months * 30} day churn: we count ${ours}, their sheet published ${theirs}. Who we counted, and when they left, is listed under the class above.`);
-      }
-      return ours;
-    };
-
-    if (!roster.length) {
-      // Published figures only. Nothing here is ours, and the checks section says so.
-      addSc('figures', [
-        (pub && pub.newHires) || '', (pub && pub.completedTraining) || '',
-        (pub && pub.pctCompletedTraining) || '', (pub && pub.traineeSatisfaction) || '',
-        (pub && pub.quizSuccessRate) || '',
-        churnCell(1), churnCell(2), churnCell(3),
-        longDate(milestoneDate(meta.classEnd, 3)), longDate(milestoneDate(meta.classEnd, 3)),
-      ]);
-      checks.push(`${label}: published figures only. No roster for this class, so nothing in that row is ours or checked. Ask Oscar for the class workbook.`);
-      addSc('blank', []);
-      continue;
-    }
-
-    const quizAll = roster.reduce((a, t) => a + t.knowledge, 0) / roster.length;
-
-    // 90 DAY REG RATE — "the whole 90 days" (Vee, 2026-09-10): the class's registration
-    // ratio across its three months, goal 15%. Months that have not started add
-    // nothing, so before the window closes this is a real running figure.
-    let regCalls90 = 0;
-    let hardRegs90 = 0;
-    for (const t of roster) {
-      const r = t.slackId ? perfBySlack[t.slackId] : null;
-      if (!r) continue;
-      for (const b of BLOCKS) {
-        regCalls90 += r.a.block[b.month].regCalls;
-        hardRegs90 += r.a.block[b.month].hardRegs;
-      }
-    }
-    const regRate90 = regCalls90 > 0 ? hardRegs90 / regCalls90 : null;
-    const regDue = milestoneDate(meta.classEnd, 3);
-    const regCell = regRate90 === null
-      ? longDate(regDue)
-      : todayISO >= regDue
-        ? pctStr(regRate90)
-        : `${pctStr(regRate90)} so far, closes ${longDate(regDue)}`;
-    const sat = roster.filter((t) => t.knowledge > 0);
-    const quizSat = sat.length ? sat.reduce((a, t) => a + t.knowledge, 0) / sat.length : null;
-
-    addSc('figures', [
-      roster.length,
-      done.length,
-      pctStr(done.length / roster.length, 2),
-      (pub && pub.traineeSatisfaction) || 'not in the database',
-      pct100(quizAll),
-      churnCell(1), churnCell(2), churnCell(3),
-      regCell,
-      longDate(milestoneDate(meta.classEnd, 3)),
-    ]);
-
-    // WHO LEFT, AND WHICH CHURN WINDOW THEY LAND IN.
-    const windowOf = (day) => {
-      const m = CHURN_MONTHS.find((k) => day <= milestoneDate(meta.classEnd, k));
-      return m ? `${m * 30} day churn` : 'After 90 days, not counted';
-    };
-    const whoLeft = [
-      ...roster.filter((t) => t.status !== 'active').map((t) => ({
-        name: t.name,
-        when: 'During training',
-        counts: startedTraining(t) ? '30 day churn' : 'Not counted, never started training',
-        sort: startedTraining(t) ? '0' : '3',
-      })),
-      ...gone.map((l) => ({ name: l.name, when: longDate(l.left), counts: windowOf(l.left), sort: `1${l.left}` })),
-    ].sort((a, b) => a.sort.localeCompare(b.sort));
-    if (whoLeft.length) {
-      addSc('whoLeftHeader', ['Who left', '', '', 'Left', '', 'Counts toward']);
-      for (const w of whoLeft) addSc('whoLeftRow', [w.name, '', '', w.when, '', w.counts]);
-    }
-    addSc('blank', []);
-
-    // --- the checks, kept out of the table so the table stays their shape ---
-    const differs = (ours, theirs) => theirs != null && String(ours) !== String(theirs);
-    if (differs(roster.length, pub && pub.newHires)) {
-      checks.push(`${label} head count: the class workbook lists ${roster.length} people (no duplicate names, no duplicate Slack IDs); their scorecard says ${pub.newHires}. Their % Completed is exactly ${pub.completedTraining}/${pub.newHires}, so ${pub.newHires} really is their denominator. One person is on the workbook and not on their sheet.`);
-    }
-    if (differs(pct100(quizAll), pub && pub.quizSuccessRate)) {
-      checks.push(`${label} quiz rate: they publish ${pub.quizSuccessRate}. Averaged across ALL ${roster.length} hires, zeros included, we get ${pct100(quizAll)}. Averaged across only the ${sat.length} who actually sat the quiz we get ${pct100(quizSat)}, which is what theirs matches. August was published the FIRST way. The two classes look to have been graded differently, and it moves the number by about five points.`);
-    }
-    if (!(pub && pub.traineeSatisfaction)) {
-      checks.push(`${label} trainee satisfaction: comes from a survey of the trainees and lives outside the database. It measures the TRAINER, not the operators. Has to be typed in.`);
-    }
-  }
-  if (sc.kinds[sc.kinds.length - 1] === 'blank') { sc.values.pop(); sc.kinds.pop(); }
-
-  addSc('blank', []);
-  addSc('section', ['Where our figures and theirs disagree']);
-  if (!checks.length) checks.push('Everything reconciles.');
-  for (const c of checks) addSc('note', [c]);
-
-  addSc('blank', []);
-  addSc('section', ['Still open']);
-  addSc('note', ['90 day star model: Ops gave the weighting on 2026-09-11 (9 parts, 5 points a week, each part all or nothing that week; the 90 day figure is the average week, goal 3.70). Not calculated yet. HR ratio and op reports are already tracked; where the other 7 parts live in the database still has to be found.']);
-
-  // ------------------------------------------------------------------ write
-  /**
-   * Write one tab, then give every row its kind's look, stretch the banding over any
-   * new rows or columns, and put the colour rules on.
+   * Build and write ONE year's tracker sheet, with only that year's classes on it.
+   * Vee, 2026-09-11: one tracker sheet per year, and a class finishes on its own year's
+   * sheet. Which years a run writes is decided by yearsToWrite (data/trained-roster.js).
    *
-   * keepColumnOrderFromRow: these tabs get rearranged by hand, so the rebuild writes
-   * columns in whatever order the tab already has rather than forcing its own.
+   * CLASSES, TRACKER_SHEET_ID and tracked deliberately shadow the file-wide names here,
+   * so every tab below is built from this year's classes and written to this year's
+   * sheet without each line having to know about years.
    */
-  const publish = async (title, { values, kinds }, {
-    classify = flatKinds, defaults = FLAT_DEFAULTS, fallback = FLAT_FALLBACK, merges = {},
-    writeOpts = { keepColumnOrderFromRow: 0 }, banding = true, colours = false,
-  } = {}) => {
-    // unmergeFirst: merges come apart BEFORE the values go in — Google throws away
-    // anything written into the hidden part of a merged cell. restyleRows puts the
-    // right merges back on the right rows, copying from the merges seen before the run.
-    const info = await writeTab(title, values, TRACKER_SHEET_ID, { readOld: true, unmergeFirst: true, ...writeOpts });
-    if (info.created && banding) await formatHeader(title, { spreadsheetId: TRACKER_SHEET_ID, bandRows: true });
-    await restyleRows(title, {
-      spreadsheetId: TRACKER_SHEET_ID,
-      oldKinds: info.created ? [] : classify(info.oldValues),
-      oldMerges: info.merges,
-      newKinds: kinds,
-      width: info.width,
-      newColsFrom: !info.created && info.prevWidth > 0 && info.width > info.prevWidth ? info.prevWidth : null,
-      defaults, fallback, mergesByKind: merges,
-      adjust: { stamp: italicStamp },
+  const buildYear = async (year, yearClasses, yearSheetId) => {
+    const CLASSES = yearClasses;
+    const TRACKER_SHEET_ID = yearSheetId;
+    const yearCohorts = new Set(CLASSES.map((c) => c.meta.cohort));
+    const tracked = trackedAll.filter((r) => yearCohorts.has(r.cohort));
+
+    const classesNewestFirst = [...CLASSES].reverse().filter((c) => c.trainees.length);
+    const classBanner = (cls) => `${cls.meta.label || cls.meta.cohort} ${cls.meta.classEnd.slice(0, 4)} CLASS`.toUpperCase();
+
+    /**
+     * A per-person tab split by class, newest class on top — the layout Vee built by
+     * hand on Hard Regs on 2026-09-11: header, "Last updated", then for each class still
+     * inside its 3 months a banner and that class's people, leavers at the bottom of
+     * their own class. No blank row between classes, no "NO LONGER AT GOGO" banner.
+     */
+    const splitByClass = (header, rowOf) => {
+      const values = [header, stampRow(header.length)];
+      const kinds = ['header', 'stamp'];
+      for (const cls of classesNewestFirst) {
+        if (classOver(cls.meta.classEnd)) continue;
+        const members = tracked.filter((r) => r.cohort === cls.meta.cohort);
+        if (!members.length) continue;
+        values.push([classBanner(cls), ...Array(header.length - 1).fill('')]);
+        kinds.push('classBanner');
+        for (const r of members) {
+          values.push(rowOf(r));
+          kinds.push(r.o.closedAt ? 'gone' : 'active');
+        }
+      }
+      return { values, kinds };
+    };
+
+    /** Everyone from one class who completed training and has since been closed, most recent first. */
+    const leaversOf = (cls) => cls.trainees
+      .filter((t) => t.status === 'active')
+      .map((t) => ({ t, o: t.slackId ? bySlack[t.slackId] : null }))
+      .filter(({ o }) => o && o.closedAt)
+      .map(({ t, o }) => ({ name: t.name, left: isoOf(o.closedAt), reason: (o.deactivationReason || '').trim() }))
+      .sort((a, b) => b.left.localeCompare(a.left));
+
+    /**
+     * The 30 / 60 / 90 day cells for one operator, the same numbers Training vs
+     * Performance shows: a month that has not started is blank, never 0.
+     */
+    const monthCells = (r, gradDate) => {
+      const cells = [];
+      let calls3 = 0;
+      let hard3 = 0;
+      for (const b of BLOCKS) {
+        const started = todayISO >= milestoneDate(gradDate, b.month - 1);
+        const w = started && r ? r.a.block[b.month] : null;
+        if (w) { calls3 += w.regCalls; hard3 += w.hardRegs; }
+        cells.push(w ? w.regCalls : '', w ? w.hardRegs : '', w ? pctStr(ratio(w.hardRegs, w.regCalls)) : '');
+      }
+      return { cells, all3: calls3 > 0 ? pctStr(ratio(hard3, calls3)) : '' };
+    };
+    const MONTH_HEADERS = BLOCKS.flatMap((b) => [`Reg calls ${b.label}`, `Hard regs ${b.label}`, `Reg ratio ${b.label}`]);
+
+    // --- Hard Regs: the plain numbers, one section per class ---
+    // 30 / 60 / 90 day columns replaced the 4-week ones (Vee, 2026-09-11), so the ratio
+    // Priority is judged on is actually on the row. Soft regs and Trials count since
+    // graduation, like the plan columns beside them.
+    const regs = splitByClass([
+      'Operator', 'Slack ID', 'Team lead', 'Class', 'Weeks active',
+      ...MONTH_HEADERS, 'Reg ratio all 3 months', 'Soft regs', 'Trials',
+      'Annual', 'Value', 'Basic', 'Fixed income', 'Priority', 'Status',
+    ], (r) => {
+      const m = monthCells(r, r.t.gradDate);
+      return [
+        name(r.o), r.o.slackId || '', teamLeadOf(r.o), r.cohort, r.weeksActive || '',
+        ...m.cells, m.all3,
+        r.a.sinceGrad.softRegs, r.a.sinceGrad.trialRegs,
+        r.a.plans.annual, r.a.plans.value, r.a.plans.basic, r.a.plans.fixedIncome,
+        r.level,
+        r.o.closedAt ? `Left ${isoOf(r.o.closedAt)}` : r.o.suspendedAt ? 'Suspended' : 'Active',
+      ];
     });
-    if (banding) await extendBanding(title, { spreadsheetId: TRACKER_SHEET_ID, rows: values.length, cols: info.width });
-    if (colours) await ruleColors(title, { spreadsheetId: TRACKER_SHEET_ID, ratioHeader: /^reg ratio/i, header: info.header });
+
+    // --- Weekly Trend: the shape of the ramp, week by week, one section per class ---
+    // Only weeks in which somebody from a still-tracked class took a real call.
+    const weeks = [...new Set(tracked.flatMap((r) => Object.keys(r.a.byWeek)))].sort();
+    const trend = splitByClass(['Operator', 'Slack ID', 'Team lead', ...weeks], (r) => [
+      name(r.o), r.o.slackId || '', teamLeadOf(r.o),
+      ...weeks.map((w) => {
+        const wk = r.a.byWeek[w];
+        if (!wk || wk.regCalls === 0) return '';
+        return pctStr(ratio(wk.hardRegs, wk.regCalls));
+      }),
+    ]);
+
+    // --- Team Leads: the accountability view ---
+    const byTl = {};
+    for (const r of tracked) {
+      const key = r.o.teamLeadId || '(none)';
+      const t = (byTl[key] ??= {
+        name: r.o.teamLeadId ? teamLeadOf(r.o) : '(no team lead assigned)',
+        ops: 0, escalate: 0, watch: 0, strong: 0, regCalls: 0, hardRegs: 0, names: [],
+      });
+      t.ops += 1;
+      t.regCalls += r.a.recent.regCalls;
+      t.hardRegs += r.a.recent.hardRegs;
+      if (r.level === 'Escalate') { t.escalate += 1; t.names.push(name(r.o)); }
+      if (r.level === 'Watch') t.watch += 1;
+      if (r.level === 'Strong') t.strong += 1;
+    }
+    const leadsHeader = ['Team lead', 'Operators', 'Escalate', 'Watch', 'Strong', 'Reg calls (4wk)', 'Hard regs (4wk)', 'Team reg ratio', 'vs target', 'Who to talk to first'];
+    const leads = { values: [leadsHeader, stampRow(leadsHeader.length)], kinds: ['header', 'stamp'] };
+    for (const t of Object.values(byTl).sort((a, b) => b.escalate - a.escalate || b.ops - a.ops)) {
+      const rr = ratio(t.hardRegs, t.regCalls);
+      leads.values.push([
+        t.name, t.ops, t.escalate, t.watch, t.strong, t.regCalls, t.hardRegs, pctStr(rr),
+        rr === null ? '' : rr >= TARGET_HR_RATIO ? '✅ at or above' : `⚠️ ${pctStr(TARGET_HR_RATIO - rr)} under`,
+        t.names.slice(0, 6).join(', '),
+      ]);
+      leads.kinds.push('active');
+    }
+
+    // --- Training vs Performance: the two halves side by side ---
+    // The database knows what an operator DID. Only the class workbook knows what they
+    // looked like beforehand. Forecasting needs both, so here they are joined.
+    // Call handling, System nav and Training total are all scored out of 100, so they
+    // are shown as percentages like Quiz % beside them. SLI is out of 300 and stays a
+    // raw number — a percentage there would be inventing a scale the team does not use.
+
+    // OP REPORTS per person (Vee, 2026-09-11): reports AND observations together — "notify
+    // if any op reports have been filed on a particular op". Counted from graduation. The
+    // archive only holds what has been pulled from #op_report, so the header carries its
+    // dates; the part in brackets is ignored when matching her column order, so the
+    // column stays where she puts it as the dates move.
+    const reports = loadArchive();
+    const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const shortDate = (iso) => `${MON[Number(iso.slice(5, 7)) - 1]} ${Number(iso.slice(8, 10))}`;
+    const opReportsHeader = reports.length
+      ? `Op reports (${shortDate(reports[0].date)} to ${shortDate(reports[reports.length - 1].date)})`
+      : 'Op reports';
+    const opReportsFor = (t) => reports.filter((r) => r.date >= t.gradDate && isReportAbout(t.name, r.contractor));
+
+    const tvpHeader = [
+      'Operator', 'Slack ID', 'Group', 'Lates', 'Absences',
+      'Quiz %', 'SLI /300', 'Call handling', 'System nav', 'Training total',
+      'Started calls', 'Days on phones',
+      ...BLOCKS.flatMap((b) => [`Reg calls ${b.label}`, `Hard regs ${b.label}`, `Reg ratio ${b.label}`]),
+      'Priority', 'Status',
+      // Vee: "a reg ratio for all the three months, not just the thirty days on that
+      // third month". New columns land on the right; she can move them and they stay.
+      'Reg ratio all 3 months', opReportsHeader,
+    ];
+    const WIDTH = tvpHeader.length;
+    const banner = (text) => [text, ...Array(WIDTH - 1).fill('')];
+    const tvp = { values: [tvpHeader, banner(stamp)], kinds: ['header', 'stamp'] };
+
+    const perfBySlack = Object.fromEntries(rows.filter((r) => r.o.slackId).map((r) => [r.o.slackId, r]));
+
+    /** The date someone left, or null if they are still here. */
+    const leftOn = (t) => {
+      const o = t.slackId ? bySlack[t.slackId] : null;
+      if (o && o.closedAt) return isoOf(o.closedAt);
+      return t.status !== 'active' ? 'during training' : null;
+    };
+
+    const rowFor = (t) => {
+      const r = t.slackId ? perfBySlack[t.slackId] : null;
+      // The same month cells as Hard Regs, from the same function, so the two tabs can
+      // never show different numbers for one person.
+      const { cells, all3 } = monthCells(r, t.gradDate);
+      const o = t.slackId ? bySlack[t.slackId] : null;
+      const left = leftOn(t);
+      return [
+        t.name, t.slackId || '(no slack id)', t.group,
+        t.lates, t.absences,
+        pct100(t.knowledge),
+        t.sli || '',
+        pct100(t.callHandling),
+        pct100(t.sysNav),
+        pct100(t.total),
+        r && r.a.first ? r.a.first : (t.status === 'active' ? '(not started)' : ''),
+        r && r.daysWorked != null ? r.daysWorked : '',
+        ...cells,
+        // Priority is about people we are still coaching. Once someone is gone it is
+        // noise, and "OK" next to a departure reads badly.
+        left ? '' : (r ? r.level : ''),
+        t.status !== 'active'
+          ? `${t.status}${t.reason ? ` — ${t.reason}` : ''}`
+          : o && o.closedAt
+            ? `Left ${isoOf(o.closedAt)}${(o.deactivationReason || '').trim() ? ` — ${(o.deactivationReason || '').trim()}` : ''}`
+            : classOver(t.gradDate)
+              ? 'Past 90 days — no longer tracked'
+              : 'Active',
+        all3,
+        t.status === 'active' ? opReportsFor(t).length : '',
+      ];
+    };
+
+    // One section per class, newest class on top, each with its OWN leavers list —
+    // September's departures must never sit under August's heading.
+    // A class workbook row does not carry its graduation date — the class does.
+    const withClass = (cls) => cls.trainees.map((t) => ({ ...t, cohort: cls.meta.cohort, gradDate: cls.meta.classEnd }));
+
+    for (const cls of classesNewestFirst) {
+      tvp.values.push(banner(classBanner(cls)));
+      tvp.kinds.push('classBanner');
+
+      const members = withClass(cls).map((t) => ({ t, left: leftOn(t) }));
+      // Still here: LOWEST ratio first (Vee, 2026-09-11) — "that way we know who are the
+      // people we need to talk to" at the start of the month. Same ratio as Priority and
+      // the same order as Hard Regs. Anyone with no ratio yet goes after them. This
+      // replaces "best training total first".
+      const ratioOf = (t) => (t.slackId ? perfBySlack[t.slackId]?.priorityRatio ?? null : null);
+      members
+        .filter((m) => !m.left)
+        .sort((a, b) => {
+          const x = ratioOf(a.t);
+          const y = ratioOf(b.t);
+          if ((x === null) !== (y === null)) return x === null ? 1 : -1;
+          return (x ?? 0) - (y ?? 0);
+        })
+        .forEach((m) => { tvp.values.push(rowFor(m.t)); tvp.kinds.push('active'); });
+
+      // Gone: most recent departure first, then the people who never finished the class.
+      const gone = members.filter((m) => m.left);
+      if (gone.length) {
+        tvp.values.push(banner('NO LONGER AT GOGO'));
+        tvp.kinds.push('goneBanner');
+        gone
+          .sort((a, b) => {
+            const ad = a.left === 'during training';
+            const bd = b.left === 'during training';
+            if (ad !== bd) return ad ? 1 : -1;
+            if (ad && bd) return b.t.total - a.t.total;
+            return b.left.localeCompare(a.left);
+          })
+          .forEach((m) => { tvp.values.push(rowFor(m.t)); tvp.kinds.push('gone'); });
+      }
+
+      tvp.values.push(banner(''));
+      tvp.kinds.push('blank');
+    }
+    if (tvp.kinds[tvp.kinds.length - 1] === 'blank') { tvp.values.pop(); tvp.kinds.pop(); }
+
+    // --- Scorecard: management's own sheet, in management's own shape ------------
+    //
+    // Their sheet, column for column: one goal row across the top, then per class a
+    // title, a header row and a single row of figures. Newest class first — the one
+    // deliberate difference from theirs. Under each class, WHO left and WHEN (Vee,
+    // 2026-09-11), so the churn number can be checked against real people.
+    //
+    // Their date format is kept too ("September 21st", not 2026-09-21). A window that
+    // has closed shows the figure; one still running shows the date it closes.
+    const CHURN_MONTHS = [1, 2, 3];
+    const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+                    'July', 'August', 'September', 'October', 'November', 'December'];
+    const ordinal = (d) => {
+      if (d > 3 && d < 21) return `${d}th`;
+      return `${d}${{ 1: 'st', 2: 'nd', 3: 'rd' }[d % 10] || 'th'}`;
+    };
+    /** "2026-09-21" -> "September 21st", matching how their sheet writes dates. */
+    const longDate = (iso) => {
+      const [, m, d] = iso.split('-').map(Number);
+      return `${MONTHS[m - 1]} ${ordinal(d)}`;
+    };
+
+    const SCORECARD_HEADERS = [
+      'New hires', 'Completed Training', '% Completed Training',
+      'Trainee Satisfaction Scores', 'Quizzes Sucess Rate',
+      '30 day Churn Rate', '60 day Chun Rate', '90 day Churn Rate',
+      '90 day reg rate', '90 day star model',
+    ];
+    const SW = SCORECARD_HEADERS.length;
+    const sc = { values: [], kinds: [] };
+    const addSc = (kind, cells) => { sc.values.push([...cells, ...Array(Math.max(0, SW - cells.length)).fill('')]); sc.kinds.push(kind); };
+
+    addSc('goal', ['', '', 'Goal: 90%', 'Goal: 97%', 'Goal: 85%',
+      'Goal: Less than 5%', 'Goal: Less than 10%', 'Goal: Less than 15%',
+      'Goal: +15%', 'Goal: 3.70+']);
+    const checks = []; // where our figure disagrees with theirs — shown below, not inline
+
+    // CHURN COUNTS FROM THE FIRST DAY OF TRAINING — Vee, 2026-09-11, and it reproduces
+    // management's June figure exactly. Someone who STARTED training and then left
+    // counts: "Jessa Mae Odac, training total 26.07%, and Jovin Laud, 10%… so that's how
+    // you determine." A 0% training total means they never started, so they do not
+    // count (Fernando Pazzetti, Daniel Mendoza; and in August, by her ruling, Ezra Pagtan
+    // and Laurence Sindol). June: Jessa + Jovin + Oliver Castaneda (closed Jul 22) = 3.
+    //
+    // The windows still CLOSE at graduation + 1, 2 and 3 calendar months, because those
+    // are the due dates their sheet prints (July class: Sep 10, Oct 10).
+    //
+    // CUMULATIVE, unlike the registration months: the 60 day figure includes the 30 day
+    // people. Denominator is who COMPLETED training — 3 of their 46 is 6.52%, exactly
+    // what they publish.
+    const startedTraining = (t) => Number(t.total) > 0;
+
+    for (const cls of [...CLASSES].reverse()) {
+      const meta = cls.meta;
+      const pub = cls.published;
+      const roster = cls.trainees;
+      const label = `${meta.label} ${meta.classEnd.slice(0, 4)}`;
+      const span = `${longDate(meta.classStart)} - ${longDate(meta.classEnd)}`;
+      // If management labels the same class differently, say so on the row itself
+      // rather than letting two sheets quietly disagree about which class this is.
+      const alias = meta.managementLabel && meta.managementLabel !== meta.label
+        ? `   (their sheet calls this row "${meta.managementLabel}")`
+        : '';
+
+      addSc('classTitle', [`${label} (${span})${alias}`]);
+      addSc('colHeader', SCORECARD_HEADERS);
+
+      const publishedChurn = (months) => [null, pub && pub.churn30, pub && pub.churn60, pub && pub.churn90][months];
+      const done = roster.filter((t) => t.status === 'active');
+      const countedInTraining = roster.filter((t) => t.status !== 'active' && startedTraining(t));
+      const gone = leaversOf(cls);
+
+      const churnCell = (months) => {
+        const due = milestoneDate(meta.classEnd, months);
+        if (todayISO < due) return longDate(due); // still running — their sheet shows the date
+        if (!roster.length) return publishedChurn(months) || longDate(due);
+        const n = countedInTraining.length + gone.filter((l) => l.left <= due).length;
+        const ours = `${n} (${pctStr(done.length ? n / done.length : null, 2)})`;
+        const theirs = publishedChurn(months);
+        if (theirs && theirs !== ours) {
+          checks.push(parseInt(theirs, 10) === n
+            ? `${label} ${months * 30} day churn: the same ${n} people as their sheet. Theirs reads ${theirs} and ours ${ours} only because the class workbook has ${done.length} people who completed training and their sheet has ${pub.completedTraining}.`
+            : `${label} ${months * 30} day churn: we count ${ours}, their sheet published ${theirs}. Who we counted, and when they left, is listed under the class above.`);
+        }
+        return ours;
+      };
+
+      if (!roster.length) {
+        // Published figures only. Nothing here is ours, and the checks section says so.
+        addSc('figures', [
+          (pub && pub.newHires) || '', (pub && pub.completedTraining) || '',
+          (pub && pub.pctCompletedTraining) || '', (pub && pub.traineeSatisfaction) || '',
+          (pub && pub.quizSuccessRate) || '',
+          churnCell(1), churnCell(2), churnCell(3),
+          longDate(milestoneDate(meta.classEnd, 3)), longDate(milestoneDate(meta.classEnd, 3)),
+        ]);
+        checks.push(`${label}: published figures only. No roster for this class, so nothing in that row is ours or checked. Ask Oscar for the class workbook.`);
+        addSc('blank', []);
+        continue;
+      }
+
+      const quizAll = roster.reduce((a, t) => a + t.knowledge, 0) / roster.length;
+
+      // 90 DAY REG RATE — "the whole 90 days" (Vee, 2026-09-10): the class's registration
+      // ratio across its three months, goal 15%. Months that have not started add
+      // nothing, so before the window closes this is a real running figure.
+      let regCalls90 = 0;
+      let hardRegs90 = 0;
+      for (const t of roster) {
+        const r = t.slackId ? perfBySlack[t.slackId] : null;
+        if (!r) continue;
+        for (const b of BLOCKS) {
+          regCalls90 += r.a.block[b.month].regCalls;
+          hardRegs90 += r.a.block[b.month].hardRegs;
+        }
+      }
+      const regRate90 = regCalls90 > 0 ? hardRegs90 / regCalls90 : null;
+      const regDue = milestoneDate(meta.classEnd, 3);
+      const regCell = regRate90 === null
+        ? longDate(regDue)
+        : todayISO >= regDue
+          ? pctStr(regRate90)
+          : `${pctStr(regRate90)} so far, closes ${longDate(regDue)}`;
+      const sat = roster.filter((t) => t.knowledge > 0);
+      const quizSat = sat.length ? sat.reduce((a, t) => a + t.knowledge, 0) / sat.length : null;
+
+      addSc('figures', [
+        roster.length,
+        done.length,
+        pctStr(done.length / roster.length, 2),
+        (pub && pub.traineeSatisfaction) || 'not in the database',
+        pct100(quizAll),
+        churnCell(1), churnCell(2), churnCell(3),
+        regCell,
+        longDate(milestoneDate(meta.classEnd, 3)),
+      ]);
+
+      // WHO LEFT, AND WHICH CHURN WINDOW THEY LAND IN.
+      const windowOf = (day) => {
+        const m = CHURN_MONTHS.find((k) => day <= milestoneDate(meta.classEnd, k));
+        return m ? `${m * 30} day churn` : 'After 90 days, not counted';
+      };
+      const whoLeft = [
+        ...roster.filter((t) => t.status !== 'active').map((t) => ({
+          name: t.name,
+          when: 'During training',
+          counts: startedTraining(t) ? '30 day churn' : 'Not counted, never started training',
+          sort: startedTraining(t) ? '0' : '3',
+        })),
+        ...gone.map((l) => ({ name: l.name, when: longDate(l.left), counts: windowOf(l.left), sort: `1${l.left}` })),
+      ].sort((a, b) => a.sort.localeCompare(b.sort));
+      if (whoLeft.length) {
+        addSc('whoLeftHeader', ['Who left', '', '', 'Left', '', 'Counts toward']);
+        for (const w of whoLeft) addSc('whoLeftRow', [w.name, '', '', w.when, '', w.counts]);
+      }
+      addSc('blank', []);
+
+      // --- the checks, kept out of the table so the table stays their shape ---
+      const differs = (ours, theirs) => theirs != null && String(ours) !== String(theirs);
+      if (differs(roster.length, pub && pub.newHires)) {
+        checks.push(`${label} head count: the class workbook lists ${roster.length} people (no duplicate names, no duplicate Slack IDs); their scorecard says ${pub.newHires}. Their % Completed is exactly ${pub.completedTraining}/${pub.newHires}, so ${pub.newHires} really is their denominator. One person is on the workbook and not on their sheet.`);
+      }
+      if (differs(pct100(quizAll), pub && pub.quizSuccessRate)) {
+        checks.push(`${label} quiz rate: they publish ${pub.quizSuccessRate}. Averaged across ALL ${roster.length} hires, zeros included, we get ${pct100(quizAll)}. Averaged across only the ${sat.length} who actually sat the quiz we get ${pct100(quizSat)}, which is what theirs matches. August was published the FIRST way. The two classes look to have been graded differently, and it moves the number by about five points.`);
+      }
+      if (!(pub && pub.traineeSatisfaction)) {
+        checks.push(`${label} trainee satisfaction: comes from a survey of the trainees and lives outside the database. It measures the TRAINER, not the operators. Has to be typed in.`);
+      }
+    }
+    if (sc.kinds[sc.kinds.length - 1] === 'blank') { sc.values.pop(); sc.kinds.pop(); }
+
+    addSc('blank', []);
+    addSc('section', ['Where our figures and theirs disagree']);
+    if (!checks.length) checks.push('Everything reconciles.');
+    for (const c of checks) addSc('note', [c]);
+
+    addSc('blank', []);
+    addSc('section', ['Still open']);
+    addSc('note', ['90 day star model: Ops gave the weighting on 2026-09-11 (9 parts, 5 points a week, each part all or nothing that week; the 90 day figure is the average week, goal 3.70). Not calculated yet. HR ratio and op reports are already tracked; where the other 7 parts live in the database still has to be found.']);
+
+    // ------------------------------------------------------------------ write
+    /**
+     * Write one tab, then give every row its kind's look, stretch the banding over any
+     * new rows or columns, and put the colour rules on.
+     *
+     * keepColumnOrderFromRow: these tabs get rearranged by hand, so the rebuild writes
+     * columns in whatever order the tab already has rather than forcing its own.
+     */
+    const publish = async (title, { values, kinds }, {
+      classify = flatKinds, defaults = FLAT_DEFAULTS, fallback = FLAT_FALLBACK, merges = {},
+      writeOpts = { keepColumnOrderFromRow: 0 }, banding = true, colours = false,
+    } = {}) => {
+      // unmergeFirst: merges come apart BEFORE the values go in — Google throws away
+      // anything written into the hidden part of a merged cell. restyleRows puts the
+      // right merges back on the right rows, copying from the merges seen before the run.
+      const info = await writeTab(title, values, TRACKER_SHEET_ID, { readOld: true, unmergeFirst: true, ...writeOpts });
+      if (info.created && banding) await formatHeader(title, { spreadsheetId: TRACKER_SHEET_ID, bandRows: true });
+      await restyleRows(title, {
+        spreadsheetId: TRACKER_SHEET_ID,
+        oldKinds: info.created ? [] : classify(info.oldValues),
+        oldMerges: info.merges,
+        newKinds: kinds,
+        width: info.width,
+        newColsFrom: !info.created && info.prevWidth > 0 && info.width > info.prevWidth ? info.prevWidth : null,
+        defaults, fallback, mergesByKind: merges,
+        adjust: { stamp: italicStamp },
+        // A blank new-year sheet has no rows to copy a look from; last year's sheet does.
+        templateFrom: TRACKER_SHEETS[year - 1] ? { spreadsheetId: TRACKER_SHEETS[year - 1], classify } : null,
+      });
+      if (banding) await extendBanding(title, { spreadsheetId: TRACKER_SHEET_ID, rows: values.length, cols: info.width });
+      if (colours) await ruleColors(title, { spreadsheetId: TRACKER_SHEET_ID, ratioHeader: /^reg ratio/i, header: info.header });
+    };
+
+    await publish('Scorecard', sc, {
+      classify: scorecardKinds, defaults: SCORECARD_DEFAULTS, fallback: SCORECARD_FALLBACK,
+      merges: SCORECARD_MERGES, writeOpts: {}, banding: false,
+    });
+    await publish('Training vs Performance', tvp, { colours: true });
+    // One-time, and a no-op after that: turn the three 4-week columns into the 30 / 60 / 90
+    // day columns IN PLACE, so every column after them keeps Vee's width and look.
+    await widenColumns('Hard Regs', {
+      spreadsheetId: TRACKER_SHEET_ID,
+      from: ['Reg calls (4wk)', 'Hard regs (4wk)', 'Reg ratio (4wk)'],
+      to: [...MONTH_HEADERS, 'Reg ratio all 3 months'],
+    });
+    await publish('Hard Regs', regs, { colours: true });
+    await publish('Team Leads', leads, { colours: true });
+    await publish('Weekly Trend', trend, { writeOpts: { keepColumnOrderFromRow: 0, freeOrder: /^\d{4}-W\d{2}$/ } });
   };
 
-  await publish('Scorecard', sc, {
-    classify: scorecardKinds, defaults: SCORECARD_DEFAULTS, fallback: SCORECARD_FALLBACK,
-    merges: SCORECARD_MERGES, writeOpts: {}, banding: false,
-  });
-  await publish('Training vs Performance', tvp, { colours: true });
-  // One-time, and a no-op after that: turn the three 4-week columns into the 30 / 60 / 90
-  // day columns IN PLACE, so every column after them keeps Vee's width and look.
-  await widenColumns('Hard Regs', {
-    spreadsheetId: TRACKER_SHEET_ID,
-    from: ['Reg calls (4wk)', 'Hard regs (4wk)', 'Reg ratio (4wk)'],
-    to: [...MONTH_HEADERS, 'Reg ratio all 3 months'],
-  });
-  await publish('Hard Regs', regs, { colours: true });
-  await publish('Team Leads', leads, { colours: true });
-  await publish('Weekly Trend', trend, { writeOpts: { keepColumnOrderFromRow: 0, freeOrder: /^\d{4}-W\d{2}$/ } });
+  // --- Which yearly sheet(s) this run writes --------------------------------------
+  // Usually just this year's. In January–March it can also be last year's, while a class
+  // that graduated late last year finishes its 3 months there.
+  const currentYear = easternYear();
+  const yearsWritten = yearsToWrite(CLASSES, todayISO, currentYear);
+  for (const year of yearsWritten) {
+    const yearSheetId = trackerSheetFor(year);
+    if (process.env.OPS_FIXTURE) {
+      const { data } = await sheets().spreadsheets.get({ spreadsheetId: yearSheetId, fields: 'properties.title' });
+      if (!/^TEST COPY/.test(data.properties.title)) {
+        throw new Error(`OPS_FIXTURE refused: the ${year} sheet "${data.properties.title}" is not a TEST COPY. Made-up numbers never go on a real tracker.`);
+      }
+    }
+    await buildYear(year, CLASSES.filter((c) => Number(c.meta.classStart.slice(0, 4)) === year), yearSheetId);
+    console.log(`[tracker] wrote the ${year} tracker sheet`);
+  }
+  if (!yearsWritten.length) console.log(`[tracker] no yearly sheet has a class to show on ${todayISO} — nothing written`);
 
   // The tab order is Vee's — Run Log first, Scorecard second. Nothing here moves tabs.
 
-  // --- Build Notes: every op report matched to a class operator ---------------
+  // --- Build Notes: every op report matched to a class operator, all years -------
   // Everything gathered goes to Build Notes; the team sheet only gets the count.
+  const reportsAll = loadArchive();
   const matched = [];
-  for (const cls of classesNewestFirst) {
-    for (const t of withClass(cls)) {
-      for (const r of reports) if (isReportAbout(t.name, r.contractor)) matched.push({ cls, t, r });
+  for (const cls of [...CLASSES].reverse().filter((c) => c.trainees.length)) {
+    for (const t of cls.trainees.map((x) => ({ ...x, cohort: cls.meta.cohort, gradDate: cls.meta.classEnd }))) {
+      for (const r of reportsAll) if (isReportAbout(t.name, r.contractor)) matched.push({ cls, t, r });
     }
   }
   const perReport = new Map();
@@ -848,6 +889,21 @@ async function main() {
       const probe = await tryQ(conn, `SELECT 1 FROM \`${t}\` LIMIT 1`, [], 10_000);
       accessCheck.push([t, probe.error ? `❌ NO — ${probe.error.slice(0, 160)}` : '✅ yes', asOf]);
     }
+    // Every yearly tracker sheet set in Railway: can the bot open it, and is it the sheet
+    // it claims to be? A typo in OPS_TRACKER_SHEET_ID_2027 shows up here the next day, not
+    // on the first run of January.
+    for (const [year, sid] of Object.entries(TRACKER_SHEETS)) {
+      const title = await sheets().spreadsheets.get({ spreadsheetId: sid, fields: 'properties.title' })
+        .then((res) => res.data.properties.title)
+        .catch((e) => ({ error: e.message }));
+      accessCheck.push([
+        `Tracker sheet ${year}`,
+        typeof title === 'string'
+          ? `✅ opens: "${title}"${Number(year) === 2026 || title.includes(`(${year})`) ? '' : ` — ⚠️ the title does not say (${year})`}`
+          : `❌ cannot open — ${String(title.error).slice(0, 160)}`,
+        asOf,
+      ]);
+    }
     await writeTab('08 Access Check', accessCheck).catch((e) => console.error('[access check] could not write:', e.message));
     await conn.end();
   }
@@ -861,7 +917,7 @@ async function main() {
   // nothing left that can fail.
   await logRun({
     status: '✅ OK',
-    detail: `${tracked.length} operators.${conn ? ' This address reached the database, so it is on the allowlist.' : ' LOCAL TEST with made-up numbers.'}`,
+    detail: `${tracked.length} operators. Sheet${yearsWritten.length === 1 ? '' : 's'} written: ${yearsWritten.join(', ') || 'none'}.${conn ? ' This address reached the database, so it is on the allowlist.' : ' LOCAL TEST with made-up numbers.'}`,
   });
 }
 

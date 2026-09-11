@@ -47,6 +47,20 @@ ratio yet after them, leavers at the bottom (most recent first).
 After 3 months a class leaves Hard Regs, Weekly Trend and Team Leads; Training vs
 Performance keeps it with its final numbers.
 
+**One tracker sheet per year** (Vee, 2026-09-11). `OPS_TRACKER_SHEET_ID` is the 2026 sheet;
+every later year gets its own sheet and variable, `OPS_TRACKER_SHEET_ID_2027` and so on.
+The 2027 sheet takes over on January 1, 2027 (Eastern). A class never runs across two
+years, and a class belongs to its year's sheet for good: one that graduates late in a year
+finishes its 3 tracked months on that year's sheet, which then stays frozen as the record.
+A future year's sheet is never written early, and a class that did cross years would stop
+the run with an error instead of guessing (`yearsToWrite`, data/trained-roster.js).
+A new year's sheet starts blank below its header row and takes each kind of row's look
+from the previous year's sheet on its first run. The Build Notes access check opens every
+yearly sheet on each run, so a wrong ID shows up long before January.
+
+To add a year: duplicate the previous sheet, keep row 1 of every tab and clear the rest,
+share it with the bot account, and set `OPS_TRACKER_SHEET_ID_<year>` in Railway.
+
 **Star model** (weighting from Ops, 2026-09-11): weekly, 5 points, each part all or
 nothing; a part with no data ("-") counts as passed — that rule reproduces all 359
 Overall Stars in management's document. `OPS_TASK=starsources` finds where the parts live;

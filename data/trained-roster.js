@@ -95,5 +95,41 @@ export function milestoneDate(classEnd, months) {
   return `${yy}-${p(mm)}-${p(d)}`;
 }
 
+const addDaysISO = (iso, days) => {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+};
+
+/**
+ * WHICH YEARLY TRACKER SHEETS A RUN WRITES — Vee's rule, 2026-09-11.
+ *
+ *   - One tracker sheet per year. The 2027 sheet is used as of January 1, 2027.
+ *   - A class belongs to the year it runs in. "There'll never be a class that crosses
+ *     over from old year to new year." If one ever does, this throws rather than guess.
+ *   - A class that graduates late in a year FINISHES on that year's sheet: last year's
+ *     sheet keeps updating while any of its classes is still inside its 3 tracked months
+ *     (plus one day, so the closing figures land), then it is left as a frozen record.
+ *   - The current year's sheet is always written once it has a class. A future year's
+ *     sheet is never written early.
+ *
+ * @returns {number[]} years, oldest first
+ */
+export function yearsToWrite(classes, todayISO, currentYear) {
+  const yearOf = (c) => Number(c.meta.classStart.slice(0, 4));
+  for (const c of classes) {
+    if (c.meta.classStart.slice(0, 4) !== c.meta.classEnd.slice(0, 4)) {
+      throw new Error(`Class "${c.meta.label}" runs ${c.meta.classStart} to ${c.meta.classEnd}, across two years. Vee's rule says that never happens, so ask her which year's sheet it belongs on before running.`);
+    }
+  }
+  const years = [...new Set(classes.map(yearOf))].sort();
+  return years.filter((y) => {
+    if (y > currentYear) return false;
+    if (y === currentYear) return true;
+    const lastClose = classes.filter((c) => yearOf(c) === y).map((c) => milestoneDate(c.meta.classEnd, 3)).sort().pop();
+    return todayISO <= addDaysISO(lastClose, 1);
+  });
+}
+
 /** People with no Slack ID cannot be joined to anything. Worth surfacing, not hiding. */
 export const TRAINED_WITHOUT_SLACK = TRAINED.filter((t) => !t.slackId).map((t) => t.name);
