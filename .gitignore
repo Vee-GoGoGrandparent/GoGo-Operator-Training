@@ -4,3 +4,6 @@ env.txt
 *.json.key
 google-service-account.json
 *.log
+# Conversation backup: local only, never on GitHub
+entire conversation.md
+scripts/.export-state.json

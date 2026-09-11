@@ -9,6 +9,8 @@
 //   2. NO VERDICTS. We surface what happened. The trainer decides what it means.
 //      Nothing here concludes that a person is bad.
 
+import { milestoneDate } from '../data/trained-roster.js';
+
 /** The goal his management set for 90-day reg rate. */
 export const TARGET_HR_RATIO = 0.15;
 
@@ -84,9 +86,50 @@ export const PRIORITY = { escalateAtOrBelow: 11, watchBelow: 15, strongAtOrAbove
 export const shownPct = (r) => (r === null || r === undefined ? null : Number((r * 100).toFixed(1)));
 
 /**
- * Priority from ONE ratio — the operator's current month (Vee's choice). No minimum
- * number of calls: she chose that knowingly, so the first days of a month will swing.
- * No calls at all in the month means there is no ratio to judge: "No data".
+ * WHICH RATIO DECIDES PRIORITY — and the order people are listed in. Vee, 2026-09-11.
+ *
+ *   - Month 1: month 1.
+ *   - Month 2: month 1 still rules for the first WEEK. "Zero percent, obviously... they've
+ *     only taken two and three calls. It's only day one. So it's unfair." From day 8 on,
+ *     month 2 rules — once it has calls; until then month 1 stays.
+ *   - Month 3 on, and after the 3 months are over: "Reg ratio all 3 months" (all hard
+ *     regs ÷ all reg calls), the same number that column shows.
+ *
+ * Months are calendar months from graduation (milestoneDate). `block` holds each
+ * month's { regCalls, hardRegs }. Returns a 0–1 ratio, or null when there is nothing
+ * to judge yet (still in training, or no calls).
+ *
+ * The version before this used the current month as soon as it had any calls, so on
+ * 2026-09-11 the June class's third month — one day old, 2 or 3 calls, 0% — showed
+ * Escalate beside months of 25%.
+ */
+export const MONTH_TWO_WAIT_DAYS = 7;
+
+const addDaysISO = (iso, days) => {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+};
+
+export function priorityRatioFor({ gradDate, todayISO, block }) {
+  if (todayISO < gradDate) return null;
+  const monthOne = ratio(block[1].hardRegs, block[1].regCalls);
+  if (todayISO >= milestoneDate(gradDate, 2)) {
+    const calls = [1, 2, 3].reduce((s, m) => s + block[m].regCalls, 0);
+    const hard = [1, 2, 3].reduce((s, m) => s + block[m].hardRegs, 0);
+    return ratio(hard, calls);
+  }
+  const monthTwoStart = milestoneDate(gradDate, 1);
+  if (todayISO >= monthTwoStart) {
+    const monthTwoRules = todayISO >= addDaysISO(monthTwoStart, MONTH_TWO_WAIT_DAYS) && block[2].regCalls > 0;
+    return monthTwoRules ? ratio(block[2].hardRegs, block[2].regCalls) : monthOne;
+  }
+  return monthOne;
+}
+
+/**
+ * Priority from ONE ratio (priorityRatioFor above). No minimum number of calls: Vee
+ * chose that knowingly. No ratio at all means there is nothing to judge: "No data".
  */
 export function priorityOf(r) {
   const p = shownPct(r);

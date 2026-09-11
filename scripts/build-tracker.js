@@ -23,7 +23,7 @@ import {
 } from '../src/sheets.js';
 import { notify } from '../src/slack.js';
 import { nowET, fmtDbDate } from '../src/time.js';
-import { regCallsOf, ratio, pctStr, pct100, weekKey, priorityOf, TARGET_HR_RATIO } from '../src/analysis.js';
+import { regCallsOf, ratio, pctStr, pct100, weekKey, priorityOf, priorityRatioFor, TARGET_HR_RATIO } from '../src/analysis.js';
 import { loadArchive, isReportAbout } from '../src/op-reports.js';
 import {
   CLASSES, TRAINED_SLACK_IDS, TRAINED_WITHOUT_SLACK, TRAINEE_BY_SLACK, earliestGradDate, milestoneDate,
@@ -286,32 +286,16 @@ async function main() {
   }
 
   // -------------------------------------------------------------- per-op rows
-  // THE RATIO THAT DECIDES PRIORITY — and the order people are listed in (Vee, 2026-09-11):
+  // THE RATIO THAT DECIDES PRIORITY — and the order people are listed in. The rule is
+  // priorityRatioFor in src/analysis.js, where it is tested (Vee, 2026-09-11): month 1;
+  // in month 2, month 1 for the first week and month 2 after; from month 3 on, "Reg
+  // ratio all 3 months". After 3 months there was no management rule to copy (their star
+  // model document only has weekly figures), so all 3 months combined stays.
   //
-  //   - The month of the class they are in right now.
-  //   - "When a new month starts, things depend on the previous month's performance,
-  //     not the new month. Once the new month has stats, it depends on the new month."
-  //     So an empty current month falls back to the month before.
-  //   - Once the 3 months are over: all 3 months combined (all hard regs ÷ all reg
-  //     calls). She asked to copy management's rule; their star model document only
-  //     has weekly figures, so there was no 3-month rule to copy.
-  //
-  // This replaces a version that used the current month even on its first day. The June
-  // class had one day of month 3, so people at 18.9% over four weeks showed "Escalate"
-  // on the strength of a handful of calls — while the sheet printed the four-week number
-  // beside it. The colour and the number came from two different windows.
-  const priorityRatioOf = (a, t) => {
-    if (classOver(t.gradDate)) {
-      const calls = BLOCKS.reduce((s, b) => s + a.block[b.month].regCalls, 0);
-      const hard = BLOCKS.reduce((s, b) => s + a.block[b.month].hardRegs, 0);
-      return ratio(hard, calls);
-    }
-    const m = monthOf(t.gradDate, todayISO);
-    if (!m) return null;
-    if (a.block[m].regCalls > 0) return ratio(a.block[m].hardRegs, a.block[m].regCalls);
-    if (m > 1) return ratio(a.block[m - 1].hardRegs, a.block[m - 1].regCalls);
-    return null;
-  };
+  // Two earlier versions got the first days of a month wrong. One used the current month
+  // on its first day; the next only fell back while the new month had NO calls. Both left
+  // June people with 25% months showing "Escalate" on 2 or 3 calls into month 3.
+  const priorityRatioOf = (a, t) => priorityRatioFor({ gradDate: t.gradDate, todayISO, block: a.block });
 
   const rows = [];
   for (const o of operators) {

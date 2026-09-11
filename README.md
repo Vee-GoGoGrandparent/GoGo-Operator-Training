@@ -36,9 +36,10 @@ Jovin Laud (left during training) + Oliver Castaneda (closed Jul 22) = 3.
 (August: Aug 21–Sep 20, Sep 21–Oct 20, Oct 21–Nov 20). Training vs Performance and Hard
 Regs both show them as 30d / 60d / 90d columns plus "Reg ratio all 3 months".
 
-**Priority** is judged on one ratio: the month of the class they are in — or, while that
-month has no calls yet, the month before; once the 3 months are over, all 3 months
-combined. Escalate 11% or under, Watch under 15%, Strong 19% and up. The same thresholds
+**Priority** is judged on one ratio (Vee, 2026-09-11). Month 1: month 1. Month 2: month 1
+still rules for the first week, because a day-old month of two or three calls is not a
+fair number; from day 8, month 2 (once it has calls). From month 3 on, and after the 3
+months: "Reg ratio all 3 months". Escalate 11% or under, Watch under 15%, Strong 19% and up. The same thresholds
 colour every Reg ratio column red (under 15%) and green (19% and up).
 
 **Order** on Training vs Performance and Hard Regs: lowest ratio first, people with no
