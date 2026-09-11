@@ -55,7 +55,10 @@ finishes its 3 tracked months on that year's sheet, which then stays frozen as t
 A future year's sheet is never written early, and a class that did cross years would stop
 the run with an error instead of guessing (`yearsToWrite`, data/trained-roster.js).
 A new year's sheet starts blank below its header row and takes each kind of row's look
-from the previous year's sheet on its first run. The Build Notes access check opens every
+from the previous year's sheet on its first run. Row heights set by hand (Vee's 40px
+Scorecard class titles) move with their kind of row the same way formats do. A hand height
+is carried only when most rows of that kind have it; one tall row out of two is treated as
+a stray and goes back to normal. The Build Notes access check opens every
 yearly sheet on each run, so a wrong ID shows up long before January.
 
 To add a year: duplicate the previous sheet, keep row 1 of every tab and clear the rest,

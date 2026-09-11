@@ -169,11 +169,22 @@ async function main() {
     await ask('customReports — every report name', `SELECT id, \`${nameCol}\` AS name_ FROM customReports ORDER BY id LIMIT 80`);
   }
   if (queryCol) {
-    await ask('customReports — reports whose SQL touches a star model part (full SQL, first 6000 characters)',
-      `SELECT id, ${nameCol ? `\`${nameCol}\` AS name_,` : ''} LEFT(\`${queryCol}\`, 6000) AS sql_
+    // BY NAME first. The 2026-09-11 run searched the SQL for words instead, and "star"
+    // matched "periodStartAt" in every Google conversion report — the 20-row limit filled
+    // with ads reports and the operator dashboard's own SQL never came back.
+    if (nameCol) {
+      await ask('customReports — the operator dashboard reports (full SQL, first 8000 characters)',
+        `SELECT id, \`${nameCol}\` AS name_, LEFT(\`${queryCol}\`, 8000) AS sql_
+           FROM customReports
+          WHERE \`${nameCol}\` LIKE 'operator%'
+          ORDER BY id LIMIT 10`);
+    }
+    await ask('customReports — other reports whose SQL names a star model table (first 3000 characters)',
+      `SELECT id, ${nameCol ? `\`${nameCol}\` AS name_,` : ''} LEFT(\`${queryCol}\`, 3000) AS sql_
          FROM customReports
-        WHERE LOWER(\`${queryCol}\`) REGEXP 'rideperformances|operatoractivities|operatorweeklyscores|qualityassurances|callsummary|tard|otl|activation|star|scheduledrides|techissue'
-        ORDER BY id LIMIT 20`);
+        WHERE LOWER(\`${queryCol}\`) REGEXP 'rideperformances|operatoractivities|operatorweeklyscores|qualityassurances|callsummary|scheduledrides'
+          ${nameCol ? `AND \`${nameCol}\` NOT LIKE 'operator%'` : ''}
+        ORDER BY id LIMIT 10`);
   } else {
     out.push(['customReports — SQL', 'Not queried: no column named query/sql. See the column list above.']);
   }

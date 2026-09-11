@@ -738,6 +738,90 @@ export async function restyleRows(title, {
   }
 
   if (requests.length) await api.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
+
+  // Heights move with their kind of row too (Vee's 40px class titles, 2026-09-11).
+  await restyleRowHeights(title, { spreadsheetId, oldKinds, newKinds, fallback, templateFrom });
+}
+
+/**
+ * Row HEIGHTS follow the row's kind, the same way formats do.
+ *
+ * A row's height belongs to its POSITION in Google Sheets, not to what is written in it.
+ * On 2026-09-11 Vee made the Scorecard's class title rows 40px tall. The first time
+ * someone new left and the June section moved down a row, that 40px would have stayed
+ * on a who-left row and the June title would have landed on a normal 21px row.
+ *
+ * So, per kind: the height most rows of that kind have now (or, on a blank new-year
+ * sheet, on last year's sheet). Only heights set by hand are carried — anything other
+ * than Google's default 21px. A row that had a hand-set height but is now a different
+ * kind goes back to fitting its own contents. Column widths are never touched.
+ */
+export async function restyleRowHeights(title, {
+  spreadsheetId = BUILD_SHEET_ID, oldKinds = [], newKinds, fallback = {}, templateFrom = null,
+} = {}) {
+  const api = sheets();
+  const DEFAULT = 21;
+  const heightsOf = async (sid, n) => {
+    const g = await api.spreadsheets.get({
+      spreadsheetId: sid,
+      ranges: [`'${title}'!A1:A${Math.max(n, 1)}`],
+      includeGridData: true,
+      fields: 'sheets(properties(sheetId),data(rowMetadata(pixelSize)))',
+    });
+    const s = g.data.sheets[0];
+    return { sheetId: s.properties.sheetId, heights: (s.data?.[0]?.rowMetadata ?? []).map((m) => m.pixelSize ?? DEFAULT) };
+  };
+  // A hand-set height has to be what MOST rows of the kind have. On a tie the kind stays
+  // at the default: one tall row out of two is a stray, not a pattern, and copying it
+  // would make a second row tall that nobody touched (found by test, 2026-09-11).
+  const commonHeight = (kinds, heights) => {
+    const by = {};
+    kinds.forEach((k, i) => {
+      const h = heights[i] ?? DEFAULT;
+      const m = (by[k] ??= new Map());
+      m.set(h, (m.get(h) || 0) + 1);
+    });
+    return Object.fromEntries(Object.entries(by).map(([k, m]) => [k,
+      [...m.entries()].sort((a, b) => b[1] - a[1] || (a[0] === DEFAULT ? -1 : b[0] === DEFAULT ? 1 : 0))[0][0]]));
+  };
+
+  const now = await heightsOf(spreadsheetId, Math.max(oldKinds.length, newKinds.length));
+  const own = commonHeight(oldKinds, now.heights);
+  let lastYear = {};
+  const needed = [...new Set(newKinds)].filter((k) => own[k] === undefined && own[fallback[k]] === undefined);
+  if (needed.length && templateFrom?.spreadsheetId && templateFrom.spreadsheetId !== spreadsheetId) {
+    const tValues = await readTab(title, { spreadsheetId: templateFrom.spreadsheetId });
+    if (tValues.length) {
+      const t = await heightsOf(templateFrom.spreadsheetId, tValues.length);
+      lastYear = commonHeight(templateFrom.classify(tValues), t.heights);
+    }
+  }
+  const wanted = (k) => own[k] ?? own[fallback[k]] ?? lastYear[k] ?? lastYear[fallback[k]] ?? DEFAULT;
+
+  const requests = [];
+  newKinds.forEach((k, i) => {
+    const want = wanted(k);
+    const has = now.heights[i] ?? DEFAULT;
+    if (want !== DEFAULT && want !== has) {
+      requests.push({
+        updateDimensionProperties: {
+          range: { sheetId: now.sheetId, dimension: 'ROWS', startIndex: i, endIndex: i + 1 },
+          properties: { pixelSize: want },
+          fields: 'pixelSize',
+        },
+      });
+    } else if (want === DEFAULT && has !== DEFAULT) {
+      requests.push({ autoResizeDimensions: { dimensions: { sheetId: now.sheetId, dimension: 'ROWS', startIndex: i, endIndex: i + 1 } } });
+    }
+  });
+  // Rows the table no longer reaches (it got shorter) lose their hand-set heights too,
+  // the same way they lose their formats in restyleRows.
+  for (let i = newKinds.length; i < oldKinds.length; i += 1) {
+    if ((now.heights[i] ?? DEFAULT) !== DEFAULT) {
+      requests.push({ autoResizeDimensions: { dimensions: { sheetId: now.sheetId, dimension: 'ROWS', startIndex: i, endIndex: i + 1 } } });
+    }
+  }
+  if (requests.length) await api.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
 }
 
 /** A formula rule written by ruleColors — how it recognises its own rules later. */
