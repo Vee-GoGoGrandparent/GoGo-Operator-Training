@@ -75,11 +75,30 @@ const name = (o) => `${(o.firstName || '').trim()} ${(o.lastName || '').trim()}`
 async function logRun({ status, detail }) {
   if (!BUILD_SHEET_ID) return;
   const ip = await outboundIp();
-  const header = ['When (Eastern)', 'Status', 'Outbound IP', 'Detail'];
+
+  // Where did this run? Railway sets RAILWAY_* variables; a laptop does not.
+  //
+  // Worth a column of its own: a local test run landed in this log looking exactly
+  // like a scheduled one, and its "Missing DB_USER, DB_PASSWORD" error read as though
+  // the Railway variables had gone missing. They had not — the laptop simply did not
+  // have them. One column stops that confusion for good.
+  const onRailway = Object.keys(process.env).some((k) => k.startsWith('RAILWAY_'));
+  const where = onRailway ? 'Railway' : 'local test';
+
+  const header = ['When (Eastern)', 'Where', 'Status', 'Outbound IP', 'Detail'];
+
+  // KEEP ONE WEEK. Vee: "I only want it for the last week... and then a new week
+  // starts." So rows are pruned by DATE rather than by count — seven days of history
+  // is enough to see a pattern, and a log nobody prunes is a log nobody reads.
+  const cutoff = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  const isRecent = (row) => String(row?.[0] ?? '').slice(0, 10) >= cutoff;
+
   try {
     const existing = await readTab('12 Run Log', { spreadsheetId: BUILD_SHEET_ID });
-    const past = existing.filter((r, i) => !(i === 0 && String(r[0] ?? '').startsWith('When')));
-    const rows = [header, [nowET(), status, ip || '(could not determine)', detail], ...past].slice(0, 400);
+    const past = existing
+      .filter((r, i) => !(i === 0 && String(r[0] ?? '').startsWith('When')))
+      .filter(isRecent);
+    const rows = [header, [nowET(), where, status, ip || '(could not determine)', detail], ...past];
     await writeTab('12 Run Log', rows, BUILD_SHEET_ID, { keepColumnOrderFromRow: 0 });
     await formatHeader('12 Run Log', { bandRows: true, spreadsheetId: BUILD_SHEET_ID }).catch(() => {});
     console.log(`[tracker] run log: ${status} from ${ip || 'unknown IP'}`);
