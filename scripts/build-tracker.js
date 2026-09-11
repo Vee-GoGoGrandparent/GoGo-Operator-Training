@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import { connect, q, tryQ } from '../src/db.js';
 import { logRun } from '../src/run-log.js';
 import {
-  sheets, writeTab, formatHeader, restyleRows, ruleColors, extendBanding, widenColumns,
+  sheets, writeTab, readTab, formatHeader, restyleRows, ruleColors, extendBanding, widenColumns,
   TRACKER_SHEET_ID, TRACKER_SHEETS, trackerSheetFor, easternYear, BUILD_SHEET_ID, BRAND,
 } from '../src/sheets.js';
 import { notify } from '../src/slack.js';
@@ -498,12 +498,31 @@ async function main() {
       // Vee: "a reg ratio for all the three months, not just the thirty days on that
       // third month". New columns land on the right; she can move them and they stay.
       'Reg ratio all 3 months', opReportsHeader,
+      // Vee, 2026-09-11: "we just need their numbers... add it to the performance versus,
+      // you know, like, the three point seven". One column, from the Star Model tab.
+      'Star (3 months)',
     ];
     const WIDTH = tvpHeader.length;
     const banner = (text) => [text, ...Array(WIDTH - 1).fill('')];
     const tvp = { values: [tvpHeader, banner(stamp)], kinds: ['header', 'stamp'] };
 
     const perfBySlack = Object.fromEntries(rows.filter((r) => r.o.slackId).map((r) => [r.o.slackId, r]));
+
+    // THE STAR, carried across from the "Star Model" tab on this same sheet. Management's
+    // star sheet belongs to upper management and is not readable from Railway, so that tab
+    // is filled from their figures on request (scratchpad/build-star-tab.mjs) and this run
+    // only copies each person's number onto Training vs Performance. Columns are found by
+    // NAME, so Vee can move them; no tab yet (a fresh year) just means a blank column.
+    const starTab = await readTab('Star Model', { spreadsheetId: TRACKER_SHEET_ID }).catch(() => []);
+    const starHead = starTab[0] ?? [];
+    const starIdCol = starHead.indexOf('Slack ID');
+    const starValCol = starHead.indexOf('Star (3 months)');
+    const starBySlack = starIdCol >= 0 && starValCol >= 0
+      ? Object.fromEntries(starTab.slice(1)
+        .filter((r) => String(r[starIdCol] ?? '').trim() && String(r[starValCol] ?? '').trim())
+        .map((r) => [String(r[starIdCol]).trim(), String(r[starValCol]).trim()]))
+      : {};
+    console.log(`[tracker] star model: ${Object.keys(starBySlack).length} operators have a star on the "Star Model" tab`);
 
     /** The date someone left, or null if they are still here. */
     const leftOn = (t) => {
@@ -542,6 +561,7 @@ async function main() {
               : 'Active',
         all3,
         t.status === 'active' ? opReportsFor(t).length : '',
+        t.slackId ? starBySlack[t.slackId] ?? '' : '',
       ];
     };
 
