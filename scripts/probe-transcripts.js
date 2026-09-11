@@ -57,23 +57,30 @@ async function main() {
     `SELECT JSON_KEYS(response) AS keys_, kind, createdAt
        FROM deepgramCalls ORDER BY createdAt DESC LIMIT 3`);
 
+  // NO CALL TEXT (Vee's rule, 2026-09-11): transcripts carry customer names, addresses,
+  // phone numbers and birthdays, and this tab is a Google Sheet. Lengths, keys and counts
+  // only — they answer "is there a readable transcript?" without copying one.
+
   // 4. Deepgram's usual shape is results.channels[0].alternatives[0].transcript.
   //    If that path resolves, we have the transcript and we are done guessing.
-  await ask('deepgramCalls — pull the standard Deepgram transcript path',
-    `SELECT LEFT(JSON_UNQUOTE(JSON_EXTRACT(response, '$.results.channels[0].alternatives[0].transcript')), 1200) AS transcript,
+  await ask('deepgramCalls — does the standard Deepgram transcript path hold text? (length only)',
+    `SELECT CHAR_LENGTH(JSON_UNQUOTE(JSON_EXTRACT(response, '$.results.channels[0].alternatives[0].transcript'))) AS transcript_chars,
             createdAt
        FROM deepgramCalls
       WHERE JSON_EXTRACT(response, '$.results.channels[0].alternatives[0].transcript') IS NOT NULL
       ORDER BY createdAt DESC LIMIT 2`);
 
-  // 5. If that path is empty, show a raw slice so we can read the real shape.
-  await ask('deepgramCalls — raw response slice (fallback if the path above was empty)',
-    `SELECT LEFT(response, 1500) AS raw, kind, createdAt FROM deepgramCalls ORDER BY createdAt DESC LIMIT 1`);
+  // 5. If that path is empty, show the shape of the response instead: its keys, not its text.
+  await ask('deepgramCalls — response shape (fallback if the path above was empty)',
+    `SELECT JSON_KEYS(response) AS keys_, JSON_KEYS(JSON_EXTRACT(response, '$.results')) AS results_keys,
+            CHAR_LENGTH(response) AS response_chars, kind, createdAt
+       FROM deepgramCalls ORDER BY createdAt DESC LIMIT 1`);
 
   // 6. Is there speaker separation? Coaching is about who talked when — an
   //    undifferentiated wall of words is much less useful than a diarized one.
-  await ask('deepgramCalls — is there speaker diarization / utterances?',
-    `SELECT JSON_EXTRACT(response, '$.results.utterances[0]') AS first_utterance
+  await ask('deepgramCalls — is there speaker diarization / utterances? (fields and count only)',
+    `SELECT JSON_KEYS(JSON_EXTRACT(response, '$.results.utterances[0]')) AS utterance_fields,
+            JSON_LENGTH(JSON_EXTRACT(response, '$.results.utterances')) AS utterances
        FROM deepgramCalls
       WHERE JSON_EXTRACT(response, '$.results.utterances') IS NOT NULL
       ORDER BY createdAt DESC LIMIT 1`);
@@ -90,9 +97,9 @@ async function main() {
 
   // 8. End to end: operator → call → transcript. If this returns a row, the whole
   //    idea works and we can grade a call on what was actually said.
-  await ask('END TO END — operator + call + real transcript text',
+  await ask('END TO END — operator + call + transcript (length only)',
     `SELECT o.slackId, o.firstName, o.lastName, cl.id AS callLogId, cl.createdAt,
-            LEFT(JSON_UNQUOTE(JSON_EXTRACT(d.response, '$.results.channels[0].alternatives[0].transcript')), 900) AS transcript
+            CHAR_LENGTH(JSON_UNQUOTE(JSON_EXTRACT(d.response, '$.results.channels[0].alternatives[0].transcript'))) AS transcript_chars
        FROM callLogs cl
        JOIN operators o     ON o.id = cl.operatorId
        JOIN deepgramCalls d ON d.id = cl.deepgramTranscriptId

@@ -159,6 +159,66 @@ async function main() {
         AND LOWER(TABLE_NAME) NOT LIKE '%backup%'
       ORDER BY TABLE_NAME, COLUMN_NAME LIMIT 200`);
 
+  // ------------------------------------------------------------------ 3, 6, 8 — wider
+  // Vee, 2026-09-11: Time Scheduled, tardies and tech issues ARE in the database. The name
+  // searches above found nothing, so this looks the other way round: every table keyed to
+  // an operator, whatever it is called, in every schema this login can see.
+  section('3, 6 and 8 — wider search: every table keyed to an operator');
+  await tryQ(conn, 'SET SESSION group_concat_max_len = 16384');
+  await ask('Schemas this login can see',
+    `SELECT TABLE_SCHEMA, COUNT(*) AS tables_, SUM(TABLE_ROWS) AS approx_rows
+       FROM information_schema.TABLES
+      WHERE TABLE_SCHEMA NOT IN ('mysql','sys','information_schema','performance_schema')
+      GROUP BY TABLE_SCHEMA ORDER BY TABLE_SCHEMA`);
+  await ask('Every table with an operator / agent / team lead / employee key, and all its columns',
+    `SELECT k.TABLE_SCHEMA, k.TABLE_NAME, t.TABLE_ROWS,
+            GROUP_CONCAT(c.COLUMN_NAME ORDER BY c.ORDINAL_POSITION SEPARATOR ', ') AS columns_
+       FROM (SELECT DISTINCT TABLE_SCHEMA, TABLE_NAME FROM information_schema.COLUMNS
+              WHERE TABLE_SCHEMA NOT IN ('mysql','sys','information_schema','performance_schema')
+                AND LOWER(COLUMN_NAME) IN ('operatorid','operator_id','agentid','agent_id','teamleadid','team_lead_id',
+                                           'employeeid','employee_id','staffid','staff_id','workerid','supervisorid')) k
+       JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = k.TABLE_SCHEMA AND t.TABLE_NAME = k.TABLE_NAME
+       JOIN information_schema.COLUMNS c ON c.TABLE_SCHEMA = k.TABLE_SCHEMA AND c.TABLE_NAME = k.TABLE_NAME
+      WHERE LOWER(k.TABLE_NAME) NOT LIKE '%backup%'
+      GROUP BY k.TABLE_SCHEMA, k.TABLE_NAME, t.TABLE_ROWS
+      ORDER BY k.TABLE_SCHEMA, k.TABLE_NAME LIMIT 200`, [], 90_000);
+  await ask('Tables in any schema named like a schedule, shift, roster, time off, attendance, hours or login',
+    `SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES
+      WHERE TABLE_SCHEMA NOT IN ('mysql','sys','information_schema','performance_schema')
+        AND LOWER(TABLE_NAME) REGEXP 'schedul|shift|roster|slot|availab|calendar|timeoff|time_off|pto|leave|absen|attend|tard|early|clock|punch|timesheet|timecard|hour|adherence|wfm|staffing|coverage|login|session|technical|outage|workday|work_day'
+        AND LOWER(TABLE_NAME) NOT REGEXP '^scheduled(rides|ridehistories|deliver|grocer)|backup'
+      ORDER BY TABLE_SCHEMA, TABLE_NAME LIMIT 200`);
+  const opCols = await columnsOf('operators');
+  for (const { COLUMN_NAME: col } of (opCols ?? []).filter((c) => c.DATA_TYPE === 'json')) {
+    await ask(`operators.${col} — the keys it holds, for our operators`,
+      `SELECT JSON_KEYS(\`${col}\`) AS keys_, COUNT(*) AS operators_
+         FROM operators WHERE id IN (?) AND \`${col}\` IS NOT NULL
+        GROUP BY keys_ ORDER BY operators_ DESC LIMIT 10`, [ids]);
+  }
+  // Tech issues: operators set a "technical" status (1,592 times in 14 days, everyone).
+  // Counted per class operator for the two weeks management's document covers, to hold
+  // against their "Tech issues" column. Times as stored, not converted.
+  await ask('operatorActivities — "technical" status per class operator, the two star-model weeks',
+    `SELECT o.firstName, o.lastName,
+            SUM(a.startTime >= '2026-08-23' AND a.startTime < '2026-08-30') AS technical_8_23,
+            SUM(a.startTime >= '2026-08-30' AND a.startTime < '2026-09-06') AS technical_8_30,
+            ROUND(SUM(CASE WHEN a.startTime >= '2026-08-30' AND a.startTime < '2026-09-06'
+                           THEN TIMESTAMPDIFF(SECOND, a.startTime, a.endTime) END) / 60, 1) AS technical_minutes_8_30
+       FROM operatorActivities a JOIN operators o ON o.id = a.operatorId
+      WHERE a.operatorId IN (?) AND a.startCode = 'technical'
+        AND a.startTime >= '2026-08-23' AND a.startTime < '2026-09-06'
+      GROUP BY a.operatorId, o.firstName, o.lastName ORDER BY o.lastName LIMIT 120`, [ids], 90_000);
+  // Tardies / early outs need a schedule to be late against. Words typed into activity
+  // descriptions may name it. Keyword and count only: descriptions are free text and are
+  // not copied here.
+  await ask('operatorActivities — schedule words in descriptions, last 60 days (keyword + count only)',
+    `SELECT REGEXP_SUBSTR(LOWER(description), 'tard[a-z]*|early out|early|late|shift|schedul[a-z]*|absent|excused|undertime|overtime|power|internet|outage|tech[a-z]*') AS keyword,
+            COUNT(*) AS n
+       FROM operatorActivities
+      WHERE startTime >= DATE_SUB(NOW(), INTERVAL 60 DAY)
+        AND LOWER(description) REGEXP 'tard|early|late|shift|schedul|absent|excused|undertime|overtime|power|internet|outage|tech'
+      GROUP BY keyword ORDER BY n DESC LIMIT 30`, [], 90_000);
+
   // ------------------------------------------------------------------ the dashboard
   section("The operator dashboard's own SQL (customReports)");
   const crCols = await columnsOf('customReports');

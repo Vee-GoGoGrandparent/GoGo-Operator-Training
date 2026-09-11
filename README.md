@@ -183,6 +183,13 @@ otherwise:
 **No customer PII.** The Slack form carries customer name, phone number, and the number
 they called from. The archive does not contain those fields and nothing here writes them.
 
+**No call text in any sheet either** (2026-09-11). Transcripts, word lists, AI call
+summaries and QA responses carry customer names, addresses, phone numbers and birthdays.
+The probes (`link`, `transcripts`, `reports`, `discover`) record lengths, counts, keys and
+timings only. Two transcripts and a word list found on Build Notes that day were removed.
+The conversation backup (`scripts/export-conversation.cjs`) strips call text and customer
+details too, and stays off GitHub.
+
 **Known limit.** The Slack reader truncates long fields with `...` — 124 of the first 281
 reports arrive with text cut off. Theme counts survive it; individual corrections may be
 half-sentences. A real bot token calling `conversations.history` would fix it.

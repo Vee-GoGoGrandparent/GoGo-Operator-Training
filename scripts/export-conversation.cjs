@@ -54,9 +54,35 @@ const GUARD = String.raw`(?<![\w\/.:#])(?<!ID )(?<!ID: )`;
 const PLUS1 = new RegExp(`${GUARD}\\+1[\\s.-]?\\d{10}(?![\\w-])`, 'g');
 const TEN = new RegExp(`${GUARD}(?:\\+?1[\\s.-]?)?(?:\\(\\d{3}\\)\\s?|\\d{3}[\\s.-]?)\\d{3}[\\s.-]?\\d{4}(?![\\w-])`, 'g');
 
+// CALL TEXT from the database probes: transcripts, word lists, AI call summaries, QA
+// responses. A customer's name, address or birthday can be anywhere in it, so the whole
+// value goes, not just what a pattern recognises (found 2026-09-11: two transcripts with
+// names, an address, a phone number and a birthday). A summary runs over several lines;
+// its following lines go too, up to the next line that starts a new "name=" value, a
+// section, a "label <tab> value" row, a code fence or a message header (40 lines at most).
+const CALL_TEXT = /\b(transcript|words_|summary_|first_utterance|raw|sample)=/;
+const MULTI_LINE = /^(summary_|sample)=$/;
+const NEXT_RECORD = /^(\s*\d+\t)?\s*(\w+=|— |## \[|```|.* \t )/;
+function removeCallText(text) {
+  const kept = [];
+  let following = 0;
+  for (const line of text.split('\n')) {
+    const m = line.match(CALL_TEXT);
+    if (m) {
+      kept.push(`${line.slice(0, m.index + m[0].length)}[call text removed]`);
+      following = MULTI_LINE.test(m[0]) ? 40 : 0;
+      continue;
+    }
+    if (following > 0 && !NEXT_RECORD.test(line)) { following -= 1; continue; }
+    following = 0;
+    kept.push(line);
+  }
+  return kept.join('\n');
+}
+
 function scrub(text) {
   if (!text) return text;
-  return text
+  return removeCallText(text)
     .replace(LABELLED, (m, label, sep, value) => (value.trim() && value.trim() !== '[removed]' ? `${label}${sep}[removed]` : m))
     .replace(/Customer [A-Z][a-z]+ [A-Z][a-z]+\s+(?=\+1\d{10})/g, 'Customer ')
     .replace(PLUS1, '[phone removed]')
@@ -73,6 +99,10 @@ function selfTest() {
     ['(Son-7075551234)', '7075551234', null],
     ['call (707) 555-1234 back', '555-1234', null],
     ['at 1-707-555-1234', '555-1234', null],
+    ['transcript=Hi, my name is Pat Quill and I live at 12 Oak Lane  createdAt=2026-08-21', 'Oak Lane', 'Quill'],
+    ['    69\tword timings \t words_=[{"word":"quill","punctuated_word":"Quill,"}]', 'Quill', null],
+    ['callLogId=1  summary_=STEP 1: INITIAL TRIAGE\n\nEvidence: "this is Pat Quill"\nName Recognition: [Met] "12 Oak Lane"\ncallLogId=2  agentId=x', 'Quill', 'Oak Lane'],
+    ['    17\tcallSummary \t callLogId=1  summary_=STEP 1\n    18\t\n    19\tEvidence: "Pat Quill"\n    27\tcallLogId=2  summary_=STEP 1', 'Quill', null],
   ];
   const mustKeep = [
     '<https://x.slack.com/archives/C3XUQB7EX/p1785188371832239>',
@@ -81,7 +111,15 @@ function selfTest() {
     'CallLog 55628370', 'Ride: 343960135',
     "['_custName', 'Customer Name'], ['_custPhone', 'Customer Phone Number']",
     'Customer Name    52',
+    'createdAt=2026-08-21  transcript_chars=5085  says_card_number=1',
+    'CHAR_LENGTH(cs.summary) AS summary_chars, LEFT(x, 3) AS transcript',
   ];
+  // What follows a removed summary must survive: the next record is not call text.
+  const after = scrub('callLogId=1  summary_=STEP 1\n\nEvidence: "Pat Quill"\ncallLogId=2  agentId=keep-me\nplain prose line');
+  if (!after.includes('agentId=keep-me') || !after.includes('plain prose line')) {
+    console.error('SELF-TEST FAILED, removed text after a call summary that was not call text');
+    process.exit(1);
+  }
   for (const [t, gone1, gone2] of mustChange) {
     const out = scrub(t);
     if (out.includes(gone1) || (gone2 && out.includes(gone2))) {

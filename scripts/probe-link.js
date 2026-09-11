@@ -78,10 +78,16 @@ async function main() {
       WHERE recordingSid IS NOT NULL AND createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)
       ORDER BY createdAt DESC LIMIT 3`, [], 40_000);
 
+  // NO CALL TEXT (Vee's rule, 2026-09-11). Transcripts and call summaries carry customer
+  // names, addresses, phone numbers and birthdays, and this tab is a Google Sheet. On
+  // 2026-09-11 two full transcripts and a word list were found here and removed. Every
+  // query below records lengths, counts and timings only: enough to answer the question,
+  // nothing a customer could be identified from.
+
   // THE JOIN, if the SID is really the bridge.
-  await ask('LINK TEST — operator + call + transcript, joined on recording SID',
+  await ask('LINK TEST — operator + call + transcript, joined on recording SID (transcript length only)',
     `SELECT o.slackId, o.firstName, o.lastName, cl.id AS callLogId, cl.createdAt,
-            LEFT(JSON_UNQUOTE(JSON_EXTRACT(d.response,'$.results.channels[0].alternatives[0].transcript')), 400) AS transcript
+            CHAR_LENGTH(JSON_UNQUOTE(JSON_EXTRACT(d.response,'$.results.channels[0].alternatives[0].transcript'))) AS transcript_chars
        FROM deepgramCalls d
        JOIN callLogs cl ON cl.recordingSid = REGEXP_SUBSTR(d.request, 'RE[0-9a-f]{32}')
        JOIN operators o ON o.id = cl.operatorId
@@ -90,8 +96,8 @@ async function main() {
 
   // Fallback: callSummary already knows callLogId. If its text matches a Deepgram
   // transcript, that is a second route in.
-  await ask('callSummary — does it carry callLogId AND line up in time with deepgramCalls?',
-    `SELECT cs.callLogId, cs.agentId, cs.createdAt, LEFT(cs.summary, 200) AS summary_
+  await ask('callSummary — does it carry callLogId AND line up in time with deepgramCalls? (summary length only)',
+    `SELECT cs.callLogId, cs.agentId, cs.createdAt, CHAR_LENGTH(cs.summary) AS summary_chars
        FROM callSummary cs
       WHERE cs.createdAt BETWEEN '2026-08-20' AND '2026-08-22'
       ORDER BY cs.createdAt DESC LIMIT 3`, [], 40_000);
@@ -108,24 +114,41 @@ async function main() {
   out.push(['Why this matters',
     'The system mutes audio while payment details are read out, so card data is never captured. Silence there is by design — it must never be counted as dead air or mentioned in a coaching note. These queries look at a real payment call before any exclusion rule gets written.']);
 
-  // Find calls that clearly reached payment, and read what the transcript does.
-  await ask('a transcript that clearly reaches payment — what happens around it?',
-    `SELECT LEFT(JSON_UNQUOTE(JSON_EXTRACT(response,'$.results.channels[0].alternatives[0].transcript')), 2500) AS transcript, createdAt
-       FROM deepgramCalls
-      WHERE createdAt >= DATE_SUB('2026-08-21', INTERVAL 5 DAY)
-        AND JSON_UNQUOTE(JSON_EXTRACT(response,'$.results.channels[0].alternatives[0].transcript'))
-            REGEXP 'card number|debit or credit|expiration|security code|three digits'
+  // Find calls that clearly reached payment. Which payment phrases they contain, and how
+  // long they are — not the words themselves.
+  await ask('calls that clearly reach payment — which payment phrases, and how long (no call text)',
+    `SELECT createdAt, CHAR_LENGTH(t) AS transcript_chars,
+            t REGEXP 'card number' AS says_card_number,
+            t REGEXP 'debit or credit' AS says_debit_or_credit,
+            t REGEXP 'expiration' AS says_expiration,
+            t REGEXP 'security code|three digits' AS says_security_code
+       FROM (SELECT createdAt, JSON_UNQUOTE(JSON_EXTRACT(response,'$.results.channels[0].alternatives[0].transcript')) AS t
+               FROM deepgramCalls
+              WHERE createdAt >= DATE_SUB('2026-08-21', INTERVAL 5 DAY)) x
+      WHERE t REGEXP 'card number|debit or credit|expiration|security code|three digits'
       ORDER BY createdAt DESC LIMIT 2`, [], 60_000);
 
   // Word-level timings are what let us measure silence. Is there a long gap right
-  // after the operator asks for a card — i.e. is the mute visible as a hole?
-  await ask('word timings around a payment ask — is the mute a visible gap?',
-    `SELECT JSON_EXTRACT(response,'$.results.channels[0].alternatives[0].words[100 to 130]') AS words_
-       FROM deepgramCalls
-      WHERE createdAt >= DATE_SUB('2026-08-21', INTERVAL 5 DAY)
-        AND JSON_UNQUOTE(JSON_EXTRACT(response,'$.results.channels[0].alternatives[0].transcript'))
-            REGEXP 'card number|expiration'
-      ORDER BY createdAt DESC LIMIT 1`, [], 60_000);
+  // after the operator asks for a card — i.e. is the mute visible as a hole? Measured
+  // from each word's start and end time; no word is copied out.
+  await ask('payment call silence — longest gap between words, and when the card is first mentioned (seconds)',
+    `SELECT createdAt,
+            ROUND(MAX(gap), 2) AS longest_silence_s,
+            ROUND(MAX(CASE WHEN gap_rank = 1 THEN prev_end END), 2) AS longest_silence_starts_at_s,
+            ROUND(MIN(card_at), 2) AS first_card_word_at_s,
+            COUNT(*) AS words
+       FROM (SELECT d.createdAt, jt.st - LAG(jt.en) OVER w AS gap, LAG(jt.en) OVER w AS prev_end,
+                    CASE WHEN LOWER(jt.word) IN ('card','expiration','debit','credit') THEN jt.st END AS card_at,
+                    RANK() OVER (PARTITION BY d.id ORDER BY (jt.st - LAG(jt.en) OVER w) DESC) AS gap_rank
+               FROM (SELECT id, createdAt, response FROM deepgramCalls
+                      WHERE createdAt >= DATE_SUB('2026-08-21', INTERVAL 5 DAY)
+                        AND JSON_UNQUOTE(JSON_EXTRACT(response,'$.results.channels[0].alternatives[0].transcript'))
+                            REGEXP 'card number|expiration'
+                      ORDER BY createdAt DESC LIMIT 1) d,
+                    JSON_TABLE(d.response, '$.results.channels[0].alternatives[0].words[*]'
+                      COLUMNS (idx FOR ORDINALITY, word VARCHAR(80) PATH '$.word', st DOUBLE PATH '$.start', en DOUBLE PATH '$.end')) jt
+             WINDOW w AS (PARTITION BY d.id ORDER BY jt.idx)) g
+      GROUP BY createdAt`, [], 60_000);
 
   // How long are these calls? Sets expectations for what a "long silence" even is.
   await ask('call duration from the transcript metadata',

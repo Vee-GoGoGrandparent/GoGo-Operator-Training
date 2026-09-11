@@ -301,7 +301,7 @@ async function main() {
       `SELECT COUNT(*) AS rows_, SUM(score IS NOT NULL) AS scored, COUNT(DISTINCT agentId) AS agents
          FROM callSummary WHERE createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)`);
     await ask('callSummary — one real summary, truncated (what does it actually say?)',
-      `SELECT LEFT(summary, 900) AS sample, score FROM callSummary WHERE summary IS NOT NULL AND score IS NOT NULL ORDER BY createdAt DESC LIMIT 2`);
+      `SELECT CHAR_LENGTH(summary) AS summary_chars, score FROM callSummary WHERE summary IS NOT NULL AND score IS NOT NULL ORDER BY createdAt DESC LIMIT 2`);
   }
 
   if (readable.includes('operatorActivities')) {
@@ -320,7 +320,7 @@ async function main() {
 
   if (readable.includes('qualityAssurances')) {
     await ask('qualityAssurances — what is in the response JSON?',
-      `SELECT LEFT(response, 900) AS sample, createdAt FROM qualityAssurances ORDER BY createdAt DESC LIMIT 2`);
+      `SELECT JSON_KEYS(response) AS response_keys, CHAR_LENGTH(response) AS response_chars, createdAt FROM qualityAssurances ORDER BY createdAt DESC LIMIT 2`);
   }
 
   if (readable.includes('customReports')) {

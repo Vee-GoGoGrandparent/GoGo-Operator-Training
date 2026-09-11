@@ -79,10 +79,12 @@ async function main() {
 
   out.push(['— coachingSummaries / coachingAssignments: real, or abandoned? —', '']);
 
-  await ask('coachingSummaries — everything in it (only ~21 rows)',
+  // No summary or coaching text: it can quote callers (Vee's no-customer-details rule,
+  // 2026-09-11). Lengths answer "real, or abandoned?" just as well.
+  await ask('coachingSummaries — everything in it (only ~21 rows; summary length only)',
     `SELECT cs.id, cs.date, cs.sentToSlackAt, cs.createdAt,
             o.slackId, o.firstName, o.lastName,
-            LEFT(cs.summary, 700) AS summary_
+            CHAR_LENGTH(cs.summary) AS summary_chars
        FROM coachingSummaries cs
        LEFT JOIN operators o ON o.id = cs.operatorId
       ORDER BY cs.date DESC LIMIT 25`);
@@ -91,7 +93,7 @@ async function main() {
     `SELECT ca.id, ca.startDate, ca.endDate, ca.createdAt,
             o.slackId, o.firstName AS opFirst, o.lastName AS opLast,
             ag.firstName AS agentFirst, ag.lastName AS agentLast,
-            LEFT(ca.data, 500) AS data_
+            CHAR_LENGTH(ca.data) AS data_chars
        FROM coachingAssignments ca
        LEFT JOIN operators o  ON o.id = ca.operatorId
        LEFT JOIN operators ag ON ag.id = ca.agentId
