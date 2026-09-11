@@ -10,6 +10,10 @@
 
 export const CLASS_SLACK_IDS = [
   // ---- August 2026 class, group 1 (Oscar & Christene) ----
+  // ⚠️ UNRESOLVED 2026-09-10. This was corrected from U0BLV30S7C6 to U0BLXBCK350, and
+  // the Join Test still comes back "no row" — so U0BLXBCK350 is not in the operators
+  // table either. She cannot be tracked until a Slack ID that actually exists is
+  // found. Worth checking directly in the operator record rather than the workbook.
   { slackId: 'U0BLXBCK350', name: 'Berdannette Ranera', cohort: 'aug-2026-c1', status: 'active' },
   { slackId: 'U0BBS8MLYA2', name: 'Daryl Molina', cohort: 'aug-2026-c1', status: 'active' },
   { slackId: 'U0BLTP7UGG5', name: 'Dasheil Gonzaga', cohort: 'aug-2026-c1', status: 'active' },

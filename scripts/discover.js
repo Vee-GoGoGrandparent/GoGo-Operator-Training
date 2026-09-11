@@ -169,17 +169,52 @@ async function main() {
       if (perf.rows) perfBy = Object.fromEntries(perf.rows.map((r) => [r.operatorId, r]));
     }
 
-    for (const c of CLASS_SLACK_IDS) {
+    // ORDER, matching what Vee arranged by hand: still here first, newest hire at the
+    // top; anyone terminated or closed drops to the bottom. Generated rather than
+    // sorted by hand, so a rerun cannot undo it.
+    //
+    // "No row" people sort with the leavers rather than the top — a Slack ID that
+    // matches nothing is not a current operator, and it should not sit above people
+    // who are actually working.
+    const isGone = (c) => {
+      const o = byId[c.slackId];
+      if (!o) return true;                        // no DB row at all
+      if (o.closedAt) return true;                // closed out
+      return c.status !== 'active';               // terminated/resigned in the workbook
+    };
+    const hiredAt = (c) => {
+      const o = byId[c.slackId];
+      return o?.createdAt ? new Date(o.createdAt).getTime() : -Infinity;
+    };
+    const ordered = [...CLASS_SLACK_IDS].sort((a, b) => {
+      const ga = isGone(a);
+      const gb = isGone(b);
+      if (ga !== gb) return ga ? 1 : -1;          // still here beats gone
+      return hiredAt(b) - hiredAt(a);             // newest hire first within each group
+    });
+
+    let goneBannerWritten = false;
+    for (const c of ordered) {
       const o = byId[c.slackId];
       if (o) matched += 1;
       const p = o ? perfBy[o.id] : null;
       if (p) withPerf += 1;
+
+      if (isGone(c) && !goneBannerWritten) {
+        join.push([]);
+        join.push(['— NO LONGER AT GOGO, OR NO MATCHING RECORD —']);
+        goneBannerWritten = true;
+      }
+
       join.push([
         c.slackId,
         c.name,
         c.cohort,
         c.status,
-        o ? '✅' : '❌ no row',
+        // A Slack ID with no row is worth naming as such rather than a bare cross:
+        // it means the ID we were given does not exist in the operators table, which
+        // is a different problem from someone simply having left.
+        o ? '✅' : '❌ no row — this Slack ID is not in the operators table',
         o ? `${fmt(o.firstName)} ${fmt(o.lastName)}`.trim() : '',
         fmt(o?.createdAt),
         fmt(o?.closedAt),

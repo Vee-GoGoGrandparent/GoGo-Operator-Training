@@ -189,7 +189,6 @@ export async function writeTab(title, rows, spreadsheetId = BUILD_SHEET_ID, opts
       }).catch(() => null);
       rows = matchExistingOrder(cur?.data?.values?.[0], rows, opts.keepColumnOrderFromRow);
     }
-    await api.spreadsheets.values.clear({ spreadsheetId, range: `'${title}'!A:ZZ` });
   }
 
   if (!rows.length) return;
@@ -202,12 +201,48 @@ export async function writeTab(title, rows, spreadsheetId = BUILD_SHEET_ID, opts
     return padded.map((c) => (typeof c === 'string' && c.length > 49_000 ? `${c.slice(0, 49_000)}…` : c));
   });
 
+  // UPDATE IN PLACE, then clear only what is genuinely left over.
+  //
+  // This used to clear A:ZZ first and rewrite everything. Vee: "make sure you're
+  // updating the necessary information. You're not removing everything and then
+  // reloading, which you tend to do that often."
+  //
+  // She is right, and the old way was destructive in a way that is easy to miss:
+  // wiping A:ZZ removes every column, including ones she added to the right that this
+  // code knows nothing about. Overwriting only the cells we actually produce leaves
+  // her columns, her notes and her layout alone.
+  //
+  // Stale rows below the new data still have to go, or a shorter run would leave last
+  // week's rows hanging underneath. But that clear is bounded to OUR columns and only
+  // the rows past the end — never the whole sheet.
   await api.spreadsheets.values.update({
     spreadsheetId,
     range: `'${title}'!A1`,
     valueInputOption: 'RAW',
     requestBody: { values: grid },
   });
+
+  const tab = (await api.spreadsheets.get({ spreadsheetId })).data.sheets
+    .find((s) => s.properties.title === title);
+  const rowCount = tab?.properties?.gridProperties?.rowCount ?? 0;
+  if (rowCount > grid.length) {
+    const lastCol = colLetter(width);
+    await api.spreadsheets.values.clear({
+      spreadsheetId,
+      range: `'${title}'!A${grid.length + 1}:${lastCol}${rowCount}`,
+    }).catch(() => {});
+  }
+}
+
+/** 1 -> A, 26 -> Z, 27 -> AA. Used to bound a clear to the columns we wrote. */
+function colLetter(n) {
+  let s = '';
+  while (n > 0) {
+    const r = (n - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
 }
 
 // GoGo brand palette. Every tab this project creates uses these and nothing else.
