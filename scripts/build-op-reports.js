@@ -151,33 +151,61 @@ async function main() {
   // Header row FIRST, notes underneath — the shape Vee rearranged these into by hand.
   // It is the better shape: row 1 headers means the freeze and the column matching
   // both land where they should.
-  await writeTab('10 Op Reports — Who & When', [
-    ['What', 'Count', 'Note'],
-    [`${s.total} reports, ${s.firstDate} to ${s.lastDate}. Last updated ${asOf}.`],
-    ['Working detail. The team-facing summary is the "Op Reports" tab on the tracker sheet.'],
-    [''],
-    [`${s.byOperator.length} different operators appear across ${s.total} reports. The most-reported has ${s.byOperator[0]?.[1] ?? 0}.`],
-    ['That spread matters: this is not a handful of people, so it is unlikely to be fixed by coaching a handful of people.'],
-    [''],
-    ['By week', 'Reports'],
-    ...s.byWeek.map(([w, n]) => [w, n]),
-    [''],
-    ['By report type', 'Count'],
-    ...s.byType.map(([t, n]) => [t, n]),
-    [''],
-    ['Who filed them', 'Count', 'Reviewers differ enormously in how much they file. Read operator counts against this.'],
-    ...s.byReporter.map(([r, n]) => [r, n]),
-    [''],
-    ['Team lead named on the report', 'Count'],
-    ...s.byLead.map(([l, n]) => [l, n]),
-    [''],
-    ['Operator named on the report', 'Count', 'Cut off below 2 — a single report is noise.'],
-    ...s.byOperator.filter(([, n]) => n >= 2).map(([o, n]) => [o, n]),
-  ], BUILD_SHEET_ID, { keepColumnOrderFromRow: 0 });
-  await formatHeader('10 Op Reports — Who & When', { bandRows: true, spreadsheetId: BUILD_SHEET_ID }).catch(() => {});
+  //
+  // Section headers get indigo, white, bold and CENTRED, which is exactly what she
+  // applied to rows 1, 8, 15 and 19 by hand. Read back off the sheet, not guessed.
+  const who = [];
+  const whoIndigo = [];
+  const wPush = (cells) => who.push(cells);
+  const wSection = (...cells) => { whoIndigo.push(who.length); who.push(cells); };
 
-  // Header row FIRST. Vee moved it to row 1 and moved Operator up next to Date;
-  // keepColumnOrderFromRow makes both survive, instead of a rebuild undoing her work.
+  wSection('What', 'Count', 'Note');
+  wPush([`${s.total} reports, ${s.firstDate} to ${s.lastDate}. Last updated ${asOf}.`]);
+  wPush(['Working detail. The team-facing summary is the "Op Reports" tab on the tracker sheet.']);
+  wPush(['']);
+  wPush([`${s.byOperator.length} different operators appear across ${s.total} reports. The most-reported has ${s.byOperator[0]?.[1] ?? 0}.`]);
+  wPush(['That spread matters: this is not a handful of people, so it is unlikely to be fixed by coaching a handful of people.']);
+  wPush(['']);
+
+  wSection('By week', 'Reports');
+  for (const [w, n] of s.byWeek) wPush([w, n]);
+  wPush(['']);
+
+  wSection('By report type', 'Count');
+  for (const [t, n] of s.byType) wPush([t, n]);
+  wPush(['']);
+
+  wSection('Who filed them', 'Count', 'Reviewers differ enormously in how much they file. Read operator counts against this.');
+  for (const [r, n] of s.byReporter) wPush([r, n]);
+  wPush(['']);
+
+  wSection('Team lead named on the report', 'Count');
+  for (const [l, n] of s.byLead) wPush([l, n]);
+  wPush(['']);
+
+  // EVERY operator, no cut-off.
+  //
+  // This list used to stop at two or more, with a note calling a single report
+  // "noise". Both were wrong. Vee asked whether the hidden ones were still being
+  // counted — they were, in every total — but the cut-off was hiding 123 of 189
+  // operators, roughly two thirds of the list, on the sheet whose entire purpose is
+  // completeness. And a single op report is not noise to the person who got it.
+  //
+  // The totals were never affected: 123 one-report operators plus 158 reports across
+  // the other 66 is 281, which matches the headline, the report types, the weekly
+  // counts and the row count on the Every Report tab. Checked, not assumed.
+  const onceOnly = s.byOperator.filter(([, n]) => n === 1).length;
+  wSection('Operator named on the report', 'Count', 'Everyone, including the one-report operators. Nothing here is filtered out of any total.');
+  for (const [o, n] of s.byOperator) wPush([o, n]);
+  wPush(['']);
+  wPush([`${s.byOperator.length} operators in total. ${onceOnly} of them appear exactly once; those ${onceOnly} reports are still counted everywhere else on this tab and on the tracker.`]);
+
+  await writeTab('10 Op Reports — Who & When', who, BUILD_SHEET_ID, { keepColumnOrderFromRow: 0 });
+  await formatHeader('10 Op Reports — Who & When', { bandRows: true, spreadsheetId: BUILD_SHEET_ID }).catch(() => {});
+  await formatScorecard('10 Op Reports — Who & When', {
+    indigoRows: whoIndigo, spreadsheetId: BUILD_SHEET_ID,
+  }).catch((e) => console.error('[opreports] section headers:', e.message));
+
   await writeTab('11 Op Reports — Every Report', [
     ['Date', 'Type', 'Department', 'Operator', 'Team Lead', 'Reporter', 'CallLog ID', 'Themes', 'Step skipped?', 'Text cut off?', 'What happened', 'How it should have gone'],
     ['The last column is a reviewer writing down the correct handling. Those are ready-made practice questions — the mistake and its answer, both real.'],

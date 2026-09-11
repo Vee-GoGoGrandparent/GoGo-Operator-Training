@@ -433,25 +433,26 @@ export async function formatBanners(title, rowIndices, { spreadsheetId = BUILD_S
  *
  * All row indices are 0-based over the values written.
  */
-export async function formatScorecard(title, { goalRow, classRows, headerRows, sectionRows, spreadsheetId = BUILD_SHEET_ID } = {}) {
+export async function formatScorecard(title, { goalRow, classRows, headerRows, sectionRows, indigoRows, spreadsheetId = BUILD_SHEET_ID } = {}) {
   const api = sheets();
   const meta = await api.spreadsheets.get({ spreadsheetId });
   const tab = meta.data.sheets.find((s) => s.properties.title === title);
   if (!tab) return;
   const sheetId = tab.properties.sheetId;
 
-  const paint = (i, bg, fg, bold) => ({
+  const paint = (i, bg, fg, bold, align) => ({
     repeatCell: {
       range: { sheetId, startRowIndex: i, endRowIndex: i + 1 },
       cell: {
         userEnteredFormat: {
           textFormat: { bold, foregroundColor: fg },
           ...(bg ? { backgroundColor: bg } : {}),
+          ...(align ? { horizontalAlignment: align } : {}),
           verticalAlignment: 'MIDDLE',
           wrapStrategy: 'WRAP',
         },
       },
-      fields: `userEnteredFormat(textFormat,verticalAlignment,wrapStrategy${bg ? ',backgroundColor' : ''})`,
+      fields: `userEnteredFormat(textFormat,verticalAlignment,wrapStrategy${bg ? ',backgroundColor' : ''}${align ? ',horizontalAlignment' : ''})`,
     },
   });
 
@@ -460,6 +461,9 @@ export async function formatScorecard(title, { goalRow, classRows, headerRows, s
   for (const i of classRows ?? []) requests.push(paint(i, BRAND.cornflower, BRAND.white, true));
   for (const i of headerRows ?? []) requests.push(paint(i, BRAND.lavender, BRAND.black, true));
   for (const i of sectionRows ?? []) requests.push(paint(i, null, BRAND.black, true));
+  // Indigo, white, bold, CENTRED — the treatment Vee applied by hand to the section
+  // headers inside a build-sheet tab, read back off the sheet rather than guessed.
+  for (const i of indigoRows ?? []) requests.push(paint(i, BRAND.indigo, BRAND.white, true, 'CENTER'));
   if (!requests.length) return;
 
   await api.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
