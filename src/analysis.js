@@ -2,9 +2,9 @@
 //
 // Two rules run through all of this:
 //
-//   1. NO BLACK BOX. Every flag carries a sentence saying why it fired, in words
-//      a team lead can read out loud. "Risk score 0.73" helps nobody and cannot be
-//      argued with. "Reg ratio fell from 19% to 6% over the last three weeks" can.
+//   1. NO BLACK BOX. Every flag is something a team lead can read off the sheet and
+//      check for themselves. Priority is now nothing more than the reg ratio against
+//      three numbers Vee set, so anyone can see why a person is where they are.
 //
 //   2. NO VERDICTS. We surface what happened. The trainer decides what it means.
 //      Nothing here concludes that a person is bad.
@@ -29,13 +29,6 @@ export function regCallsOf(row) {
 }
 
 export const ratio = (hardRegs, regCalls) => (regCalls > 0 ? hardRegs / regCalls : null);
-
-export const median = (nums) => {
-  const xs = nums.filter((n) => typeof n === 'number' && !Number.isNaN(n)).sort((a, b) => a - b);
-  if (!xs.length) return null;
-  const mid = Math.floor(xs.length / 2);
-  return xs.length % 2 ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2;
-};
 
 /**
  * Percentages, without trailing zeros nobody needs.
@@ -71,98 +64,35 @@ export function weekKey(date) {
 }
 
 /**
- * Look at one operator's recent weeks and say — in sentences — what is worth the
- * trainer's attention.
+ * PRIORITY — Vee, 2026-09-11. This replaces the old peer-median / volume-drop logic
+ * entirely. Her words: "Watch is anyone under 15% and Escalate is anyone 11% or
+ * under", Strong is "19% and above", and nothing else raises an alarm.
  *
- * `recent` is the last 4 weeks, `prior` the 8 before that. Peer comparison is
- * against operators who started taking calls in the same month, because a
- * three-week-old operator and a three-year-old one are not the same job.
- *
- * Returns { level, flags[] } where level is 'Escalate' | 'Watch' | 'OK' | 'No data'.
+ * The same three numbers drive the red and green on every Reg ratio column (see
+ * ruleColors in sheets.js), so the word in Priority and the colour on the number can
+ * never disagree.
  */
-export function assess({ recent, prior, peerMedianRatio, weeksActive, isSuspended }) {
-  const flags = [];
+export const PRIORITY = { escalateAtOrBelow: 11, watchBelow: 15, strongAtOrAbove: 19 };
 
-  const rRatio = ratio(recent.hardRegs, recent.regCalls);
-  const pRatio = ratio(prior.hardRegs, prior.regCalls);
+/**
+ * A ratio as the sheet SHOWS it: a percentage to one decimal.
+ *
+ * Thresholds are applied to this, not to the raw fraction. Otherwise 10.96 regs out of
+ * 100 would display "11%" and still read as Escalate-or-not depending on digits nobody
+ * can see.
+ */
+export const shownPct = (r) => (r === null || r === undefined ? null : Number((r * 100).toFixed(1)));
 
-  if (isSuspended) {
-    flags.push({ level: 'Escalate', text: 'Currently suspended in the system.' });
-  }
-
-  // Silence is the loudest signal there is: they were working, and now they are not.
-  if (prior.regCalls > 0 && recent.regCalls === 0) {
-    flags.push({
-      level: 'Escalate',
-      text: `No registration calls at all in the last 4 weeks, after ${prior.regCalls} in the 8 weeks before. Find out whether they are still working.`,
-    });
-  } else if (prior.regCalls >= 40 && recent.regCalls > 0) {
-    // Compare like for like: 4 weeks against a 4-week-equivalent slice of the prior 8.
-    const priorPerWeek = prior.regCalls / 8;
-    const recentPerWeek = recent.regCalls / 4;
-    const drop = 1 - recentPerWeek / priorPerWeek;
-    if (drop >= 0.4) {
-      flags.push({
-        level: 'Watch',
-        text: `Call volume down ${Math.round(drop * 100)}% — averaging ${recentPerWeek.toFixed(0)} registration calls a week, was ${priorPerWeek.toFixed(0)}.`,
-      });
-    }
-  }
-
-  // A falling ratio only means something on enough calls to be real.
-  //
-  // And it only counts at all once they are BELOW the goal. Vee's rule: "as long as
-  // they're above the goal, it's fine." Someone who came down from 26% to 18% is
-  // still beating the 15% target and does not belong on anybody's list. The first
-  // live run flagged 113 of 615 people, plenty of them fine, and a list that cries
-  // wolf is one a trainer learns to ignore.
-  if (rRatio !== null && pRatio !== null && recent.regCalls >= 25 && prior.regCalls >= 40 && rRatio < TARGET_HR_RATIO) {
-    const rel = 1 - rRatio / pRatio;
-    if (rel >= 0.3) {
-      flags.push({
-        level: 'Escalate',
-        text: `Reg ratio fell from ${pctStr(pRatio)} to ${pctStr(rRatio)} — down ${Math.round(rel * 100)}% against their own earlier work, and now under the ${pctStr(TARGET_HR_RATIO)} goal.`,
-      });
-    }
-  }
-
-  // Behind the people who started when they did — but again, only once they are
-  // under the goal. Someone at 17% with a 30% peer group is still doing the job.
-  if (rRatio !== null && peerMedianRatio && recent.regCalls >= 25 && rRatio < TARGET_HR_RATIO) {
-    if (rRatio < peerMedianRatio * 0.6) {
-      flags.push({
-        level: 'Escalate',
-        text: `At ${pctStr(rRatio)} against a peer median of ${pctStr(peerMedianRatio)} for operators who started the same month.`,
-      });
-    } else if (rRatio < peerMedianRatio * 0.8) {
-      flags.push({
-        level: 'Watch',
-        text: `At ${pctStr(rRatio)}, below the ${pctStr(peerMedianRatio)} peer median for their start month.`,
-      });
-    }
-  }
-
-  // Had long enough to ramp and still under the number management set.
-  if (rRatio !== null && weeksActive >= 8 && recent.regCalls >= 25 && rRatio < TARGET_HR_RATIO) {
-    flags.push({
-      level: 'Watch',
-      text: `${weeksActive} weeks in and still at ${pctStr(rRatio)}, under the ${pctStr(TARGET_HR_RATIO)} target.`,
-    });
-  }
-
-  // Worth saying out loud — a trainer should know who to hold up as an example.
-  if (!flags.length && rRatio !== null && peerMedianRatio && rRatio > peerMedianRatio * 1.25 && recent.regCalls >= 25) {
-    flags.push({
-      level: 'Strong',
-      text: `At ${pctStr(rRatio)} against a ${pctStr(peerMedianRatio)} peer median — worth studying what they do.`,
-    });
-  }
-
-  let level = 'OK';
-  if (rRatio === null && recent.regCalls === 0 && prior.regCalls === 0) level = 'No data';
-  if (flags.some((f) => f.level === 'Watch')) level = 'Watch';
-  if (flags.some((f) => f.level === 'Escalate')) level = 'Escalate';
-  if (flags.length === 1 && flags[0].level === 'Strong') level = 'Strong';
-
-  return { level, flags, recentRatio: rRatio, priorRatio: pRatio };
+/**
+ * Priority from ONE ratio — the operator's current month (Vee's choice). No minimum
+ * number of calls: she chose that knowingly, so the first days of a month will swing.
+ * No calls at all in the month means there is no ratio to judge: "No data".
+ */
+export function priorityOf(r) {
+  const p = shownPct(r);
+  if (p === null) return 'No data';
+  if (p <= PRIORITY.escalateAtOrBelow) return 'Escalate';
+  if (p < PRIORITY.watchBelow) return 'Watch';
+  if (p >= PRIORITY.strongAtOrAbove) return 'Strong';
+  return 'OK';
 }

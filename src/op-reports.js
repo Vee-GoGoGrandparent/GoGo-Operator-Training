@@ -45,6 +45,47 @@
 // `jasper`, `positive-sun`). Those look like a tagging convention somebody already
 // uses by hand. Nothing here reads them yet.
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+export const ARCHIVE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'op-reports');
+
+/** Every archived pull, merged and deduped by Slack message timestamp. */
+export function loadArchive(dir = ARCHIVE_DIR) {
+  if (!fs.existsSync(dir)) return [];
+  const byTs = new Map();
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.json'))) {
+    const rows = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+    for (const r of rows) byTs.set(r.ts, r);
+  }
+  return [...byTs.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+}
+
+/** Accents off, lower case, letters only — "Canaña" on a form and "Canana" are one person. */
+const nameTokens = (s) => String(s || '')
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase().replace(/[^a-z ]/g, ' ')
+  .split(/\s+/).filter((t) => t.length > 1 && t !== 'jr' && t !== 'sr');
+
+/**
+ * Is this op report about this trainee?
+ *
+ * The form's "Contractor Name" is typed by a reviewer, so it is never exactly the
+ * class workbook's spelling: "Rizza Abubacar" for "Rizza E. Abubacar", "Karl Ullmer
+ * Polinar" for "Karl Polinar". First AND last name must both appear.
+ *
+ * Checked against the archive 2026-09-11: 47 trainees, 70 reports, and no report
+ * matched two trainees. Last-name-only matches were all different people (Mark Jason
+ * Villegas is not Faye Marie Villegas), which is why a surname alone is not enough.
+ */
+export function isReportAbout(traineeName, contractor) {
+  const want = nameTokens(traineeName);
+  if (!want.length) return false;
+  const got = nameTokens(contractor);
+  return got.includes(want[0]) && got.includes(want[want.length - 1]);
+}
+
 /**
  * THEMES — and why a report can sit in more than one.
  *

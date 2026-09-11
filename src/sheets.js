@@ -88,6 +88,34 @@ function rawClient() {
 }
 
 /**
+ * GOOGLE'S PER-MINUTE LIMIT.
+ *
+ * Sheets allows a fixed number of reads per minute for this account, and a full
+ * tracker run uses a good share of it. On 2026-09-11 a check run straight after a
+ * tracker run was refused with 429 "Read requests per minute". The client library
+ * retries a 429 three times within a few seconds, which is too soon to help — the
+ * allowance only refills when the minute is up.
+ *
+ * So on a 429 this waits a full minute and tries once more, at most three times.
+ * That is Google's documented remedy for this limit, and it is a different thing from
+ * knocking again on a service that has refused us: the refusal says "not this minute",
+ * and we come back next minute.
+ */
+const QUOTA_WAIT_MS = 65_000;
+async function withQuotaWait(fn, params, rest) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await fn(params, ...rest);
+    } catch (err) {
+      const status = err?.code ?? err?.response?.status;
+      if (Number(status) !== 429 || attempt > 3) throw err;
+      console.log(`[sheets] Google's per-minute limit reached — waiting a minute (${attempt}/3)`);
+      await new Promise((r) => setTimeout(r, QUOTA_WAIT_MS));
+    }
+  }
+}
+
+/**
  * A Sheets client whose every call is checked against OPS_SHEET_ID first.
  * Use this. Never reach for rawClient().
  */
@@ -95,7 +123,7 @@ export function sheets() {
   const api = rawClient();
   const check = (fn) => (params, ...rest) => {
     assertOurSheet(params?.spreadsheetId);
-    return fn(params, ...rest);
+    return withQuotaWait(fn, params, rest);
   };
   return {
     spreadsheets: {
@@ -111,11 +139,6 @@ export function sheets() {
   };
 }
 
-/**
- * Create the tab if it is missing, then replace its contents with `rows`.
- * Defaults to the BUILD sheet — writing to the team-facing tracker has to be
- * an explicit choice, never something that happens because a default drifted.
- */
 /**
  * Rewrite `rows` so its columns sit in whatever order the tab already uses.
  *
@@ -139,8 +162,13 @@ export function sheets() {
  *
  * `headerRowIndex` is which row holds the headers — several tabs open with a title
  * and a note before the real header row.
+ *
+ * `freeOrder` names columns whose order comes from the DATA, not from a person: the
+ * week columns on Weekly Trend. Their old positions are ignored, so they always come
+ * out in date order after her columns. Without it, weeks that turned up later were
+ * appended after newer ones and the trend read W32…W37, W28…W31.
  */
-export function matchExistingOrder(existingHeader, rows, headerRowIndex) {
+export function matchExistingOrder(existingHeader, rows, headerRowIndex, freeOrder = null) {
   if (!existingHeader?.length) return rows;
   const header = rows[headerRowIndex];
   if (!header?.length) return rows;
@@ -155,7 +183,9 @@ export function matchExistingOrder(existingHeader, rows, headerRowIndex) {
   if (overlap.length < 2) return rows;
 
   const order = [];
-  for (const h of existingHeader.map(norm)) {
+  for (const raw of existingHeader) {
+    if (freeOrder && freeOrder.test(String(raw ?? '').trim())) continue;
+    const h = norm(raw);
     const i = ours.indexOf(h);
     if (h && i !== -1 && !order.includes(i)) order.push(i);
   }
@@ -167,33 +197,61 @@ export function matchExistingOrder(existingHeader, rows, headerRowIndex) {
 }
 
 /**
+ * Create the tab if it is missing, then write `rows` into it.
+ * Defaults to the BUILD sheet — writing to the team-facing tracker has to be
+ * an explicit choice, never something that happens because a default drifted.
+ *
  * @param {object} [opts]
  * @param {number} [opts.keepColumnOrderFromRow] header row index to match against the
  *   tab's existing column order. Omit to write columns exactly as given.
+ * @param {RegExp} [opts.freeOrder] header pattern for data-driven columns; see
+ *   matchExistingOrder. Those columns are also cleared when they stop being produced.
+ * @param {boolean} [opts.readOld] also return the values that were on the tab before
+ *   this write, so the caller can tell which old row was which kind of row.
+ * @param {boolean} [opts.unmergeFirst] take merged cells apart BEFORE writing. Only for
+ *   a caller that puts the right merges back afterwards (restyleRows). Google discards
+ *   anything written into the hidden part of a merged cell — on 2026-09-11 that blanked
+ *   the date and window on Scorecard rows that used to be merged note rows.
+ * @returns {{ created, prevWidth, width, header, oldValues }}
  */
 export async function writeTab(title, rows, spreadsheetId = BUILD_SHEET_ID, opts = {}) {
   const api = sheets();
-  const meta = await api.spreadsheets.get({ spreadsheetId });
-  const existing = meta.data.sheets.find((s) => s.properties.title === title);
+  const meta = await api.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets(properties(sheetId,title,gridProperties),merges)',
+  });
+  let tab = meta.data.sheets.find((s) => s.properties.title === title);
+  const created = !tab;
+  const hri = typeof opts.keepColumnOrderFromRow === 'number' ? opts.keepColumnOrderFromRow : null;
+  let prevWidth = 0;
+  let existingHeader = null;
+  let oldValues = [];
 
-  if (!existing) {
-    await api.spreadsheets.batchUpdate({
+  if (created) {
+    const res = await api.spreadsheets.batchUpdate({
       spreadsheetId,
       requestBody: { requests: [{ addSheet: { properties: { title } } }] },
     });
+    tab = { properties: res.data.replies[0].addSheet.properties, merges: [] };
   } else {
-    // Read the header BEFORE clearing, so a hand-arranged column order can be kept.
-    if (typeof opts.keepColumnOrderFromRow === 'number') {
-      const hr = opts.keepColumnOrderFromRow + 1;
-      const cur = await api.spreadsheets.values.get({
-        spreadsheetId,
-        range: `'${title}'!A${hr}:ZZ${hr}`,
-      }).catch(() => null);
-      rows = matchExistingOrder(cur?.data?.values?.[0], rows, opts.keepColumnOrderFromRow);
+    if (opts.readOld) oldValues = await readTab(title, { spreadsheetId });
+    // Read the header BEFORE writing, so a hand-arranged column order can be kept.
+    if (hri !== null) {
+      if (opts.readOld) {
+        existingHeader = oldValues[hri] ?? null;
+      } else {
+        const cur = await api.spreadsheets.values.get({
+          spreadsheetId,
+          range: `'${title}'!A${hri + 1}:ZZ${hri + 1}`,
+        }).catch(() => null);
+        existingHeader = cur?.data?.values?.[0] ?? null;
+      }
+      prevWidth = existingHeader?.length ?? 0;
+      rows = matchExistingOrder(existingHeader, rows, hri, opts.freeOrder);
     }
   }
 
-  if (!rows.length) return;
+  if (!rows.length) return { created, prevWidth, width: 0, header: [], oldValues };
 
   // Sheets rejects a jagged grid, so pad every row to the widest one. Cells are
   // capped at 50k characters — call summaries can exceed that.
@@ -202,6 +260,25 @@ export async function writeTab(title, rows, spreadsheetId = BUILD_SHEET_ID, opts
     const padded = [...r, ...Array(width - r.length).fill('')];
     return padded.map((c) => (typeof c === 'string' && c.length > 49_000 ? `${c.slice(0, 49_000)}…` : c));
   });
+
+  // Room for a new column or more rows, and merges out of the way, before any value
+  // is written.
+  const sheetId = tab.properties.sheetId;
+  const gp = tab.properties.gridProperties ?? {};
+  const prep = [];
+  if ((gp.rowCount ?? 0) < grid.length) {
+    prep.push({ appendDimension: { sheetId, dimension: 'ROWS', length: grid.length - (gp.rowCount ?? 0) } });
+  }
+  if ((gp.columnCount ?? 0) < width) {
+    prep.push({ appendDimension: { sheetId, dimension: 'COLUMNS', length: width - (gp.columnCount ?? 0) } });
+  }
+  if (opts.unmergeFirst) {
+    for (const m of tab.merges ?? []) {
+      if ((m.startColumnIndex ?? 0) < width) prep.push({ unmergeCells: { range: m } });
+    }
+  }
+  if (prep.length) await api.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: prep } });
+  const rowCount = Math.max(gp.rowCount ?? 0, grid.length);
 
   // UPDATE IN PLACE, then clear only what is genuinely left over.
   //
@@ -224,16 +301,27 @@ export async function writeTab(title, rows, spreadsheetId = BUILD_SHEET_ID, opts
     requestBody: { values: grid },
   });
 
-  const tab = (await api.spreadsheets.get({ spreadsheetId })).data.sheets
-    .find((s) => s.properties.title === title);
-  const rowCount = tab?.properties?.gridProperties?.rowCount ?? 0;
   if (rowCount > grid.length) {
-    const lastCol = colLetter(width);
     await api.spreadsheets.values.clear({
       spreadsheetId,
-      range: `'${title}'!A${grid.length + 1}:${lastCol}${rowCount}`,
+      range: `'${title}'!A${grid.length + 1}:${colLetter(width)}${rowCount}`,
     }).catch(() => {});
   }
+
+  // A data-driven column that is no longer produced (a week that has dropped out of
+  // the window) would otherwise sit on the right with frozen numbers. Only columns
+  // whose header matches `freeOrder` are ever cleared this way — never one of hers.
+  if (opts.freeOrder && existingHeader) {
+    for (let c = width; c < existingHeader.length; c += 1) {
+      if (!opts.freeOrder.test(String(existingHeader[c] ?? '').trim())) continue;
+      const L = colLetter(c + 1);
+      await api.spreadsheets.values.clear({ spreadsheetId, range: `'${title}'!${L}1:${L}${rowCount}` }).catch(() => {});
+    }
+  }
+
+  // `merges` is what was merged when this call started — restyleRows copies from it,
+  // because with unmergeFirst the tab itself no longer shows them.
+  return { created, prevWidth, width, header: grid[hri ?? 0], oldValues, merges: tab.merges ?? [] };
 }
 
 /** 1 -> A, 26 -> Z, 27 -> AA. Used to bound a clear to the columns we wrote. */
@@ -273,7 +361,7 @@ export const BRAND = {
 };
 
 /**
- * Indigo header, white bold text, frozen top row, auto-sized columns.
+ * Indigo header, white bold text, frozen top row. For a BRAND-NEW tab only.
  * Cosmetic, but these tabs get read by a trainer who did not ask for a database.
  */
 export async function formatHeader(title, { bandRows = false, spreadsheetId = BUILD_SHEET_ID } = {}) {
@@ -292,10 +380,9 @@ export async function formatHeader(title, { bandRows = false, spreadsheetId = BU
             textFormat: { bold: true, foregroundColor: BRAND.white, fontSize: 10 },
             backgroundColor: BRAND.indigo,
             verticalAlignment: 'MIDDLE',
-            wrapStrategy: 'CLIP',
           },
         },
-        fields: 'userEnteredFormat(textFormat,backgroundColor,verticalAlignment,wrapStrategy)',
+        fields: 'userEnteredFormat(textFormat,backgroundColor,verticalAlignment)',
       },
     },
     {
@@ -308,10 +395,11 @@ export async function formatHeader(title, { bandRows = false, spreadsheetId = BU
 
   // Column widths and wrapping are DELIBERATELY not touched.
   //
-  // There used to be an autoResizeDimensions call here. It had to go: Vee sets column
-  // widths and wrap by hand, and this job reruns on a schedule. Auto-resizing would
-  // quietly undo her layout every single time, and she would have to redo it. A
-  // rebuild refreshes the numbers; it does not get an opinion about the layout.
+  // There used to be an autoResizeDimensions call here, and later a forced
+  // wrapStrategy: 'CLIP'. Both had to go. Vee sets column widths and wraps her header
+  // rows by hand, and the CLIP undid her wrap on every scheduled run (found
+  // 2026-09-11). A rebuild refreshes the numbers; it does not get an opinion about the
+  // layout.
 
   if (bandRows) {
     requests.push({
@@ -372,98 +460,273 @@ export async function bandRow(title, rowIndex, spreadsheetId = BUILD_SHEET_ID) {
   });
 }
 
+const clone = (f) => (f ? JSON.parse(JSON.stringify(f)) : null);
+
 /**
- * Colour the Priority column by what it says.
+ * Give every row the look of its KIND, copied from how Vee has styled that kind.
  *
- * Deliberately CONDITIONAL formatting rather than painting cells. Every run rebuilds
- * these tabs and the rows re-sort, so a colour baked onto row 8 would end up on
- * whoever happens to land in row 8 next week. A rule that follows the word cannot
- * drift. It also means a human editing the sheet by hand gets the same colours.
+ * THE PROBLEM THIS SOLVES (found 2026-09-11)
+ * Cell formatting in Google Sheets belongs to a POSITION, not to the data in it. These
+ * tabs re-sort and grow every run, so formatting that was right yesterday lands on the
+ * wrong row today:
+ *   - A class banner painted on row 37 stayed cornflower after row 37 became a person.
+ *   - Reg ratio cells coloured red and green by hand ended up on other people —
+ *     Arianne Comique at 7.1% was showing green.
+ *   - Adding a "who left" list to the Scorecard would have pushed her merged rows onto
+ *     rows holding numbers, hiding them.
  *
- * Applies to the whole tab, so it catches the Priority column wherever it sits and
- * the Status column when it says the same thing.
+ * THE RULE
+ * Each row is labelled with a kind (header, stamp, classBanner, active, gone, blank on
+ * the per-person tabs; goal, classTitle, colHeader, figures, whoLeftRow, section, note
+ * on the Scorecard). Before anything is restyled, the rows ALREADY on the tab are
+ * sorted into the same kinds, and each kind's look — every cell's format and its
+ * merges — is taken from the rows of that kind as she left them. Where rows of one
+ * kind disagree, the most common look wins, so one drifted row cannot become the
+ * pattern. Then every row is given its kind's look.
+ *
+ * So her styling always wins, including changes she makes tomorrow: restyle a header
+ * row, and every header row of that kind follows on the next run. `defaults` is only
+ * the first-time look for a kind the tab has never had, and `fallback` borrows a
+ * similar kind's look (a "gone" row looks like an "active" row) before a default is used.
+ *
+ * Not touched: column widths, row heights, frozen rows/columns, banding, conditional
+ * formatting, tab order.
+ *
+ * @param {object} o
+ * @param {string[]} o.oldKinds  kind of each row that was on the tab before this run
+ * @param {string[]} o.newKinds  kind of each row just written
+ * @param {number}   o.width     columns written
+ * @param {number|null} o.newColsFrom first column index the tab never had before; those
+ *   columns copy the look of the column to their left
+ * @param {object} [o.adjust]    kind -> function(format) for a rule Vee stated in words
+ *   (the "Last updated" line is italic, never bold)
  */
-export async function priorityColors(title, { spreadsheetId = BUILD_SHEET_ID } = {}) {
+export async function restyleRows(title, {
+  spreadsheetId = BUILD_SHEET_ID, oldKinds = [], newKinds, width, newColsFrom = null,
+  defaults = {}, fallback = {}, mergesByKind = {}, adjust = {}, oldMerges = null,
+} = {}) {
   const api = sheets();
-  const meta = await api.spreadsheets.get({ spreadsheetId });
+  const head = await api.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets(properties(sheetId,title,gridProperties),merges)',
+  });
+  const tab = head.data.sheets.find((s) => s.properties.title === title);
+  if (!tab) return;
+  const sheetId = tab.properties.sheetId;
+  // The whole width she has formatted, not just the columns we write: her banners run
+  // to column X on Hard Regs, and a banner's colour left behind in Q:X would still sit
+  // on a person's row after a re-sort.
+  const cols = Math.max(width, tab.properties.gridProperties?.columnCount ?? 0);
+  const inCols = (m) => (m.startColumnIndex ?? 0) < cols;
+  // `merges` = what is merged right now, to take apart. `before` = what was merged when
+  // the run started, to copy from. They differ when writeTab already unmerged
+  // (unmergeFirst), which it must do before writing values into merged cells.
+  const merges = (tab.merges ?? []).filter(inCols);
+  const before = (oldMerges ?? tab.merges ?? []).filter(inCols);
+  const oldRows = oldKinds.length;
+
+  let rowData = [];
+  if (oldRows) {
+    const g = await api.spreadsheets.get({
+      spreadsheetId,
+      ranges: [`'${title}'!A1:${colLetter(cols)}${oldRows}`],
+      includeGridData: true,
+      fields: 'sheets(data(rowData(values(userEnteredFormat))))',
+    });
+    rowData = g.data.sheets[0].data?.[0]?.rowData ?? [];
+  }
+  const formatsOf = (i) => Array.from({ length: cols }, (_, c) => rowData[i]?.values?.[c]?.userEnteredFormat ?? null);
+
+  const templates = {};
+  const pick = (kind) => {
+    if (kind in templates) return templates[kind];
+    const tally = new Map();
+    oldKinds.forEach((k, i) => {
+      if (k !== kind) return;
+      const key = JSON.stringify(formatsOf(i));
+      if (!tally.has(key)) tally.set(key, { i, n: 0 });
+      tally.get(key).n += 1;
+    });
+    if (!tally.size) return (templates[kind] = null);
+    const row = [...tally.values()].sort((a, b) => b.n - a.n || a.i - b.i)[0].i;
+    return (templates[kind] = {
+      cells: formatsOf(row),
+      merges: before
+        .filter((m) => m.startRowIndex === row && m.endRowIndex === row + 1)
+        .map((m) => [m.startColumnIndex ?? 0, Math.min(m.endColumnIndex ?? cols, cols)]),
+    });
+  };
+
+  const looks = {};
+  const lookOf = (kind) => {
+    if (looks[kind]) return looks[kind];
+    const own = pick(kind);
+    const borrowed = !own && fallback[kind] ? pick(fallback[kind]) : null;
+    let cells;
+    if (own) cells = own.cells.map(clone);
+    else if (borrowed) cells = borrowed.cells.map(clone);
+    else cells = Array.from({ length: cols }, () => clone(defaults[kind] ?? null));
+    if (newColsFrom !== null && newColsFrom > 0) {
+      for (let c = newColsFrom; c < width; c += 1) cells[c] = clone(cells[newColsFrom - 1]);
+    }
+    if (adjust[kind]) cells = cells.map((f) => adjust[kind](f ?? {}));
+    // A kind's merges come from Vee's rows of that kind when there are any. A kind
+    // this code introduced (the who-left list) uses its own.
+    const ownMerges = own && own.merges.length ? own.merges : null;
+    return (looks[kind] = { cells, merges: ownMerges ?? mergesByKind[kind] ?? [] });
+  };
+
+  const requests = [];
+  // Every old merge comes apart first. The ones that belong are put back below, on the
+  // rows that are that kind NOW — a merge left where it was would hide a row of numbers.
+  for (const m of merges) requests.push({ unmergeCells: { range: m } });
+
+  newKinds.forEach((kind, i) => {
+    const look = lookOf(kind);
+    requests.push({
+      updateCells: {
+        start: { sheetId, rowIndex: i, columnIndex: 0 },
+        rows: [{ values: look.cells.map((f) => ({ userEnteredFormat: f ?? {} })) }],
+        fields: 'userEnteredFormat',
+      },
+    });
+    for (const [s, e] of look.merges) {
+      requests.push({
+        mergeCells: {
+          mergeType: 'MERGE_ALL',
+          range: { sheetId, startRowIndex: i, endRowIndex: i + 1, startColumnIndex: s, endColumnIndex: e },
+        },
+      });
+    }
+  });
+
+  // Rows the tab no longer uses lose their old look too, or a banner colour would sit
+  // on empty rows below the data.
+  const lastOld = Math.max(oldRows, ...merges.map((m) => m.endRowIndex ?? 0));
+  for (let i = newKinds.length; i < lastOld; i += 1) {
+    requests.push({
+      updateCells: {
+        start: { sheetId, rowIndex: i, columnIndex: 0 },
+        rows: [{ values: Array.from({ length: cols }, () => ({ userEnteredFormat: {} })) }],
+        fields: 'userEnteredFormat',
+      },
+    });
+  }
+
+  if (requests.length) await api.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
+}
+
+/** A formula rule written by ruleColors — how it recognises its own rules later. */
+const RATIO_RULE = /SUBSTITUTE\([A-Z]+\d+,"%",""\)/;
+const PRIORITY_WORDS = ['Escalate', 'Watch', 'Strong'];
+
+/**
+ * Colour by RULE, never by paint — the colour follows the value when rows re-sort.
+ *
+ * 1. Priority words anywhere on the tab: Escalate and Watch in Vee's red, Strong in her
+ *    green, with her pale fills.
+ * 2. Every column whose header starts "Reg ratio": bold red under 15%, bold green at
+ *    19% and above — the thresholds Vee set 2026-09-11, the same ones Priority uses, and
+ *    the same bold-text-no-fill look she had painted by hand. The cells hold text like
+ *    "13.8%", so the rule reads the number back out of the text.
+ *
+ * Only rules this function made are replaced. It used to delete EVERY conditional
+ * format on the tab, which would have thrown away any rule Vee added herself.
+ *
+ * `header` is the header row as just written, when the caller has it — saves a read.
+ */
+export async function ruleColors(title, {
+  spreadsheetId = BUILD_SHEET_ID, headerRowIndex = 0, ratioHeader = null, header = null, redBelow = 15, greenFrom = 19,
+} = {}) {
+  const api = sheets();
+  const meta = await api.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets(properties(sheetId,title,gridProperties),conditionalFormats)',
+  });
   const tab = meta.data.sheets.find((s) => s.properties.title === title);
   if (!tab) return;
   const sheetId = tab.properties.sheetId;
+  const rowCount = tab.properties.gridProperties?.rowCount ?? 1000;
 
-  // Drop any rules we added before, so repeated runs do not stack duplicates.
-  const existing = tab.conditionalFormats?.length ?? 0;
-  const requests = [];
-  for (let i = existing - 1; i >= 0; i -= 1) {
-    requests.push({ deleteConditionalFormatRule: { sheetId, index: i } });
+  const isOurs = (cf) => {
+    const c = cf.booleanRule?.condition;
+    const v = c?.values?.[0]?.userEnteredValue ?? '';
+    if (c?.type === 'TEXT_EQ') return PRIORITY_WORDS.includes(v);
+    if (c?.type === 'CUSTOM_FORMULA') return RATIO_RULE.test(v);
+    return false;
+  };
+  const ours = [];
+  (tab.conditionalFormats ?? []).forEach((cf, i) => { if (isOurs(cf)) ours.push(i); });
+  const deletes = ours.reverse().map((index) => ({ deleteConditionalFormatRule: { sheetId, index } }));
+
+  const add = (range, condition, format) => ({
+    addConditionalFormatRule: { index: 0, rule: { ranges: [range], booleanRule: { condition, format } } },
+  });
+  const adds = [];
+  const dataFrom = headerRowIndex + 1;
+
+  for (const [word, fg, bg] of [['Escalate', BRAND.badText, BRAND.badFill], ['Watch', BRAND.badText, BRAND.badFill], ['Strong', BRAND.goodText, BRAND.goodFill]]) {
+    adds.push(add(
+      { sheetId, startRowIndex: dataFrom, endRowIndex: rowCount },
+      { type: 'TEXT_EQ', values: [{ userEnteredValue: word }] },
+      { backgroundColor: bg, textFormat: { foregroundColor: fg, bold: true } },
+    ));
   }
 
-  const rule = (text, fg, bg) => ({
-    addConditionalFormatRule: {
-      index: 0,
-      rule: {
-        ranges: [{ sheetId, startRowIndex: 1 }],
-        booleanRule: {
-          condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: text }] },
-          format: { backgroundColor: bg, textFormat: { foregroundColor: fg, bold: true } },
-        },
-      },
-    },
-  });
+  if (ratioHeader) {
+    const hdr = header ?? (await readTab(title, { spreadsheetId, range: `A${dataFrom}:ZZ${dataFrom}` }))[0] ?? [];
+    hdr.forEach((h, c) => {
+      if (!ratioHeader.test(String(h ?? '').trim())) return;
+      const cell = `${colLetter(c + 1)}${dataFrom + 1}`;
+      const num = (fallbackValue) => `IFERROR(VALUE(SUBSTITUTE(${cell},"%","")),${fallbackValue})`;
+      const range = { sheetId, startRowIndex: dataFrom, endRowIndex: rowCount, startColumnIndex: c, endColumnIndex: c + 1 };
+      adds.push(add(range,
+        { type: 'CUSTOM_FORMULA', values: [{ userEnteredValue: `=AND(${cell}<>"",${num(999)}<${redBelow})` }] },
+        { textFormat: { foregroundColor: BRAND.badText, bold: true } }));
+      adds.push(add(range,
+        { type: 'CUSTOM_FORMULA', values: [{ userEnteredValue: `=AND(${cell}<>"",${num(-1)}>=${greenFrom})` }] },
+        { textFormat: { foregroundColor: BRAND.goodText, bold: true } }));
+    });
+  }
 
-  requests.push(
-    rule('Escalate', BRAND.badText, BRAND.badFill),
-    rule('Watch', BRAND.badText, BRAND.badFill),
-    rule('Strong', BRAND.goodText, BRAND.goodFill),
-  );
-
-  await api.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
+  await api.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: [...deletes, ...adds] } });
 }
 
 /**
- * Paint a set of rows as section banners: cornflower ground, white bold text.
- *
- * The colour is not a guess — it was read back off the tab after Vee styled a row by
- * hand (#454EBD, which is already the GoGo cornflower in BRAND). Section headings are
- * generated now rather than typed in, because every rebuild rewrites the rows and a
- * hand-added banner would vanish on the next run.
- *
- * `rowIndices` are 0-based over the values written, so index 1 is the second row.
+ * Stretch the tab's existing alternating-row colours over any new rows or columns.
+ * Only ever grows the range, never shrinks it, and never changes Vee's colours.
  */
-export async function formatBanners(title, rowIndices, { spreadsheetId = BUILD_SHEET_ID } = {}) {
-  if (!rowIndices?.length) return;
+export async function extendBanding(title, { spreadsheetId = BUILD_SHEET_ID, rows, cols } = {}) {
   const api = sheets();
-  const meta = await api.spreadsheets.get({ spreadsheetId });
+  const meta = await api.spreadsheets.get({ spreadsheetId, fields: 'sheets(properties(sheetId,title),bandedRanges)' });
   const tab = meta.data.sheets.find((s) => s.properties.title === title);
-  if (!tab) return;
-  const sheetId = tab.properties.sheetId;
-
-  await api.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: rowIndices.map((i) => ({
-        repeatCell: {
-          range: { sheetId, startRowIndex: i, endRowIndex: i + 1 },
-          cell: {
-            userEnteredFormat: {
-              textFormat: { bold: true, foregroundColor: BRAND.white },
-              backgroundColor: BRAND.cornflower,
-              verticalAlignment: 'MIDDLE',
-            },
-          },
-          fields: 'userEnteredFormat(textFormat,backgroundColor,verticalAlignment)',
+  if (!tab?.bandedRanges?.length) return;
+  const requests = [];
+  for (const b of tab.bandedRanges) {
+    const r = b.range;
+    const needRows = r.endRowIndex !== undefined && r.endRowIndex < rows;
+    const needCols = r.endColumnIndex !== undefined && r.endColumnIndex < cols;
+    if (!needRows && !needCols) continue;
+    requests.push({
+      updateBanding: {
+        bandedRange: {
+          bandedRangeId: b.bandedRangeId,
+          range: { ...r, ...(needRows ? { endRowIndex: rows } : {}), ...(needCols ? { endColumnIndex: cols } : {}) },
         },
-      })),
-    },
-  });
+        fields: 'range',
+      },
+    });
+  }
+  if (requests.length) await api.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
 }
 
 /**
  * Paint a tab that is not one flat table.
  *
- * Used by the Scorecard and by Op Reports: a goal row, section banners, column
- * headers inside each section, and plain bold headings. Every row kind is optional,
- * so a tab uses only the ones it has.
- * Generic header formatting cannot express that, and banding actively fights it.
+ * Used by Op Reports: a goal row, section banners, column headers inside each section,
+ * and plain bold headings. Every row kind is optional, so a tab uses only the ones it
+ * has. The tracker's Scorecard no longer uses this — it moved to restyleRows, because
+ * its rows now move and this paints by position.
  * These three colours were read back off the sheet after Vee styled it by hand, not
  * guessed: #1A1A4C for the goal row, #454EBD for a class title, #E6E6FA for the
  * column headers inside each class. Section headings are bold with no fill.
@@ -506,25 +769,9 @@ export async function formatScorecard(title, { goalRow, classRows, headerRows, s
   await api.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
 }
 
-/** Put a tab at a given position. Vee wants the Scorecard first — it is the tab
- *  anyone else opens the sheet to look at. */
-export async function moveTab(title, index, { spreadsheetId = BUILD_SHEET_ID } = {}) {
-  const api = sheets();
-  const meta = await api.spreadsheets.get({ spreadsheetId });
-  const tab = meta.data.sheets.find((s) => s.properties.title === title);
-  if (!tab || tab.properties.index === index) return;
-  await api.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [{
-        updateSheetProperties: {
-          properties: { sheetId: tab.properties.sheetId, index },
-          fields: 'index',
-        },
-      }],
-    },
-  });
-}
+// There is deliberately no function here that moves tabs. One used to put the
+// Scorecard first on every run; Vee keeps Run Log first and Scorecard second, and the
+// tab order is hers.
 
 /**
  * Remove tabs that a rebuild has replaced.
@@ -550,11 +797,11 @@ export async function deleteTabs(titles, { spreadsheetId = BUILD_SHEET_ID } = {}
 /**
  * Update a specific range and leave the rest of the tab alone.
  *
- * `writeTab` clears the whole sheet first, which is right for a rebuild and badly
- * wrong for a status line. A failed run used to call writeTab on the README and
- * destroy every word explaining how to read the sheet, replacing it with a three-row
- * error — so the one moment the team most needed the instructions was the moment they
- * disappeared. This writes one range and nothing else.
+ * `writeTab` rewrites a whole table, which is right for a rebuild and badly wrong for
+ * a status line. A failed run used to call writeTab on the README and destroy every
+ * word explaining how to read the sheet, replacing it with a three-row error — so the
+ * one moment the team most needed the instructions was the moment they disappeared.
+ * This writes one range and nothing else.
  */
 export async function writeCells(title, a1, rows, { spreadsheetId = BUILD_SHEET_ID } = {}) {
   const api = sheets();

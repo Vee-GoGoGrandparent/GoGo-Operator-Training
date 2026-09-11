@@ -25,30 +25,13 @@
 //
 // Needs no database, so it runs even while the replica is unreachable.
 
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   writeTab, formatHeader, formatScorecard, deleteTabs,
   TRACKER_SHEET_ID, BUILD_SHEET_ID,
 } from '../src/sheets.js';
 import { notify } from '../src/slack.js';
 import { nowET } from '../src/time.js';
-import { summarize, themesOf, isTruncated, NOT_DISCLOSED, textOf } from '../src/op-reports.js';
-
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const ARCHIVE_DIR = path.join(HERE, '..', 'data', 'op-reports');
-
-/** Every archived pull, merged and deduped by Slack message timestamp. */
-function loadArchive() {
-  if (!fs.existsSync(ARCHIVE_DIR)) return [];
-  const byTs = new Map();
-  for (const file of fs.readdirSync(ARCHIVE_DIR).filter((f) => f.endsWith('.json'))) {
-    const rows = JSON.parse(fs.readFileSync(path.join(ARCHIVE_DIR, file), 'utf8'));
-    for (const r of rows) byTs.set(r.ts, r);
-  }
-  return [...byTs.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)));
-}
+import { summarize, themesOf, isTruncated, NOT_DISCLOSED, textOf, loadArchive, ARCHIVE_DIR } from '../src/op-reports.js';
 
 const pct = (x) => `${(x * 100).toFixed(1)}%`;
 

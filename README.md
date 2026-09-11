@@ -21,9 +21,22 @@ their numbers.
 | % Completed Training | 90% | class workbook |
 | Trainee Satisfaction | 97% | survey (measures the TRAINER, not the operator) |
 | Quizzes Success Rate | 85% | class workbook |
-| 30-day churn | < 5% | SQL — `operators.closedAt` |
-| 60-day churn | < 10% | SQL |
-| 90-day churn | < 15% | SQL |
+| 30-day churn | < 5% | Class workbook + `operators.closedAt` — see "Churn" below |
+| 60-day churn | < 10% | same, cumulative |
+| 90-day churn | < 15% | same, cumulative |
+
+**Churn (confirmed 2026-09-11 against management's June figure of 3).** Counts from the
+first day of training: anyone who left during training *after starting it* (training
+total above 0%) counts, plus anyone who completed training and was closed on or before
+the milestone. Milestones are graduation + 1, 2, 3 calendar months — the dates their
+sheet prints. Denominator is the people who completed training. June: Jessa Mae Odac and
+Jovin Laud (left during training) + Oliver Castaneda (closed Jul 22) = 3.
+
+**Registrations** count in calendar months from graduation, graduation day included
+(August: Aug 21–Sep 20, Sep 21–Oct 20, Oct 21–Nov 20). **Priority** is that month's reg
+ratio: Escalate 11% or under, Watch under 15%, Strong 19% and up. After 3 months a class
+leaves Hard Regs, Weekly Trend and Team Leads; Training vs Performance keeps it with its
+final numbers.
 | 90-day reg rate | +15% | SQL — `operatorPerformances` |
 | 90-day star model | 3.70+ | definition still needed from Ops |
 
