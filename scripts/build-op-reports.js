@@ -55,17 +55,26 @@ const pct = (x) => `${(x * 100).toFixed(1)}%`;
 /**
  * Is this theme covered by the training material?
  *
- * Judged against the FOUR decks we have, and the tab says so. New material is being
- * written that nobody here has seen, so this means "not in the decks we have" rather
- * than "not taught anywhere" — a distinction worth keeping, because the first is a
- * question for Oscar and the second is an accusation.
+ * CORRECTED 2026-09-10 after reading the full Canva library. An earlier version of
+ * this said Need Love had no module, and that surge and cancellation fees were not
+ * taught. All three were wrong — they were based on four decks when there are around
+ * twenty. Every single theme below turns out to be covered, most of them thoroughly.
+ *
+ * That flips the conclusion. These are not content gaps. They are execution gaps —
+ * which is exactly what GoGo's own Registration Call Coaching Breakdown already said:
+ * "bottom performers are not struggling from a lack of product knowledge... the gap
+ * is in execution."
+ *
+ * A content gap is fixed by writing a slide. An execution gap is fixed by practice,
+ * and the two need completely different responses. Getting this backwards would have
+ * sent Oscar off to write material that already exists.
  */
 const COVERAGE = {
-  address: 'Yes — the deck says to confirm addresses back to the customer',
-  fees: 'Only the concierge fee. Cancellation, surge and wait fees are not in it',
-  membership: 'Yes — plan pricing, with the dollar savings worked out',
-  nl: 'No Need Love module in the decks we have',
-  accessibility: 'Yes — mobility and accessibility questions are covered',
+  address: 'Taught twice over. "Registration Structure" says confirm addresses back; "Mistakes We See Most Often" makes failing to confirm ride details its own lesson. Pin adjustment has a deck of its own and "adjust the pin properly" is in Targets and Metrics.',
+  fees: 'Taught. The Need Love deck covers cancellation fees, the 2-minute vendor window, fare reviews, surge, and the $20 lost item fee. It states outright that informing customers of surge before ordering is a requirement.',
+  membership: 'Taught heavily. Plan pricing with the dollar savings, plus a low-performer versus top-performer comparison built from real call transcripts.',
+  nl: 'Taught in a 54-page deck: every ticket type, how to file two ways, the 30-day dispute window, duplicate prevention, scenarios and a knowledge check.',
+  accessibility: 'Taught — mobility and accessibility questions are covered in the registration material.',
 };
 
 async function main() {
@@ -96,7 +105,7 @@ async function main() {
   push(['']);
 
   banner('WHAT THE REPORTS ARE ABOUT');
-  header('Theme', 'Reports', 'Share', 'Is it in the training material?');
+  header('Theme', 'Reports', 'Share', 'Where the training already covers it');
   for (const t of s.themes) push([t.label, t.n, pct(t.pct), COVERAGE[t.key] || '']);
   push(['Matched none of these', s.untouched, pct(s.untouched / s.total),
         'Worth reading by hand — probably a fifth theme']);
@@ -121,7 +130,7 @@ async function main() {
   banner('BEFORE YOU USE THESE NUMBERS');
   push(['Volume reflects who is watching as well as who is erring. One reviewer filed a quarter of this month on their own.']);
   push([`${s.truncated} of ${s.total} reports have their text cut off by Slack, so some corrections read as half sentences.`]);
-  push(['"Is it in the training material?" is judged against the FOUR decks we have. New material is being written that we have not seen, so it means "not in the decks we have", not "not taught".']);
+  push(['Every theme here IS covered by the training material — checked against the full Canva library, about twenty decks, on 2026-09-10. So these are execution gaps, not content gaps. They are fixed by practice, not by writing new slides.']);
   push(['No customer names or phone numbers are stored or shown anywhere.']);
   push(['The working detail — who filed what, and every individual report — is on the Build Notes sheet, not here.']);
 

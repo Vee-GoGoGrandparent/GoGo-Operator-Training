@@ -5,9 +5,33 @@
 //
 // I do not know, and this finds out rather than guessing.
 //
-// ANSWERED 2026-09-10. Kept because it reruns cheaply and the schema will change.
+// ANSWERED 2026-09-10 — and the question itself was wrong.
 //
-// THE STAR RATING IS NOT IN THIS DATABASE, not under any name containing star,
+// THE STAR MODEL IS NOT A CUSTOMER RATING AT ALL. It is GoGo's own operator scoring
+// model, and the training decks define it. From "Targets and Metrics":
+//
+//     "Once orientation is completed, new hires enter a 90-day probation period...
+//      To qualify for the Star Model, a Hard Registration Rate of 15% or higher is
+//      required. The rest of the metrics will be discussed by your Team Lead."
+//
+// And from the Need Love deck, on getting a detail wrong:
+//
+//     "...or you may get an operator report, which deducts 1 point in your star model."
+//
+// So the 3.70 target is a points score, its entry requirement is the same 15% hard
+// reg rate this tracker already computes, and OP REPORTS DEDUCT FROM IT. Both of
+// those inputs are things we already have. The other published targets sit beside
+// them in the same deck: tardies 0, QA 85%, soft regs above 40%, op reports and RIA
+// 0, tech issues 0, driver cancellation while arriving under 4%.
+//
+// That is why searching the database for a star column found nothing — it was never
+// going to be there. What is still missing is the WEIGHTING: how the pieces add up to
+// 3.70. "The rest of the metrics will be discussed by your Team Lead" is the sentence
+// standing between us and computing it.
+//
+// The original database search is kept below, and it did settle a real question:
+//
+// THE RIDE RATING IS NOT IN THIS DATABASE either, not under any name containing star,
 // rating, rated or score. The evidence, all from this probe:
 //
 //   - The ONLY real rating column in the entire database is `drivers.rating`

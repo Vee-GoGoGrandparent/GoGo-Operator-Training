@@ -130,7 +130,25 @@ export async function outboundIp() {
   }
 }
 
-export async function connect({ attempts = 2, delayMs = 3_000 } = {}) {
+/**
+ * DEFAULT IS ONE ATTEMPT, and that is deliberate.
+ *
+ * This used to try five times. The reasoning was wrong twice over:
+ *
+ *   1. Railway fixes the outbound address for the life of the CONTAINER, not per
+ *      connection. A container the database refuses will be refused every time, so
+ *      every retry is guaranteed to fail.
+ *
+ *   2. Worse than useless — actively risky. Vee spotted the shape of this: it is the
+ *      same mistake as hammering the Meta API after a rate limit. Repeatedly knocking
+ *      on a database from an address it has already rejected is exactly what
+ *      intrusion protection is built to notice, and getting the IP banned outright
+ *      would turn a one-line allowlist fix into a much worse conversation with the
+ *      DBA.
+ *
+ * So: knock once. If the door is shut, say which door it was and stop.
+ */
+export async function connect({ attempts = 1, delayMs = 3_000 } = {}) {
   let last;
   for (let i = 1; i <= attempts; i += 1) {
     try {
