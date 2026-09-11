@@ -93,7 +93,11 @@ async function main() {
   push(['Matched none of these', s.untouched, pct(s.untouched / s.total),
         'Worth reading by hand — probably a fifth theme']);
   push(['']);
-  push(['A report is counted under EVERY theme it mentions, so these add to more than the total. 94 reports are about two things at once.']);
+  // Counted, not typed in. These two sentences used to hard-code "94" and "a quarter of
+  // this month", which were only true for the Aug 10 – Sep 10 pull. Adding July on
+  // 2026-09-11 would have left them quietly wrong.
+  const multiTheme = reports.filter((r) => themesOf(r).length >= 2).length;
+  push([`A report is counted under EVERY theme it mentions, so these add to more than the total. ${multiTheme} reports are about two things at once.`]);
   push(['']);
 
   banner('WHAT EXACTLY WENT WRONG INSIDE EACH ONE');
@@ -111,7 +115,8 @@ async function main() {
   push(['']);
 
   banner('BEFORE YOU USE THESE NUMBERS');
-  push(['Volume reflects who is watching as well as who is erring. One reviewer filed a quarter of this month on their own.']);
+  const [, topCount] = s.byReporter[0] ?? ['', 0];
+  push([`Volume reflects who is watching as well as who is erring. The busiest reviewer filed ${topCount} of ${s.total} (${pct(s.total ? topCount / s.total : 0)}) on their own.`]);
   push([`${s.truncated} of ${s.total} reports have their text cut off by Slack, so some corrections read as half sentences.`]);
   push(['Every theme here IS covered by the training material — checked against the full Canva library, about twenty decks, on 2026-09-10. So these are execution gaps, not content gaps. They are fixed by practice, not by writing new slides.']);
   push(['No customer names or phone numbers are stored or shown anywhere.']);
