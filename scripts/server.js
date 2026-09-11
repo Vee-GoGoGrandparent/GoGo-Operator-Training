@@ -24,6 +24,7 @@ const TASKS = {
   reports: 'probe-reports.js',
   opreports: 'build-op-reports.js',
   star: 'probe-star.js',
+  starsources: 'probe-star-sources.js',
 };
 
 let running = false;

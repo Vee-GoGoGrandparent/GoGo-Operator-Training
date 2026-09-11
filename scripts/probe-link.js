@@ -45,6 +45,17 @@ async function main() {
 
   out.push(['— PART 1: HOW DOES A TRANSCRIPT REACH AN OPERATOR? —', '']);
 
+  // Checked first, because everything below assumes the answer: on 2026-08-31 the
+  // newest transcript was from Aug 21. Has transcription started again since?
+  await ask('deepgramCalls — newest transcript, and how many in the last 7 days',
+    `SELECT MAX(createdAt) AS newest,
+            SUM(createdAt >= DATE_SUB(NOW(), INTERVAL 7 DAY)) AS last_7_days
+       FROM deepgramCalls
+      WHERE createdAt >= DATE_SUB(NOW(), INTERVAL 40 DAY)`, [], 50_000);
+  await ask('callLogs — recent calls with a transcript id filled in (last 2 days)',
+    `SELECT COUNT(*) AS calls, SUM(deepgramTranscriptId IS NOT NULL) AS with_transcript_id
+       FROM callLogs WHERE createdAt >= DATE_SUB(NOW(), INTERVAL 2 DAY)`, [], 50_000);
+
   // What does Deepgram get asked to transcribe? The answer should name a file.
   await ask('deepgramCalls — the request JSON (what audio was sent?)',
     `SELECT LEFT(request, 1200) AS request_, createdAt FROM deepgramCalls ORDER BY createdAt DESC LIMIT 2`);

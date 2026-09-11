@@ -20,7 +20,11 @@ const READ_ONLY = /^\s*(select|show|describe|desc|explain|with)\b/i;
 function explain(err) {
   const code = err.code || '';
   if (code === 'ETIMEDOUT' || code === 'ECONNREFUSED')
-    return 'Could not reach the server. Most likely this Railway service\'s outbound IP is not on the allowlist — meaning the static IP did NOT carry over from the Marketing Growth OS service, and the DBA needs to add this one.';
+    // Worded from what is KNOWN (2026-09-10): of this service's three outbound
+    // addresses, 208.77.244.241 and 152.55.184.241 are allowlisted and 152.55.184.240
+    // is not. Railway keeps one address for the life of a deployment. The old text
+    // blamed a Marketing Growth OS carry-over and told the reader to chase the DBA.
+    return 'The database did not answer this Railway address, so it is not on the allowlist (see Outbound IP). Railway keeps the same address until the next deploy: redeploy to get a different one.';
   if (code === 'ENOTFOUND')
     return `Hostname "${process.env.DB_HOST}" does not resolve. Check DB_HOST for a typo.`;
   if (code === 'ER_ACCESS_DENIED_ERROR')
@@ -165,8 +169,8 @@ export async function connect({ attempts = 1, delayMs = 3_000 } = {}) {
   }
   throw new Error(
     `${last.message}\n\n` +
-      `Tried ${attempts} times. Railway rotates across its static IPs, so this means NONE of them ` +
-      `are on the allowlist — not just bad luck. Send the DBA the IPs from Railway → Settings → Networking.`,
+      `Tried ${attempts} time${attempts === 1 ? '' : 's'} from the same address. Retrying cannot help, ` +
+      `because Railway only changes the address on a redeploy.`,
   );
 }
 
