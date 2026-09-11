@@ -20,6 +20,28 @@ const DEFAULT_SA = 'C:/Users/K_jah/Documents/AI/GoGo-Reviews/google-service-acco
 //
 // OPS_SHEET_ID is the old single-sheet name, kept as a fallback so an older
 // Railway config keeps working instead of failing at 3am over a rename.
+/**
+ * WHICH SHEET GETS WHAT — the standing rule, decided 2026-09-10.
+ *
+ * Vee: "any time we're gathering information, that's the sheet that needs to be
+ * updated... we need to provide information that's useful for the training team."
+ *
+ *   TRACKER_SHEET_ID   the team sheet. Things a trainer or team lead ACTS on.
+ *                      If nobody would change what they do because of it, it does
+ *                      not belong here.
+ *
+ *   BUILD_SHEET_ID     Build Notes (internal). Everything we gather while working
+ *                      out whether something is even possible: probes, schema dumps,
+ *                      access checks, raw rows, and any table that exists to answer
+ *                      "says who?".
+ *
+ * The test is AUDIENCE, not size or importance. A 281-row table of every op report is
+ * important and still belongs on the build sheet, because a trainer opening the team
+ * sheet needs to know what to teach differently, not to scroll.
+ *
+ * Default for writeTab is the BUILD sheet on purpose: writing to the team sheet has to
+ * be a deliberate choice, never something that happens because a default drifted.
+ */
 export const BUILD_SHEET_ID = process.env.OPS_BUILD_SHEET_ID || process.env.OPS_SHEET_ID || '';
 export const TRACKER_SHEET_ID = process.env.OPS_TRACKER_SHEET_ID || '';
 

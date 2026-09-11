@@ -74,6 +74,21 @@ Variables to set:
 
 Set the variable, redeploy, read the sheet, remove the variable.
 
+## Which sheet gets what
+
+Two sheets, and the split is by **audience**, not by size:
+
+| Sheet | Variable | What goes on it |
+| --- | --- | --- |
+| **GoGo Operator Training & Performance Tracker** | `OPS_TRACKER_SHEET_ID` | Things a trainer or team lead **acts on**. If nobody would change what they do because of it, it does not belong here. |
+| **GoGo Operator Tracker — Build Notes (internal)** | `OPS_BUILD_SHEET_ID` | Everything we gather while working something out: probes, schema dumps, access checks, raw rows, anything that answers "says who?". |
+
+A 281-row table of every op report is important **and** belongs on the build sheet.
+A trainer opening the team sheet needs to know what to teach differently, not to scroll.
+
+`writeTab` defaults to the **build** sheet deliberately: writing to the team sheet has
+to be a deliberate choice, never something that happens because a default drifted.
+
 ## Running it daily
 
 `OPS_TASK` is one-shot: set it, redeploy, read the sheet, remove it. Good for probes

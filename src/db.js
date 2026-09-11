@@ -108,7 +108,29 @@ async function connectOnce() {
  */
 const RETRYABLE = new Set(['ETIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH']);
 
-export async function connect({ attempts = 5, delayMs = 3_000 } = {}) {
+/**
+ * What outbound IP is this container actually using?
+ *
+ * This is the single most useful fact when the database refuses us, and until now the
+ * error never said it. Railway assigns the address PER CONTAINER, so a failing
+ * container keeps failing until it is redeployed — knowing which address it drew
+ * turns "ask the DBA and wait" into "redeploy and roll a different one".
+ *
+ * Best effort only: a public IP echo, nothing sent but the request itself, and a
+ * short timeout so a diagnostic can never hold up an error message.
+ */
+export async function outboundIp() {
+  try {
+    const res = await fetch('https://api.ipify.org', {
+      signal: AbortSignal.timeout(4_000),
+    });
+    return (await res.text()).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function connect({ attempts = 2, delayMs = 3_000 } = {}) {
   let last;
   for (let i = 1; i <= attempts; i += 1) {
     try {
