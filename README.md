@@ -33,10 +33,25 @@ sheet prints. Denominator is the people who completed training. June: Jessa Mae 
 Jovin Laud (left during training) + Oliver Castaneda (closed Jul 22) = 3.
 
 **Registrations** count in calendar months from graduation, graduation day included
-(August: Aug 21–Sep 20, Sep 21–Oct 20, Oct 21–Nov 20). **Priority** is that month's reg
-ratio: Escalate 11% or under, Watch under 15%, Strong 19% and up. After 3 months a class
-leaves Hard Regs, Weekly Trend and Team Leads; Training vs Performance keeps it with its
-final numbers.
+(August: Aug 21–Sep 20, Sep 21–Oct 20, Oct 21–Nov 20). Training vs Performance and Hard
+Regs both show them as 30d / 60d / 90d columns plus "Reg ratio all 3 months".
+
+**Priority** is judged on one ratio: the month of the class they are in — or, while that
+month has no calls yet, the month before; once the 3 months are over, all 3 months
+combined. Escalate 11% or under, Watch under 15%, Strong 19% and up. The same thresholds
+colour every Reg ratio column red (under 15%) and green (19% and up).
+
+**Order** on Training vs Performance and Hard Regs: lowest ratio first, people with no
+ratio yet after them, leavers at the bottom (most recent first).
+
+After 3 months a class leaves Hard Regs, Weekly Trend and Team Leads; Training vs
+Performance keeps it with its final numbers.
+
+**Star model** (weighting from Ops, 2026-09-11): weekly, 5 points, each part all or
+nothing; a part with no data ("-") counts as passed — that rule reproduces all 359
+Overall Stars in management's document. `OPS_TASK=starsources` finds where the parts live;
+`OPS_TASK=starcompare` pulls our raw numbers so ours can be checked against theirs before
+we calculate it ourselves.
 | 90-day reg rate | +15% | SQL — `operatorPerformances` |
 | 90-day star model | 3.70+ | definition still needed from Ops |
 

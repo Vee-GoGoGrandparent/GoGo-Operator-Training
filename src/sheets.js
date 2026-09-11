@@ -324,6 +324,57 @@ export async function writeTab(title, rows, spreadsheetId = BUILD_SHEET_ID, opts
   return { created, prevWidth, width, header: grid[hri ?? 0], oldValues, merges: tab.merges ?? [] };
 }
 
+/**
+ * Swap a run of columns for a longer run, IN PLACE.
+ *
+ * Hard Regs had "Reg calls (4wk)", "Hard regs (4wk)", "Reg ratio (4wk)". Vee asked for
+ * 30 / 60 / 90 day columns there instead (2026-09-11). Writing the new headers any other
+ * way would put them on the far right and slide every column after the old three into a
+ * different position — each one landing under the WIDTH Vee set for its neighbour.
+ *
+ * So real columns are inserted right after the old run, copying the look and width of
+ * the column before them, and the headers are renamed. Everything to the right moves
+ * over together with its width, colour rules and banding. Runs once: if any of the new
+ * headers is already on the tab, it does nothing.
+ *
+ * @returns {Promise<boolean>} true if the tab was changed
+ */
+export async function widenColumns(title, { from, to, headerRowIndex = 0, spreadsheetId = BUILD_SHEET_ID } = {}) {
+  const api = sheets();
+  const header = (await readTab(title, { spreadsheetId, range: `A${headerRowIndex + 1}:ZZ${headerRowIndex + 1}` }))[0] ?? [];
+  const norm = (v) => String(v ?? '').trim().toLowerCase();
+  const have = header.map(norm);
+  if (to.some((h) => have.includes(norm(h)))) return false;
+  const start = have.findIndex((_, i) => from.every((f, k) => have[i + k] === norm(f)));
+  if (start === -1) return false;
+
+  const meta = await api.spreadsheets.get({ spreadsheetId, fields: 'sheets(properties(sheetId,title))' });
+  const sheetId = meta.data.sheets.find((s) => s.properties.title === title)?.properties.sheetId;
+  if (sheetId === undefined) return false;
+
+  const extra = to.length - from.length;
+  if (extra > 0) {
+    await api.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{
+          insertDimension: {
+            range: { sheetId, dimension: 'COLUMNS', startIndex: start + from.length, endIndex: start + from.length + extra },
+            inheritFromBefore: true,
+          },
+        }],
+      },
+    });
+  }
+  await api.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${title}'!${colLetter(start + 1)}${headerRowIndex + 1}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: [to] },
+  });
+  return true;
+}
+
 /** 1 -> A, 26 -> Z, 27 -> AA. Used to bound a clear to the columns we wrote. */
 function colLetter(n) {
   let s = '';

@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import { connect, q, tryQ } from '../src/db.js';
 import { logRun } from '../src/run-log.js';
 import {
-  sheets, writeTab, formatHeader, restyleRows, ruleColors, extendBanding,
+  sheets, writeTab, formatHeader, restyleRows, ruleColors, extendBanding, widenColumns,
   TRACKER_SHEET_ID, BUILD_SHEET_ID, BRAND,
 } from '../src/sheets.js';
 import { notify } from '../src/slack.js';
@@ -250,8 +250,12 @@ async function main() {
       byWeek: {},
       block: { 1: { regCalls: 0, hardRegs: 0 }, 2: { regCalls: 0, hardRegs: 0 }, 3: { regCalls: 0, hardRegs: 0 } },
       plans: { annual: 0, value: 0, basic: 0, fixedIncome: 0 },
+      // Since graduation, like the plan columns — Hard Regs dropped its 4-week columns.
+      sinceGrad: { softRegs: 0, trialRegs: 0 },
       first: null,
     });
+    a.sinceGrad.softRegs += Number(r.softRegs || 0);
+    a.sinceGrad.trialRegs += Number(r.trialRegs || 0);
     if (!a.first || day < a.first) a.first = day;
 
     const calls = regCallsOf(r);
@@ -280,37 +284,65 @@ async function main() {
   }
 
   // -------------------------------------------------------------- per-op rows
-  // Priority comes from ONE number: the reg ratio of the month of the class they are
-  // in right now (Vee, 2026-09-11). A class past month 3 has no current month, so no
-  // Priority.
+  // THE RATIO THAT DECIDES PRIORITY — and the order people are listed in (Vee, 2026-09-11):
+  //
+  //   - The month of the class they are in right now.
+  //   - "When a new month starts, things depend on the previous month's performance,
+  //     not the new month. Once the new month has stats, it depends on the new month."
+  //     So an empty current month falls back to the month before.
+  //   - Once the 3 months are over: all 3 months combined (all hard regs ÷ all reg
+  //     calls). She asked to copy management's rule; their star model document only
+  //     has weekly figures, so there was no 3-month rule to copy.
+  //
+  // This replaces a version that used the current month even on its first day. The June
+  // class had one day of month 3, so people at 18.9% over four weeks showed "Escalate"
+  // on the strength of a handful of calls — while the sheet printed the four-week number
+  // beside it. The colour and the number came from two different windows.
+  const priorityRatioOf = (a, t) => {
+    if (classOver(t.gradDate)) {
+      const calls = BLOCKS.reduce((s, b) => s + a.block[b.month].regCalls, 0);
+      const hard = BLOCKS.reduce((s, b) => s + a.block[b.month].hardRegs, 0);
+      return ratio(hard, calls);
+    }
+    const m = monthOf(t.gradDate, todayISO);
+    if (!m) return null;
+    if (a.block[m].regCalls > 0) return ratio(a.block[m].hardRegs, a.block[m].regCalls);
+    if (m > 1) return ratio(a.block[m - 1].hardRegs, a.block[m - 1].regCalls);
+    return null;
+  };
+
   const rows = [];
   for (const o of operators) {
     const a = agg[o.id];
     const t = traineeOfOp(o);
     if (!a || !t) continue; // no real calls yet
-    const month = classOver(t.gradDate) ? null : monthOf(t.gradDate, todayISO);
     const daysWorked = daysBetween(a.first, todayISO);
+    const priorityRatio = priorityRatioOf(a, t);
     rows.push({
       o, a, t,
       cohort: t.cohort,
       daysWorked,
       weeksActive: Math.floor(daysWorked / 7),
       over: classOver(t.gradDate),
-      level: month ? priorityOf(ratio(a.block[month].hardRegs, a.block[month].regCalls)) : '',
+      priorityRatio,
+      level: priorityOf(priorityRatio),
     });
   }
 
-  // Anyone who has left drops below everyone still here, with the most recent
-  // departure at the top of that bottom group. Someone gone three months is not what a
-  // trainer needs to see first; someone gone last week is.
-  const order = { Escalate: 0, Watch: 1, 'No data': 2, '': 2, OK: 3, Strong: 4 };
+  // ORDER: lowest ratio first, the people with no ratio yet after them, and anyone who
+  // has left at the very bottom — most recent departure first, because someone gone last
+  // week matters more than someone gone three months. Vee: "from lowest score to
+  // highest, except those people who have left."
   const closedKey = (r) => (r.o.closedAt ? isoOf(r.o.closedAt) : null);
   rows.sort((x, y) => {
     const cx = closedKey(x);
     const cy = closedKey(y);
     if (!cx !== !cy) return cx ? 1 : -1;
     if (cx && cy && cx !== cy) return cy.localeCompare(cx);
-    return (order[x.level] - order[y.level]) || (y.a.recent.regCalls - x.a.recent.regCalls);
+    const px = x.priorityRatio;
+    const py = y.priorityRatio;
+    if ((px === null) !== (py === null)) return px === null ? 1 : -1;
+    return (px ?? 0) - (py ?? 0);
   });
   const tracked = rows.filter((r) => !r.over);
   console.log(`[tracker] ${rows.length} operators with real calls, ${tracked.length} in a class still inside its 3 months`);
@@ -357,19 +389,43 @@ async function main() {
     .map(({ t, o }) => ({ name: t.name, left: isoOf(o.closedAt), reason: (o.deactivationReason || '').trim() }))
     .sort((a, b) => b.left.localeCompare(a.left));
 
+  /**
+   * The 30 / 60 / 90 day cells for one operator, the same numbers Training vs
+   * Performance shows: a month that has not started is blank, never 0.
+   */
+  const monthCells = (r, gradDate) => {
+    const cells = [];
+    let calls3 = 0;
+    let hard3 = 0;
+    for (const b of BLOCKS) {
+      const started = todayISO >= milestoneDate(gradDate, b.month - 1);
+      const w = started && r ? r.a.block[b.month] : null;
+      if (w) { calls3 += w.regCalls; hard3 += w.hardRegs; }
+      cells.push(w ? w.regCalls : '', w ? w.hardRegs : '', w ? pctStr(ratio(w.hardRegs, w.regCalls)) : '');
+    }
+    return { cells, all3: calls3 > 0 ? pctStr(ratio(hard3, calls3)) : '' };
+  };
+  const MONTH_HEADERS = BLOCKS.flatMap((b) => [`Reg calls ${b.label}`, `Hard regs ${b.label}`, `Reg ratio ${b.label}`]);
+
   // --- Hard Regs: the plain numbers, one section per class ---
+  // 30 / 60 / 90 day columns replaced the 4-week ones (Vee, 2026-09-11), so the ratio
+  // Priority is judged on is actually on the row. Soft regs and Trials count since
+  // graduation, like the plan columns beside them.
   const regs = splitByClass([
     'Operator', 'Slack ID', 'Team lead', 'Class', 'Weeks active',
-    'Reg calls (4wk)', 'Hard regs (4wk)', 'Reg ratio (4wk)', 'Soft regs', 'Trials',
+    ...MONTH_HEADERS, 'Reg ratio all 3 months', 'Soft regs', 'Trials',
     'Annual', 'Value', 'Basic', 'Fixed income', 'Priority', 'Status',
-  ], (r) => [
-    name(r.o), r.o.slackId || '', teamLeadOf(r.o), r.cohort, r.weeksActive || '',
-    r.a.recent.regCalls, r.a.recent.hardRegs, pctStr(ratio(r.a.recent.hardRegs, r.a.recent.regCalls)),
-    r.a.recent.softRegs, r.a.recent.trialRegs,
-    r.a.plans.annual, r.a.plans.value, r.a.plans.basic, r.a.plans.fixedIncome,
-    r.level,
-    r.o.closedAt ? `Left ${isoOf(r.o.closedAt)}` : r.o.suspendedAt ? 'Suspended' : 'Active',
-  ]);
+  ], (r) => {
+    const m = monthCells(r, r.t.gradDate);
+    return [
+      name(r.o), r.o.slackId || '', teamLeadOf(r.o), r.cohort, r.weeksActive || '',
+      ...m.cells, m.all3,
+      r.a.sinceGrad.softRegs, r.a.sinceGrad.trialRegs,
+      r.a.plans.annual, r.a.plans.value, r.a.plans.basic, r.a.plans.fixedIncome,
+      r.level,
+      r.o.closedAt ? `Left ${isoOf(r.o.closedAt)}` : r.o.suspendedAt ? 'Suspended' : 'Active',
+    ];
+  });
 
   // --- Weekly Trend: the shape of the ramp, week by week, one section per class ---
   // Only weeks in which somebody from a still-tracked class took a real call.
@@ -455,16 +511,9 @@ async function main() {
 
   const rowFor = (t) => {
     const r = t.slackId ? perfBySlack[t.slackId] : null;
-    const cells = [];
-    let calls3 = 0;
-    let hard3 = 0;
-    for (const b of BLOCKS) {
-      // Has this month of the class begun? Month 1 begins on graduation day.
-      const started = todayISO >= milestoneDate(t.gradDate, b.month - 1);
-      const w = started && r ? r.a.block[b.month] : null;
-      if (w) { calls3 += w.regCalls; hard3 += w.hardRegs; }
-      cells.push(w ? w.regCalls : '', w ? w.hardRegs : '', w ? pctStr(ratio(w.hardRegs, w.regCalls)) : '');
-    }
+    // The same month cells as Hard Regs, from the same function, so the two tabs can
+    // never show different numbers for one person.
+    const { cells, all3 } = monthCells(r, t.gradDate);
     const o = t.slackId ? bySlack[t.slackId] : null;
     const left = leftOn(t);
     return [
@@ -488,7 +537,7 @@ async function main() {
           : classOver(t.gradDate)
             ? 'Past 90 days — no longer tracked'
             : 'Active',
-      calls3 > 0 ? pctStr(ratio(hard3, calls3)) : '',
+      all3,
       t.status === 'active' ? opReportsFor(t).length : '',
     ];
   };
@@ -503,9 +552,19 @@ async function main() {
     tvp.kinds.push('classBanner');
 
     const members = withClass(cls).map((t) => ({ t, left: leftOn(t) }));
+    // Still here: LOWEST ratio first (Vee, 2026-09-11) — "that way we know who are the
+    // people we need to talk to" at the start of the month. Same ratio as Priority and
+    // the same order as Hard Regs. Anyone with no ratio yet goes after them. This
+    // replaces "best training total first".
+    const ratioOf = (t) => (t.slackId ? perfBySlack[t.slackId]?.priorityRatio ?? null : null);
     members
       .filter((m) => !m.left)
-      .sort((a, b) => b.t.total - a.t.total)
+      .sort((a, b) => {
+        const x = ratioOf(a.t);
+        const y = ratioOf(b.t);
+        if ((x === null) !== (y === null)) return x === null ? 1 : -1;
+        return (x ?? 0) - (y ?? 0);
+      })
       .forEach((m) => { tvp.values.push(rowFor(m.t)); tvp.kinds.push('active'); });
 
     // Gone: most recent departure first, then the people who never finished the class.
@@ -745,6 +804,13 @@ async function main() {
     merges: SCORECARD_MERGES, writeOpts: {}, banding: false,
   });
   await publish('Training vs Performance', tvp, { colours: true });
+  // One-time, and a no-op after that: turn the three 4-week columns into the 30 / 60 / 90
+  // day columns IN PLACE, so every column after them keeps Vee's width and look.
+  await widenColumns('Hard Regs', {
+    spreadsheetId: TRACKER_SHEET_ID,
+    from: ['Reg calls (4wk)', 'Hard regs (4wk)', 'Reg ratio (4wk)'],
+    to: [...MONTH_HEADERS, 'Reg ratio all 3 months'],
+  });
   await publish('Hard Regs', regs, { colours: true });
   await publish('Team Leads', leads, { colours: true });
   await publish('Weekly Trend', trend, { writeOpts: { keepColumnOrderFromRow: 0, freeOrder: /^\d{4}-W\d{2}$/ } });
