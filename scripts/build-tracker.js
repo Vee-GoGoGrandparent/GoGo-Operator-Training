@@ -13,8 +13,8 @@
 // Deliberately NOT here: any quality score. The AI grading is unreviewed and the
 // trainer says it is often wrong. Grading is not his job and it is not ours.
 
-import { connect, q, tryQ } from '../src/db.js';
-import { writeTab, writeCells, formatHeader, priorityColors, formatBanners, formatScorecard, moveTab, TRACKER_SHEET_ID, BUILD_SHEET_ID, BRAND } from '../src/sheets.js';
+import { connect, q, tryQ, outboundIp } from '../src/db.js';
+import { writeTab, writeCells, formatHeader, priorityColors, formatBanners, formatScorecard, moveTab, readTab, TRACKER_SHEET_ID, BUILD_SHEET_ID, BRAND } from '../src/sheets.js';
 import { notify } from '../src/slack.js';
 import { nowET, fmtDbDate } from '../src/time.js';
 import { regCallsOf, ratio, median, pctStr, pct100, weekKey, assess, TARGET_HR_RATIO } from '../src/analysis.js';
@@ -60,6 +60,33 @@ const TRACK_DAYS = 90;
 
 
 const name = (o) => `${(o.firstName || '').trim()} ${(o.lastName || '').trim()}`.replace(/\s+/g, ' ').trim();
+
+/**
+ * One line per run, newest at the top, on the BUILD sheet.
+ *
+ * Vee asked to be told which IP address was used on the LAST RUN — not only when it
+ * fails. That is the more useful version. Knowing which address WORKED tells you which
+ * ones are on the allowlist, and a changed address explains a job that suddenly
+ * stopped working when nobody touched anything.
+ *
+ * Appends rather than replaces, so the history builds and the pattern becomes readable
+ * over a few weeks. Capped so it cannot grow without limit.
+ */
+async function logRun({ status, detail }) {
+  if (!BUILD_SHEET_ID) return;
+  const ip = await outboundIp();
+  const header = ['When (Eastern)', 'Status', 'Outbound IP', 'Detail'];
+  try {
+    const existing = await readTab('12 Run Log', { spreadsheetId: BUILD_SHEET_ID });
+    const past = existing.filter((r, i) => !(i === 0 && String(r[0] ?? '').startsWith('When')));
+    const rows = [header, [nowET(), status, ip || '(could not determine)', detail], ...past].slice(0, 400);
+    await writeTab('12 Run Log', rows, BUILD_SHEET_ID, { keepColumnOrderFromRow: 0 });
+    await formatHeader('12 Run Log', { bandRows: true, spreadsheetId: BUILD_SHEET_ID }).catch(() => {});
+    console.log(`[tracker] run log: ${status} from ${ip || 'unknown IP'}`);
+  } catch (e) {
+    console.error('[tracker] could not write the run log:', e.message);
+  }
+}
 
 async function main() {
   if (!TRACKER_SHEET_ID) {
@@ -731,6 +758,16 @@ async function main() {
   // one uniquely held was moved rather than dropped — the churn rate per milestone
   // into the Scorecard, the reason someone was let go onto their own Status cell.
 
+  // keepColumnOrderFromRow: these tabs get rearranged by hand, so the rebuild writes
+  // columns in whatever order the tab already has rather than forcing its own.
+  //
+  // This definition went missing when the Churn Watch tab was removed, and the loss
+  // was invisible: README and Scorecard are written BEFORE it is used, so they kept
+  // updating while every tab after it silently stopped. That is the real reason
+  // Training vs Performance still showed August only and a "Days lasted" column that
+  // had been deleted days earlier — not the database, which was a separate problem.
+  const keepTop = { keepColumnOrderFromRow: 0 };
+
   await writeTab('README', readme, TRACKER_SHEET_ID);
   await writeTab('Scorecard', scorecard, TRACKER_SHEET_ID);
   await writeTab('Training vs Performance', tvp, TRACKER_SHEET_ID, keepTop);
@@ -780,6 +817,11 @@ async function main() {
 
   await conn.end();
 
+  await logRun({
+    status: '✅ OK',
+    detail: `${rows.length} operators. This address reached the database, so it is on the allowlist.`,
+  });
+
   const msg = `📋 Operator tracker updated — ${counts.Escalate || 0} to escalate, ${counts.Watch || 0} to watch, across ${rows.length} active operators.`;
   await notify(msg);
   console.log(msg);
@@ -803,28 +845,9 @@ main().catch(async (err) => {
     console.error('could not write the team status line:', e.message);
   }
 
-  // BUILD SHEET: the whole technical story, including which outbound IP was refused.
-  // Diagnostics live on the internal sheet — that is the standing rule.
-  try {
-    if (BUILD_SHEET_ID) {
-      await writeTab('12 Run Log', [
-        ['Last tracker run'],
-        ['Status', '\u274c FAILED'],
-        ['Run at', when],
-        [''],
-        ['What went wrong'],
-        [err.message],
-        [''],
-        ['What to do about it'],
-        ['If it names an outbound IP: that address is not on the database allowlist. Railway fixes the address per container, so REDEPLOY to draw a different one. Two of the three Ops addresses are already allowlisted, so a redeploy usually works.'],
-        ['If it says access denied: the password was rotated and Railway still has the old one.'],
-        ['If it mentions a sheet ID: a Railway variable is missing.'],
-      ], BUILD_SHEET_ID);
-      await formatHeader('12 Run Log', { spreadsheetId: BUILD_SHEET_ID }).catch(() => {});
-    }
-  } catch (e) {
-    console.error('could not write the run log:', e.message);
-  }
+  // BUILD SHEET: the same run log, same shape, so successes and failures sit side by
+  // side and the pattern of which addresses work is readable at a glance.
+  await logRun({ status: '❌ FAILED', detail: err.message }).catch(() => {});
   await notify(`❌ Operator tracker build failed: ${err.message}`);
   process.exit(1);
 });

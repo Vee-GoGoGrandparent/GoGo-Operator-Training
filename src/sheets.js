@@ -563,3 +563,12 @@ export async function writeCells(title, a1, rows, { spreadsheetId = BUILD_SHEET_
     requestBody: { values: rows },
   });
 }
+
+/** Read a tab's values. Returns [] if the tab does not exist yet. */
+export async function readTab(title, { spreadsheetId = BUILD_SHEET_ID, range = 'A1:ZZ2000' } = {}) {
+  const api = sheets();
+  const r = await api.spreadsheets.values
+    .get({ spreadsheetId, range: `'${title}'!${range}` })
+    .catch(() => null);
+  return r?.data?.values ?? [];
+}
