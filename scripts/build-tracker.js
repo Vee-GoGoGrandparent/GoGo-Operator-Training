@@ -14,7 +14,7 @@
 // trainer says it is often wrong. Grading is not his job and it is not ours.
 
 import { connect, q, tryQ } from '../src/db.js';
-import { writeTab, formatHeader, priorityColors, formatBanners, formatScorecard, moveTab, TRACKER_SHEET_ID, BRAND } from '../src/sheets.js';
+import { writeTab, writeCells, formatHeader, priorityColors, formatBanners, formatScorecard, moveTab, TRACKER_SHEET_ID, BUILD_SHEET_ID, BRAND } from '../src/sheets.js';
 import { notify } from '../src/slack.js';
 import { nowET, fmtDbDate } from '../src/time.js';
 import { regCallsOf, ratio, median, pctStr, pct100, weekKey, assess, TARGET_HR_RATIO } from '../src/analysis.js';
@@ -363,6 +363,9 @@ async function main() {
   // --- README ---
   const counts = rows.reduce((m, r) => ({ ...m, [r.verdict.level]: (m[r.verdict.level] || 0) + 1 }), {});
   const readme = [
+    // Row 1 is a STATUS LINE, and it is row 1 on purpose: the failure path rewrites
+    // only this row, so a bad run can warn the team without destroying the rest.
+    [`Updated ${asOf}`, 'Everything below is current.'],
     ['GoGo Operator Training & Performance Tracker'],
     [],
     ['Last updated', asOf],
@@ -784,12 +787,43 @@ async function main() {
 
 main().catch(async (err) => {
   console.error('TRACKER BUILD FAILED:', err.message);
+  const when = nowET();
+
+  // TEAM SHEET: one line, in plain words, and nothing else touched. The team needs to
+  // know the numbers are stale; they do not need a stack trace, and they certainly do
+  // not need the README they rely on to be deleted.
   try {
     if (TRACKER_SHEET_ID) {
-      await writeTab('README', [['Status', '❌ FAILED'], ['Error', err.message], ['Run at', nowET()]], TRACKER_SHEET_ID);
+      await writeCells('README', 'A1:B1', [[
+        `\u26a0\ufe0f Not updated ${when}`,
+        'The refresh did not finish, so every number in this sheet is from the previous run. The reason is on the Build Notes sheet, tab "12 Run Log".',
+      ]], { spreadsheetId: TRACKER_SHEET_ID });
     }
   } catch (e) {
-    console.error('could not write the failure:', e.message);
+    console.error('could not write the team status line:', e.message);
+  }
+
+  // BUILD SHEET: the whole technical story, including which outbound IP was refused.
+  // Diagnostics live on the internal sheet — that is the standing rule.
+  try {
+    if (BUILD_SHEET_ID) {
+      await writeTab('12 Run Log', [
+        ['Last tracker run'],
+        ['Status', '\u274c FAILED'],
+        ['Run at', when],
+        [''],
+        ['What went wrong'],
+        [err.message],
+        [''],
+        ['What to do about it'],
+        ['If it names an outbound IP: that address is not on the database allowlist. Railway fixes the address per container, so REDEPLOY to draw a different one. Two of the three Ops addresses are already allowlisted, so a redeploy usually works.'],
+        ['If it says access denied: the password was rotated and Railway still has the old one.'],
+        ['If it mentions a sheet ID: a Railway variable is missing.'],
+      ], BUILD_SHEET_ID);
+      await formatHeader('12 Run Log', { spreadsheetId: BUILD_SHEET_ID }).catch(() => {});
+    }
+  } catch (e) {
+    console.error('could not write the run log:', e.message);
   }
   await notify(`❌ Operator tracker build failed: ${err.message}`);
   process.exit(1);

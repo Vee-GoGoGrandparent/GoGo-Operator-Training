@@ -505,3 +505,22 @@ export async function deleteTabs(titles, { spreadsheetId = BUILD_SHEET_ID } = {}
   });
   return targets.map((t) => t.properties.title);
 }
+
+/**
+ * Update a specific range and leave the rest of the tab alone.
+ *
+ * `writeTab` clears the whole sheet first, which is right for a rebuild and badly
+ * wrong for a status line. A failed run used to call writeTab on the README and
+ * destroy every word explaining how to read the sheet, replacing it with a three-row
+ * error — so the one moment the team most needed the instructions was the moment they
+ * disappeared. This writes one range and nothing else.
+ */
+export async function writeCells(title, a1, rows, { spreadsheetId = BUILD_SHEET_ID } = {}) {
+  const api = sheets();
+  await api.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${title}'!${a1}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: rows },
+  });
+}

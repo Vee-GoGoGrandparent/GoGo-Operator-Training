@@ -148,8 +148,11 @@ async function main() {
   if (removed.length) console.log(`[opreports] removed from the team sheet: ${removed.join(', ')}`);
 
   // ========================================================= BUILD SHEET: the detail
+  // Header row FIRST, notes underneath — the shape Vee rearranged these into by hand.
+  // It is the better shape: row 1 headers means the freeze and the column matching
+  // both land where they should.
   await writeTab('10 Op Reports — Who & When', [
-    ['Op reports: who filed them, who they were about, and when'],
+    ['What', 'Count', 'Note'],
     [`${s.total} reports, ${s.firstDate} to ${s.lastDate}. Last updated ${asOf}.`],
     ['Working detail. The team-facing summary is the "Op Reports" tab on the tracker sheet.'],
     [''],
@@ -170,15 +173,16 @@ async function main() {
     [''],
     ['Operator named on the report', 'Count', 'Cut off below 2 — a single report is noise.'],
     ...s.byOperator.filter(([, n]) => n >= 2).map(([o, n]) => [o, n]),
-  ], BUILD_SHEET_ID);
+  ], BUILD_SHEET_ID, { keepColumnOrderFromRow: 0 });
   await formatHeader('10 Op Reports — Who & When', { bandRows: true, spreadsheetId: BUILD_SHEET_ID }).catch(() => {});
 
+  // Header row FIRST. Vee moved it to row 1 and moved Operator up next to Date;
+  // keepColumnOrderFromRow makes both survive, instead of a rebuild undoing her work.
   await writeTab('11 Op Reports — Every Report', [
-    ['Every op report, so nothing has to be taken on trust'],
+    ['Date', 'Type', 'Department', 'Operator', 'Team Lead', 'Reporter', 'CallLog ID', 'Themes', 'Step skipped?', 'Text cut off?', 'What happened', 'How it should have gone'],
     ['The last column is a reviewer writing down the correct handling. Those are ready-made practice questions — the mistake and its answer, both real.'],
     [`Last updated ${asOf}.`],
     [''],
-    ['Date', 'Type', 'Department', 'Operator', 'Team Lead', 'Reporter', 'CallLog ID', 'Themes', 'Step skipped?', 'Text cut off?', 'What happened', 'How it should have gone'],
     ...reports.map((r) => [
       r.date || '', r.type || '', r.dept || '', r.contractor || '', r.lead || '', r.reporter || '',
       r.callLogId || '',
@@ -187,7 +191,7 @@ async function main() {
       isTruncated(r) ? 'yes' : '',
       r.what || '', r.how || '',
     ]),
-  ], BUILD_SHEET_ID);
+  ], BUILD_SHEET_ID, { keepColumnOrderFromRow: 0 });
   await formatHeader('11 Op Reports — Every Report', { bandRows: true, spreadsheetId: BUILD_SHEET_ID }).catch(() => {});
 
   console.log('[opreports] team sheet: 1 tab. build sheet: 2 tabs.');
