@@ -743,14 +743,22 @@ async function main() {
 
   await conn.end();
 
-  await logRun({
-    status: '✅ OK',
-    detail: `${rows.length} operators. This address reached the database, so it is on the allowlist.`,
-  });
+  // This lived next to the README block and was deleted along with it, which is why
+  // every run logged "counts is not defined" AFTER writing all its tabs.
+  const counts = rows.reduce((m, r) => ({ ...m, [r.verdict.level]: (m[r.verdict.level] || 0) + 1 }), {});
 
   const msg = `📋 Operator tracker updated — ${counts.Escalate || 0} to escalate, ${counts.Watch || 0} to watch, across ${rows.length} active operators.`;
   await notify(msg);
   console.log(msg);
+
+  // LOGGED LAST, on purpose. It used to be logged before this point, so a run that
+  // fell over at the final step recorded an OK line and then a FAILED line for the
+  // same moment — two entries for one run, the first of them untrue. The run log
+  // should only claim success once there is nothing left that can fail.
+  await logRun({
+    status: '✅ OK',
+    detail: `${rows.length} operators. This address reached the database, so it is on the allowlist.`,
+  });
 }
 
 main().catch(async (err) => {
