@@ -132,22 +132,24 @@ async function main() {
   // after the operator asks for a card — i.e. is the mute visible as a hole? Measured
   // from each word's start and end time; no word is copied out.
   await ask('payment call silence — longest gap between words, and when the card is first mentioned (seconds)',
+    // Gaps are worked out first, ranked one level up: MySQL cannot nest a window function
+    // inside another window's ORDER BY (the 2026-09-11 run failed on exactly that).
     `SELECT createdAt,
             ROUND(MAX(gap), 2) AS longest_silence_s,
             ROUND(MAX(CASE WHEN gap_rank = 1 THEN prev_end END), 2) AS longest_silence_starts_at_s,
             ROUND(MIN(card_at), 2) AS first_card_word_at_s,
             COUNT(*) AS words
-       FROM (SELECT d.createdAt, jt.st - LAG(jt.en) OVER w AS gap, LAG(jt.en) OVER w AS prev_end,
-                    CASE WHEN LOWER(jt.word) IN ('card','expiration','debit','credit') THEN jt.st END AS card_at,
-                    RANK() OVER (PARTITION BY d.id ORDER BY (jt.st - LAG(jt.en) OVER w) DESC) AS gap_rank
-               FROM (SELECT id, createdAt, response FROM deepgramCalls
-                      WHERE createdAt >= DATE_SUB('2026-08-21', INTERVAL 5 DAY)
-                        AND JSON_UNQUOTE(JSON_EXTRACT(response,'$.results.channels[0].alternatives[0].transcript'))
-                            REGEXP 'card number|expiration'
-                      ORDER BY createdAt DESC LIMIT 1) d,
-                    JSON_TABLE(d.response, '$.results.channels[0].alternatives[0].words[*]'
-                      COLUMNS (idx FOR ORDINALITY, word VARCHAR(80) PATH '$.word', st DOUBLE PATH '$.start', en DOUBLE PATH '$.end')) jt
-             WINDOW w AS (PARTITION BY d.id ORDER BY jt.idx)) g
+       FROM (SELECT g.*, RANK() OVER (PARTITION BY id ORDER BY gap DESC) AS gap_rank
+               FROM (SELECT d.id, d.createdAt, jt.st - LAG(jt.en) OVER w AS gap, LAG(jt.en) OVER w AS prev_end,
+                            CASE WHEN LOWER(jt.word) IN ('card','expiration','debit','credit') THEN jt.st END AS card_at
+                       FROM (SELECT id, createdAt, response FROM deepgramCalls
+                              WHERE createdAt >= DATE_SUB('2026-08-21', INTERVAL 5 DAY)
+                                AND JSON_UNQUOTE(JSON_EXTRACT(response,'$.results.channels[0].alternatives[0].transcript'))
+                                    REGEXP 'card number|expiration'
+                              ORDER BY createdAt DESC LIMIT 1) d,
+                            JSON_TABLE(d.response, '$.results.channels[0].alternatives[0].words[*]'
+                              COLUMNS (idx FOR ORDINALITY, word VARCHAR(80) PATH '$.word', st DOUBLE PATH '$.start', en DOUBLE PATH '$.end')) jt
+                     WINDOW w AS (PARTITION BY d.id ORDER BY jt.idx)) g) ranked
       GROUP BY createdAt`, [], 60_000);
 
   // How long are these calls? Sets expectations for what a "long silence" even is.

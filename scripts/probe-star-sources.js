@@ -195,6 +195,18 @@ async function main() {
          FROM operators WHERE id IN (?) AND \`${col}\` IS NOT NULL
         GROUP BY keys_ ORDER BY operators_ DESC LIMIT 10`, [ids]);
   }
+  // operators.slingUserId (found by the 2026-09-11 wider search): Sling is a staff
+  // scheduling app — shifts, clock in/out, lateness. No shift table exists in the only
+  // schema this login sees, so Time Scheduled and tardies may live in Sling, with the
+  // database holding only the link. How many class operators carry a Sling id, and does
+  // any other column mention Sling? Counts and names only.
+  await ask('operators.slingUserId — how many class operators have one',
+    `SELECT COUNT(*) AS class_operators, SUM(slingUserId IS NOT NULL AND slingUserId <> 0) AS with_sling_id
+       FROM operators WHERE id IN (?)`, [ids]);
+  await ask('Any column or table in the database named like Sling',
+    `SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND (LOWER(COLUMN_NAME) LIKE '%sling%' OR LOWER(TABLE_NAME) LIKE '%sling%')
+      ORDER BY TABLE_NAME, COLUMN_NAME LIMIT 50`);
   // Tech issues: operators set a "technical" status (1,592 times in 14 days, everyone).
   // Counted per class operator for the two weeks management's document covers, to hold
   // against their "Tech issues" column. Times as stored, not converted.
