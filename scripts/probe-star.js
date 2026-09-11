@@ -5,6 +5,27 @@
 //
 // I do not know, and this finds out rather than guessing.
 //
+// ANSWERED 2026-09-10. Kept because it reruns cheaply and the schema will change.
+//
+// THE STAR RATING IS NOT IN THIS DATABASE, not under any name containing star,
+// rating, rated or score. The evidence, all from this probe:
+//
+//   - The ONLY real rating column in the entire database is `drivers.rating`
+//     (decimal). That is the DRIVER's rating, not the operator's.
+//   - No table is named like a rating, review, score, feedback, survey, csat or nps.
+//     Zero rows.
+//   - `ridePerformances` IS per-operator (it has operatorId) and IS populated —
+//     78,271 rows, 267 of them with low ratings, 315 low-rated rides in total,
+//     running 2026-03-13 to 2026-09-09.
+//   - But its only rating column is `lowRatingRides`, which is a COUNT of bad rides.
+//     A "3.70 out of 5" needs the rating VALUE of each ride to average. That value
+//     is not stored anywhere we can reach.
+//
+// So we can tell an operator how many of their rides were rated badly. We cannot
+// compute their star average. If Ops can say how they get 3.70, it may turn out to
+// be derived from lowRatingRides — but that is their formula to give, not ours to
+// invent.
+//
 // WHY A PROBE AND NOT AN ANSWER
 // The discovery run only inventoried 18 operator-related tables out of 249. A star
 // rating could easily live in a rides or drivers table nobody has looked at. The one

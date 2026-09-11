@@ -1,30 +1,37 @@
 // OPS_TASK=opreports
 //
-// Turns the archived #op_report forms into tabs on the tracker sheet.
+// Op reports, split across the two sheets the way Vee wants them:
 //
-// WHY THIS EXISTS
-// The first time these were pulled, the analysis lived in a chat and a temp file and
-// then it was gone. Vee's question was the right one: "are you adding this anywhere?"
-// The answer was no. This is the fix. Every number in the training-gap report comes
-// out of src/op-reports.js, and this script puts those same numbers somewhere a
-// trainer can open on a Monday.
+//   TEAM SHEET  ->  one tab, "Op Reports". What operators are actually getting
+//                   written up for, laid out for a trainer. Nothing else.
 //
-// WHY THE DATA IS A FILE IN THE REPO AND NOT A LIVE PULL
-// Reading Slack needs a bot token with history scope on a private channel, which we
-// do not have. The reports are pulled by hand, saved under data/op-reports/, and
-// committed. That is honest about what is automated and what is not: the counting is
-// automated, the collecting is not yet. When a token exists, only the loader below
-// changes and every number stays reproducible.
+//   BUILD SHEET ->  the working detail. Who filed what, when, and every single
+//                   report. Useful for digging; not something a trainer needs.
 //
-// NO CUSTOMER PII, EVER. The Slack form carries customer name and phone number. The
-// archive does not contain those fields and this script never writes them.
+// Vee: "any time we're gathering information, that's the sheet that needs to be
+// updated... we need to provide information that's useful for the training team."
 //
-// Does not touch the database. Does not touch anything marketing.
+// So the split is by AUDIENCE, not by size. A trainer opening the team sheet should
+// see what to teach differently. Anyone asking "says who?" goes to the build sheet.
+//
+// WHY THESE REPORTS MATTER MORE THAN THE QA TABLE
+// `qualityAssurances` flags 93.4% of calls positive — a detector that says yes to
+// nearly everything cannot tell you where the gaps are. These are a human writing
+// down a specific mistake AND the correction.
+//
+// NO CUSTOMER PII. The Slack form carries customer name and phone number. The
+// archive does not contain those fields and nothing here writes them.
+// NOTHING ABOUT PAYMENT AUDIO — the system mutes it; silence there is never a finding.
+//
+// Needs no database, so it runs even while the replica is unreachable.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { writeTab, formatHeader, TRACKER_SHEET_ID } from '../src/sheets.js';
+import {
+  writeTab, formatHeader, formatScorecard, deleteTabs,
+  TRACKER_SHEET_ID, BUILD_SHEET_ID,
+} from '../src/sheets.js';
 import { notify } from '../src/slack.js';
 import { nowET } from '../src/time.js';
 import { summarize, themesOf, isTruncated, NOT_DISCLOSED, textOf } from '../src/op-reports.js';
@@ -45,52 +52,100 @@ function loadArchive() {
 
 const pct = (x) => `${(x * 100).toFixed(1)}%`;
 
+/**
+ * Is this theme covered by the training material?
+ *
+ * Judged against the FOUR decks we have, and the tab says so. New material is being
+ * written that nobody here has seen, so this means "not in the decks we have" rather
+ * than "not taught anywhere" — a distinction worth keeping, because the first is a
+ * question for Oscar and the second is an accusation.
+ */
+const COVERAGE = {
+  address: 'Yes — the deck says to confirm addresses back to the customer',
+  fees: 'Only the concierge fee. Cancellation, surge and wait fees are not in it',
+  membership: 'Yes — plan pricing, with the dollar savings worked out',
+  nl: 'No Need Love module in the decks we have',
+  accessibility: 'Yes — mobility and accessibility questions are covered',
+};
+
 async function main() {
   if (!TRACKER_SHEET_ID) throw new Error('Missing OPS_TRACKER_SHEET_ID — nothing to write to.');
+  if (!BUILD_SHEET_ID) throw new Error('Missing OPS_BUILD_SHEET_ID — the working detail has nowhere to go.');
 
   const reports = loadArchive();
   if (!reports.length) throw new Error(`No archived reports found in ${ARCHIVE_DIR}`);
   const s = summarize(reports);
+  const asOf = nowET();
   console.log(`[opreports] ${s.total} reports, ${s.firstDate} to ${s.lastDate}`);
 
-  // ---- Tab: what the month was about -------------------------------------------
-  const themeRows = [
-    ['Theme', 'Reports', 'Share', 'Biggest piece of it'],
-  ];
+  // ======================================================= TEAM SHEET: "Op Reports"
+  //
+  // Row kinds are collected as the tab is built so the colours can go on afterwards —
+  // the same indigo / cornflower / lavender Vee chose for the Scorecard, so the two
+  // tabs read as part of one sheet rather than two different documents.
+  const W = 4;
+  const out = [];
+  const bannerRows = [];
+  const headerRows = [];
+  const push = (cells) => out.push([...cells, ...Array(Math.max(0, W - cells.length)).fill('')]);
+  const banner = (t) => { bannerRows.push(out.length); push([t]); };
+  const header = (...cells) => { headerRows.push(out.length); push(cells); };
+
+  push(['What operators are getting written up for']);
+  push([`${s.total} reports from #op_report, ${s.firstDate} to ${s.lastDate}. Last updated ${asOf}.`]);
+  push(['']);
+
+  banner('WHAT THE REPORTS ARE ABOUT');
+  header('Theme', 'Reports', 'Share', 'Is it in the training material?');
+  for (const t of s.themes) push([t.label, t.n, pct(t.pct), COVERAGE[t.key] || '']);
+  push(['Matched none of these', s.untouched, pct(s.untouched / s.total),
+        'Worth reading by hand — probably a fifth theme']);
+  push(['']);
+  push(['A report is counted under EVERY theme it mentions, so these add to more than the total. 94 reports are about two things at once.']);
+  push(['']);
+
+  banner('WHAT EXACTLY WENT WRONG INSIDE EACH ONE');
+  header('Theme', 'The specific mistake', 'Reports', '');
   for (const t of s.themes) {
-    const top = t.parts.filter((p) => p.n > 0).slice(0, 3).map((p) => `${p.label} ${p.n}`).join(' · ');
-    themeRows.push([t.label, t.n, pct(t.pct), top]);
+    const parts = t.parts.filter((p) => p.n > 0);
+    parts.forEach((p, i) => push([i === 0 ? t.label : '', p.label, p.n, '']));
   }
-  themeRows.push(['Matched none of these', s.untouched, pct(s.untouched / s.total), 'Worth reading by hand — probably a fifth theme']);
+  push(['']);
 
-  await writeTab('10 Op Reports — Themes', [
-    ['What operators actually got written up for'],
-    [`${s.total} reports from #op_report, ${s.firstDate} to ${s.lastDate} (${s.distinctDays} days). Run ${nowET()}.`],
-    ['A report is counted under EVERY theme it mentions, so these add to more than the total.'],
-    ['94 reports are about two things at once. Forcing one theme per report gave a different ranking each time the order changed, which is why it is not done that way.'],
-    [''],
-    ...themeRows,
-    [''],
-    ['A step was skipped, not fumbled', '', '', ''],
-    [`${s.notDisclosed.n} reports say something was never said or never checked. That is different from doing it wrong — only this kind gets fixed by changing a script.`],
-    ['What went unsaid', 'Reports', '', ''],
-    ...s.notDisclosed.about.map((a) => [a.label, a.n, '', '']),
-    [''],
-    ['Read this before using the numbers', '', '', ''],
-    [`${s.truncated} of ${s.total} reports have text cut off by the Slack reader ("..."). Theme counts survive it; individual corrections may be half-sentences.`],
-    [`${s.withCallLog} of ${s.total} carry a usable CallLog ID, so they can be joined to the call in the database.`],
-    ['Volume reflects who is watching as well as who is erring. One reviewer filed a quarter of the month.'],
-    ['No customer names or phone numbers are stored or shown. The Slack form has them; this does not read them.'],
-  ], TRACKER_SHEET_ID);
-  await formatHeader('10 Op Reports — Themes', { bandRows: true, spreadsheetId: TRACKER_SHEET_ID });
+  banner('A STEP WAS SKIPPED, NOT FUMBLED');
+  push([`${s.notDisclosed.n} reports say something was never said or never checked. That is different from doing it wrong — only this kind gets fixed by changing a script.`]);
+  header('What went unsaid', 'Reports', '', '');
+  for (const a of s.notDisclosed.about) push([a.label, a.n, '', '']);
+  push(['']);
 
-  // ---- Tab: who and when --------------------------------------------------------
-  // Counts only. Whether 8 reports is a lot depends on the reviewer, and this sheet
-  // is not the place that decides.
-  await writeTab('11 Op Reports — Who & When', [
-    ['Counts, not verdicts'],
+  banner('BEFORE YOU USE THESE NUMBERS');
+  push(['Volume reflects who is watching as well as who is erring. One reviewer filed a quarter of this month on their own.']);
+  push([`${s.truncated} of ${s.total} reports have their text cut off by Slack, so some corrections read as half sentences.`]);
+  push(['"Is it in the training material?" is judged against the FOUR decks we have. New material is being written that we have not seen, so it means "not in the decks we have", not "not taught".']);
+  push(['No customer names or phone numbers are stored or shown anywhere.']);
+  push(['The working detail — who filed what, and every individual report — is on the Build Notes sheet, not here.']);
+
+  await writeTab('Op Reports', out, TRACKER_SHEET_ID);
+  await formatScorecard('Op Reports', {
+    classRows: bannerRows, headerRows, spreadsheetId: TRACKER_SHEET_ID,
+  }).catch((e) => console.error('[opreports] colours:', e.message));
+
+  // The three numbered tabs this replaces. Vee: the team sheet carries the themes
+  // only, and it should not be called "10 Op Reports — Themes".
+  const removed = await deleteTabs(
+    ['10 Op Reports — Themes', '11 Op Reports — Who & When', '12 Op Reports — Every Report'],
+    { spreadsheetId: TRACKER_SHEET_ID },
+  ).catch((e) => { console.error('[opreports] could not remove old tabs:', e.message); return []; });
+  if (removed.length) console.log(`[opreports] removed from the team sheet: ${removed.join(', ')}`);
+
+  // ========================================================= BUILD SHEET: the detail
+  await writeTab('10 Op Reports — Who & When', [
+    ['Op reports: who filed them, who they were about, and when'],
+    [`${s.total} reports, ${s.firstDate} to ${s.lastDate}. Last updated ${asOf}.`],
+    ['Working detail. The team-facing summary is the "Op Reports" tab on the tracker sheet.'],
+    [''],
     [`${s.byOperator.length} different operators appear across ${s.total} reports. The most-reported has ${s.byOperator[0]?.[1] ?? 0}.`],
-    ['That spread is the point: this is not a handful of people, so it is unlikely to be fixed by coaching a handful of people.'],
+    ['That spread matters: this is not a handful of people, so it is unlikely to be fixed by coaching a handful of people.'],
     [''],
     ['By week', 'Reports'],
     ...s.byWeek.map(([w, n]) => [w, n]),
@@ -106,35 +161,27 @@ async function main() {
     [''],
     ['Operator named on the report', 'Count', 'Cut off below 2 — a single report is noise.'],
     ...s.byOperator.filter(([, n]) => n >= 2).map(([o, n]) => [o, n]),
-  ], TRACKER_SHEET_ID);
-  await formatHeader('11 Op Reports — Who & When', { bandRows: true, spreadsheetId: TRACKER_SHEET_ID });
+  ], BUILD_SHEET_ID);
+  await formatHeader('10 Op Reports — Who & When', { bandRows: true, spreadsheetId: BUILD_SHEET_ID }).catch(() => {});
 
-  // ---- Tab: the raw reports -----------------------------------------------------
-  // The point of keeping every row: the "how" column is a reviewer writing the right
-  // answer to a real mistake. That is training material somebody already wrote.
-  await writeTab('12 Op Reports — Every Report', [
-    ['Every report, so nothing has to be taken on trust'],
+  await writeTab('11 Op Reports — Every Report', [
+    ['Every op report, so nothing has to be taken on trust'],
     ['The last column is a reviewer writing down the correct handling. Those are ready-made practice questions — the mistake and its answer, both real.'],
+    [`Last updated ${asOf}.`],
     [''],
     ['Date', 'Type', 'Department', 'Operator', 'Team Lead', 'Reporter', 'CallLog ID', 'Themes', 'Step skipped?', 'Text cut off?', 'What happened', 'How it should have gone'],
     ...reports.map((r) => [
-      r.date || '',
-      r.type || '',
-      r.dept || '',
-      r.contractor || '',
-      r.lead || '',
-      r.reporter || '',
+      r.date || '', r.type || '', r.dept || '', r.contractor || '', r.lead || '', r.reporter || '',
       r.callLogId || '',
       themesOf(r).join(' + '),
       NOT_DISCLOSED.test(textOf(r)) ? 'yes' : '',
       isTruncated(r) ? 'yes' : '',
-      r.what || '',
-      r.how || '',
+      r.what || '', r.how || '',
     ]),
-  ], TRACKER_SHEET_ID);
-  await formatHeader('12 Op Reports — Every Report', { bandRows: true, spreadsheetId: TRACKER_SHEET_ID });
+  ], BUILD_SHEET_ID);
+  await formatHeader('11 Op Reports — Every Report', { bandRows: true, spreadsheetId: BUILD_SHEET_ID }).catch(() => {});
 
-  console.log('[opreports] wrote 3 tabs');
+  console.log('[opreports] team sheet: 1 tab. build sheet: 2 tabs.');
   await notify(`Op reports updated — ${s.total} reports, ${s.firstDate} to ${s.lastDate}.`);
 }
 

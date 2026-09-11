@@ -399,9 +399,11 @@ export async function formatBanners(title, rowIndices, { spreadsheetId = BUILD_S
 }
 
 /**
- * The Scorecard's own paint job.
+ * Paint a tab that is not one flat table.
  *
- * That tab is not one table — it is a goal row, then a block per class, then notes.
+ * Used by the Scorecard and by Op Reports: a goal row, section banners, column
+ * headers inside each section, and plain bold headings. Every row kind is optional,
+ * so a tab uses only the ones it has.
  * Generic header formatting cannot express that, and banding actively fights it.
  * These three colours were read back off the sheet after Vee styled it by hand, not
  * guessed: #1A1A4C for the goal row, #454EBD for a class title, #E6E6FA for the
@@ -459,4 +461,25 @@ export async function moveTab(title, index, { spreadsheetId = BUILD_SHEET_ID } =
       }],
     },
   });
+}
+
+/**
+ * Remove tabs that a rebuild has replaced.
+ *
+ * Writing a tab never removes one, so a renamed or relocated tab lingers with frozen
+ * numbers — and stale numbers on a team sheet are worse than no numbers, because
+ * nothing about them looks wrong. Only ever called with names this code itself
+ * created, never with a pattern.
+ */
+export async function deleteTabs(titles, { spreadsheetId = BUILD_SHEET_ID } = {}) {
+  if (!titles?.length) return [];
+  const api = sheets();
+  const meta = await api.spreadsheets.get({ spreadsheetId });
+  const targets = meta.data.sheets.filter((s) => titles.includes(s.properties.title));
+  if (!targets.length) return [];
+  await api.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests: targets.map((t) => ({ deleteSheet: { sheetId: t.properties.sheetId } })) },
+  });
+  return targets.map((t) => t.properties.title);
 }
