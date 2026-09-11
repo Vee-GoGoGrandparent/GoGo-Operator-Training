@@ -145,3 +145,21 @@ half-sentences. A real bot token calling `conversations.history` would fix it.
 The first version forced one theme per report and the ranking changed depending on which
 keyword list ran first — 94 of 281 reports are about two things at once. Totals therefore
 add to more than the number of reports.
+
+## Run Log
+
+Every tracker run adds one line to a **Run Log** tab — newest on top, last seven days
+only:
+
+| When | Where | Status | Outbound IP | Detail | Deployment |
+
+- **Build Notes** gets every run, including local test runs.
+- **The team sheet** gets real Railway runs only.
+
+Rows are matched to the tab's columns by header name, so the columns can be reordered
+or renamed ("When (Eastern)" and "When" count as the same) without breaking anything.
+An existing Run Log tab is never restyled.
+
+The IP matters because the database only accepts allowlisted addresses. Railway keeps
+one address for the life of a deployment — so if two runs show the same Deployment,
+they will always show the same IP.

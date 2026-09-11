@@ -145,7 +145,9 @@ export function matchExistingOrder(existingHeader, rows, headerRowIndex) {
   const header = rows[headerRowIndex];
   if (!header?.length) return rows;
 
-  const norm = (v) => String(v ?? '').trim().toLowerCase();
+  // "When (Eastern)" and "When" are the same column — a renamed header should not
+  // make a column look brand new and get shoved to the far right.
+  const norm = (v) => String(v ?? '').trim().toLowerCase().replace(/\s*\(.*\)\s*$/, '');
   const ours = header.map(norm);
   // Only reorder when the tab genuinely looks like the same table. Otherwise the
   // sheet has been rebuilt into something else and the old order means nothing.

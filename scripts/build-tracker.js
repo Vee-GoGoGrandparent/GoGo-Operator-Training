@@ -13,8 +13,9 @@
 // Deliberately NOT here: any quality score. The AI grading is unreviewed and the
 // trainer says it is often wrong. Grading is not his job and it is not ours.
 
-import { connect, q, tryQ, outboundIp } from '../src/db.js';
-import { writeTab, writeCells, formatHeader, priorityColors, formatBanners, formatScorecard, moveTab, readTab, TRACKER_SHEET_ID, BUILD_SHEET_ID, BRAND } from '../src/sheets.js';
+import { connect, q, tryQ } from '../src/db.js';
+import { logRun } from '../src/run-log.js';
+import { writeTab, formatHeader, priorityColors, formatBanners, formatScorecard, moveTab, TRACKER_SHEET_ID, BUILD_SHEET_ID, BRAND } from '../src/sheets.js';
 import { notify } from '../src/slack.js';
 import { nowET, fmtDbDate } from '../src/time.js';
 import { regCallsOf, ratio, median, pctStr, pct100, weekKey, assess, TARGET_HR_RATIO } from '../src/analysis.js';
@@ -60,52 +61,6 @@ const TRACK_DAYS = 90;
 
 
 const name = (o) => `${(o.firstName || '').trim()} ${(o.lastName || '').trim()}`.replace(/\s+/g, ' ').trim();
-
-/**
- * One line per run, newest at the top, on the BUILD sheet.
- *
- * Vee asked to be told which IP address was used on the LAST RUN — not only when it
- * fails. That is the more useful version. Knowing which address WORKED tells you which
- * ones are on the allowlist, and a changed address explains a job that suddenly
- * stopped working when nobody touched anything.
- *
- * Appends rather than replaces, so the history builds and the pattern becomes readable
- * over a few weeks. Capped so it cannot grow without limit.
- */
-async function logRun({ status, detail }) {
-  if (!BUILD_SHEET_ID) return;
-  const ip = await outboundIp();
-
-  // Where did this run? Railway sets RAILWAY_* variables; a laptop does not.
-  //
-  // Worth a column of its own: a local test run landed in this log looking exactly
-  // like a scheduled one, and its "Missing DB_USER, DB_PASSWORD" error read as though
-  // the Railway variables had gone missing. They had not — the laptop simply did not
-  // have them. One column stops that confusion for good.
-  const onRailway = Object.keys(process.env).some((k) => k.startsWith('RAILWAY_'));
-  const where = onRailway ? 'Railway' : 'local test';
-
-  const header = ['When (Eastern)', 'Where', 'Status', 'Outbound IP', 'Detail'];
-
-  // KEEP ONE WEEK. Vee: "I only want it for the last week... and then a new week
-  // starts." So rows are pruned by DATE rather than by count — seven days of history
-  // is enough to see a pattern, and a log nobody prunes is a log nobody reads.
-  const cutoff = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
-  const isRecent = (row) => String(row?.[0] ?? '').slice(0, 10) >= cutoff;
-
-  try {
-    const existing = await readTab('12 Run Log', { spreadsheetId: BUILD_SHEET_ID });
-    const past = existing
-      .filter((r, i) => !(i === 0 && String(r[0] ?? '').startsWith('When')))
-      .filter(isRecent);
-    const rows = [header, [nowET(), where, status, ip || '(could not determine)', detail], ...past];
-    await writeTab('12 Run Log', rows, BUILD_SHEET_ID, { keepColumnOrderFromRow: 0 });
-    await formatHeader('12 Run Log', { bandRows: true, spreadsheetId: BUILD_SHEET_ID }).catch(() => {});
-    console.log(`[tracker] run log: ${status} from ${ip || 'unknown IP'}`);
-  } catch (e) {
-    console.error('[tracker] could not write the run log:', e.message);
-  }
-}
 
 async function main() {
   if (!TRACKER_SHEET_ID) {
@@ -406,53 +361,6 @@ async function main() {
     ]);
   }
 
-  // --- README ---
-  const counts = rows.reduce((m, r) => ({ ...m, [r.verdict.level]: (m[r.verdict.level] || 0) + 1 }), {});
-  const readme = [
-    // Row 1 is a STATUS LINE, and it is row 1 on purpose: the failure path rewrites
-    // only this row, so a bad run can warn the team without destroying the rest.
-    [`Updated ${asOf}`, 'Everything below is current.'],
-    ['GoGo Operator Training & Performance Tracker'],
-    [],
-    ['Last updated', asOf],
-    ['Operators with activity in the last 12 weeks', rows.length],
-    ['Escalate', counts.Escalate || 0],
-    ['Watch', counts.Watch || 0],
-    ['OK', counts.OK || 0],
-    ['Strong', counts.Strong || 0],
-    [],
-    ['Tab', 'What it is'],
-    ['Scorecard', 'The sheet upper management sends, rebuilt with our own numbers — same columns, same order, same date format, so it can sit beside theirs in a meeting with nothing to translate. Newest class on top. Anywhere our figure disagrees with theirs is listed underneath rather than cluttering the table.'],
-    ['Training vs Performance', 'The August 2026 class with their training scores beside what they have actually done on the phones. This is the raw material for forecasting who will struggle.'],
-    ['Hard Regs', 'Every operator from a tracked class and their registration numbers for the last 4 weeks, including which plans they sell.'],
-    ['Team Leads', 'The same picture rolled up by team lead — how many of their people need help, and who to talk to first.'],
-    ['Weekly Trend', 'Each operator week by week, so you can see the shape: ramping up, flat, or falling.'],
-    [],
-    ['How to read it', ''],
-    ['Who is in here', 'ONLY operators who went through a class we hold training data for — right now the August 2026 class. Operators from other departments are not pulled at all. Adding the next class is one file.'],
-    ['Reg ratio', 'Hard registrations divided by registration calls. Test calls are excluded. Management target is 15%.'],
-    ['30d / 60d / 90d', 'Separate 30-day blocks counted forward from the day that person first took a real call, not running totals. 60d means their days 30-59, not their first 60 days. A block that has not started yet is left blank rather than shown as zero.'],
-    ['Training calls', 'Not counted anywhere. Practice calls taken during class are dropped before any number on this sheet is worked out, because the business does not count them either.'],
-    ['Two different clocks', 'Registrations are measured from the day that person first took a real call, because people join the schedule at different speeds after class. Churn is measured from the last day of class, because that is how management dates it.'],
-    ['We stop at 90 days', 'An operator drops off the per-person tabs 90 days after their first real call. The class tabs keep their numbers — a class scorecard is a permanent record.'],
-    ['Order of the rows', 'Training vs Performance is split into class sections, newest class at the top. Inside a class: people still here first with the strongest training score at the top, then a NO LONGER AT GOGO banner and that class’s own departures, most recent first. Each class keeps its own leavers — September’s never sit under August’s heading.'],
-    ['Section headings', 'Generated on every run, not typed in. A heading added by hand would be wiped, because writing a tab clears its values first.'],
-    ['Status', 'For anyone who has gone, this carries the date AND the reason on record together, e.g. "Left 2026-09-02 — Call Avoidance". Where no reason was recorded, only the date shows.'],
-    ['Priority', 'Left blank once someone has gone. A priority next to a departure is noise.'],
-    ['Layout', 'Column widths, wrapping and column order are yours. The rebuild refreshes numbers and will not move your columns or resize them.'],
-    ['Peer median', 'The middle reg ratio among operators who started taking calls the same month. A new operator is compared to other new operators, never to a veteran.'],
-    ['Priority', 'Escalate = something clearly changed or they are well behind their peers. Watch = worth a conversation. Strong = doing notably well, worth learning from.'],
-    [],
-    ['What this does NOT do', ''],
-    ['No quality scores', 'This tracker never grades a call. Call quality is a separate job, and the automated scoring is not reviewed by a person.'],
-    ['No verdicts', 'Nothing here says an operator is bad. It says what the numbers did. The trainer and the team lead decide what it means.'],
-    [],
-    ['Known gaps', ''],
-    ['Hire date', 'The database only knows when an operator was entered into the system — usually about a week before their class starts. The real hire date is the first day of orientation, and it lives only in the class workbook.'],
-    ['Started calls', 'The first day they took a REAL call, meaning after their class ended. Practice calls during training are excluded. Some people are on the schedule the next day, some wait two or three, which is why the 30/60/90 blocks run on each person own clock.'],
-    ['Training metrics', 'Completed training, quiz scores and trainee satisfaction come from the class workbook, not the database. Not connected yet.'],
-
-  ];
 
   // --- Training vs Performance: the two halves side by side ---
   // The database knows what an operator DID. Only the class workbook knows what
@@ -781,21 +689,20 @@ async function main() {
   // columns in whatever order the tab already has rather than forcing its own.
   //
   // This definition went missing when the Churn Watch tab was removed, and the loss
-  // was invisible: README and Scorecard are written BEFORE it is used, so they kept
-  // updating while every tab after it silently stopped. That is the real reason
+  // was invisible: the Scorecard is written BEFORE it is used, so it kept updating
+  // while every tab after it silently stopped. That is the real reason
   // Training vs Performance still showed August only and a "Days lasted" column that
   // had been deleted days earlier — not the database, which was a separate problem.
   const keepTop = { keepColumnOrderFromRow: 0 };
 
-  await writeTab('README', readme, TRACKER_SHEET_ID);
   await writeTab('Scorecard', scorecard, TRACKER_SHEET_ID);
   await writeTab('Training vs Performance', tvp, TRACKER_SHEET_ID, keepTop);
   await writeTab('Hard Regs', regs, TRACKER_SHEET_ID, keepTop);
   await writeTab('Team Leads', leads, TRACKER_SHEET_ID, keepTop);
   await writeTab('Weekly Trend', trend, TRACKER_SHEET_ID, keepTop);
 
-  for (const t of ['README', 'Training vs Performance', 'Hard Regs', 'Team Leads', 'Weekly Trend']) {
-    await formatHeader(t, { spreadsheetId: TRACKER_SHEET_ID, bandRows: t !== 'README' }).catch(() => {});
+  for (const t of ['Training vs Performance', 'Hard Regs', 'Team Leads', 'Weekly Trend']) {
+    await formatHeader(t, { spreadsheetId: TRACKER_SHEET_ID, bandRows: true }).catch(() => {});
   }
 
   // Escalate / Watch in red, Strong in green — wherever those words appear.
@@ -848,25 +755,12 @@ async function main() {
 
 main().catch(async (err) => {
   console.error('TRACKER BUILD FAILED:', err.message);
-  const when = nowET();
 
-  // TEAM SHEET: one line, in plain words, and nothing else touched. The team needs to
-  // know the numbers are stale; they do not need a stack trace, and they certainly do
-  // not need the README they rely on to be deleted.
-  try {
-    if (TRACKER_SHEET_ID) {
-      await writeCells('README', 'A1:B1', [[
-        `\u26a0\ufe0f Not updated ${when}`,
-        'The refresh did not finish, so every number in this sheet is from the previous run. The reason is on the Build Notes sheet, tab "12 Run Log".',
-      ]], { spreadsheetId: TRACKER_SHEET_ID });
-    }
-  } catch (e) {
-    console.error('could not write the team status line:', e.message);
-  }
-
-  // BUILD SHEET: the same run log, same shape, so successes and failures sit side by
-  // side and the pattern of which addresses work is readable at a glance.
-  await logRun({ status: '❌ FAILED', detail: err.message }).catch(() => {});
+  // The Run Log carries the failure — always on Build Notes, and on the team sheet's
+  // "Run Log" tab when this is the real Railway job. There used to be a separate
+  // warning written to row 1 of a tab called README. Vee turned that tab into the Run
+  // Log, so the warning was landing on top of her headings. It is gone.
+  await logRun({ status: '\u274c FAILED', detail: err.message }).catch(() => {});
   await notify(`❌ Operator tracker build failed: ${err.message}`);
   process.exit(1);
 });
