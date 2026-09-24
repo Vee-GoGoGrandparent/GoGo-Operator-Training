@@ -41,6 +41,23 @@ export function fmtInstantET(date) {
  * A DATETIME/DATE that came out of the database, reproduced as stored.
  * No timezone maths — that is the point.
  */
+/**
+ * The two most recent COMPLETE Sunday-to-Saturday weeks, as [from, to) dates.
+ *
+ * Management's star model counts weeks Sunday to Saturday, so anything we compare against it
+ * has to use the same boundaries. `to` is the Sunday that starts the CURRENT week, which is
+ * excluded: a half-finished week makes a ratio look wrong for no reason.
+ */
+export function lastTwoCompleteWeeks(today = new Date()) {
+  const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  d.setUTCDate(d.getUTCDate() - d.getUTCDay()); // back to this week's Sunday
+  const iso = (x) => x.toISOString().slice(0, 10);
+  const to = iso(d);
+  const mid = new Date(d); mid.setUTCDate(mid.getUTCDate() - 7);
+  const from = new Date(d); from.setUTCDate(from.getUTCDate() - 14);
+  return { from: iso(from), mid: iso(mid), to };
+}
+
 export function fmtDbDate(date) {
   if (!(date instanceof Date)) return String(date ?? '');
   const p = (n, w = 2) => String(n).padStart(w, '0');

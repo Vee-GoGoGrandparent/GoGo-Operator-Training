@@ -26,6 +26,7 @@ const TASKS = {
   star: 'probe-star.js',
   starsources: 'probe-star-sources.js',
   starcompare: 'probe-star-compare.js',
+  regcalls: 'probe-reg-calls.js',
 };
 
 let running = false;
