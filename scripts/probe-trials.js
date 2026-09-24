@@ -106,6 +106,28 @@ async function main() {
       [ids, from, to], 60_000);
   }
 
+  // ------------------------------------------------------------------ 2b
+  // The question that actually decides whether our newest week can be trusted: when a
+  // registration is recorded, is it written onto the date of the CALL or the date it was
+  // confirmed? Every row carries the call's date and when it was last touched, so a lag
+  // shows up as a gap between the two. A bump at 7 days = registrations being back-dated
+  // once the trial closes, which means a fresh week starts low and climbs.
+  out.push(['— 2b. Are registrations written back onto the day of the call? —', '']);
+  await ask('Per-call rows: how many days after the call was the row last touched?',
+    `SELECT DATEDIFF(DATE(pc.updatedAt), pc.date) AS days_after_the_call,
+            COUNT(*) AS rows_, SUM(pc.hardRegs) AS hard_regs, SUM(pc.trialRegs) AS trial_regs
+       FROM operatorPerformanceCalls pc
+      WHERE pc.operatorId IN (?) AND pc.date >= DATE_SUB(CURDATE(), INTERVAL 5 WEEK)
+      GROUP BY days_after_the_call ORDER BY days_after_the_call LIMIT 25`,
+    [ids], 60_000);
+  await ask('Daily rows (the table the tracker reads): how many days after the day was the row last touched?',
+    `SELECT DATEDIFF(DATE(updatedAt), aggregationDate) AS days_after_the_day,
+            COUNT(*) AS rows_, SUM(hardRegs) AS hard_regs, SUM(trialRegs) AS trial_regs
+       FROM operatorPerformances
+      WHERE operatorId IN (?) AND aggregationDate >= DATE_SUB(CURDATE(), INTERVAL 5 WEEK)
+      GROUP BY days_after_the_day ORDER BY days_after_the_day LIMIT 25`,
+    [ids], 60_000);
+
   // ------------------------------------------------------------------ 3
   out.push(['— 3. What does a trial look like in the customer tables? —', '']);
   await columnsOf('callerPlans');
