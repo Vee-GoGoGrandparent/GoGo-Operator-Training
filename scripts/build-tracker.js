@@ -974,6 +974,53 @@ async function main() {
   const detailInfo = await writeTab('13 Op Reports — Class Operators', detail, BUILD_SHEET_ID, { keepColumnOrderFromRow: 0 });
   if (detailInfo.created) await formatHeader('13 Op Reports — Class Operators', { bandRows: true, spreadsheetId: BUILD_SHEET_ID }).catch(() => {});
 
+  // ---------------------------------------------------------------- week settling
+  // Vee, 2026-09-24: does a week's registrations keep filling in after the calls happened?
+  // Management only counts someone once their 7-day trial is up, so their published week
+  // runs behind ours. The rows' own "last touched" stamp cannot answer it — those tables are
+  // rewritten in bulk — so instead: write down what the last three weeks look like TODAY and
+  // never overwrite an older entry. Compare one week across two dates and it answers itself.
+  // Append-only, Build Notes only, and a failure here must never fail the tracker.
+  const SETTLING_TAB = '20 Week Settling — Do The Numbers Change Later?';
+  try {
+    const weekStart = (iso) => {
+      const d = new Date(`${iso}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() - d.getUTCDay()); // back to Sunday, the way their weeks run
+      return d.toISOString().slice(0, 10);
+    };
+    const totals = {};
+    for (const r of perf) {
+      const wk = weekStart(isoOf(r.aggregationDate));
+      if (daysBetween(wk, todayISO) > 21) continue; // this week and the two before it
+      const e = (totals[wk] ??= { regCalls: 0, hardRegs: 0, trialRegs: 0 });
+      e.regCalls += regCallsOf(r);
+      e.hardRegs += Number(r.hardRegs || 0);
+      e.trialRegs += Number(r.trialRegs || 0);
+    }
+    const HEAD = ['Recorded', 'Week starting', 'Reg calls', 'Hard regs', 'Trial regs', 'Change in hard regs since first recorded', 'Note'];
+    const old = await readTab(SETTLING_TAB, { spreadsheetId: BUILD_SHEET_ID }).catch(() => []);
+    const past = old.length && String(old[0]?.[0] ?? '').trim() === 'Recorded'
+      ? old.slice(1).filter((r) => String(r[0] ?? '').trim())
+      : [];
+    const firstHardRegs = {};
+    for (let i = past.length - 1; i >= 0; i -= 1) { // oldest entry wins
+      const wk = String(past[i][1] ?? '').trim();
+      if (wk) firstHardRegs[wk] = Number(past[i][3] ?? 0);
+    }
+    const fresh = Object.entries(totals)
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([wk, t]) => [
+        asOf, wk, t.regCalls, t.hardRegs, t.trialRegs,
+        firstHardRegs[wk] === undefined ? 'first time this week was written down' : t.hardRegs - firstHardRegs[wk],
+        daysBetween(wk, todayISO) < 7 ? 'this week, still running' : 'finished week',
+      ]);
+    const settlingInfo = await writeTab(SETTLING_TAB, [HEAD, ...fresh, ...past], BUILD_SHEET_ID, { keepColumnOrderFromRow: 0 });
+    if (settlingInfo.created) await formatHeader(SETTLING_TAB, { bandRows: true, spreadsheetId: BUILD_SHEET_ID }).catch(() => {});
+    console.log(`[tracker] week settling: wrote ${fresh.length} weeks, kept ${past.length} earlier entries`);
+  } catch (e) {
+    console.error(`[tracker] could not record the week snapshot: ${e.message}`);
+  }
+
   // While we are connected and it is working, answer the question the flaky link
   // probe keeps failing to answer: can we still READ the transcript tables? It
   // separates "the IP is flaky" from "our access was taken away".
