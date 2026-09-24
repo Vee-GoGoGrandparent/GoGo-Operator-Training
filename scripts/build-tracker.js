@@ -214,32 +214,38 @@ async function loadData() {
   // The daily table has no call length, so this is the per-call table joined to the call log.
   // tryQ, not q: if this one query fails the rest of the tracker still runs and the column is
   // simply blank. NO CUSTOMER DETAILS — callerName and callerPhoneNumber are never selected.
-  const longCallsRes = await tryQ(
+  // Only the SHORT calls are counted here, and only to take them OFF the denominator. The
+  // numerator stays exactly what the rest of the sheet uses — the daily table's hard regs.
+  // Mixing sources is what broke the first version: the per-call table holds 972 of the
+  // 1,136 hard regs (164 sit on rows that are not reg calls), so a numerator from there made
+  // the "2 min+" ratio come out LOWER than the all-calls one, which is nonsense. Taking calls
+  // off the bottom of the fraction cannot do that, and no call under 2 minutes has ever
+  // produced a registration anyway (Build Notes tab 18).
+  const shortCallsRes = await tryQ(
     conn,
     `SELECT pc.operatorId, pc.date AS aggregationDate,
-            SUM(pc.rideRegCalls + pc.gourmetRegCalls + pc.groceryRegCalls + pc.noMembershipCalls) AS regCalls,
-            SUM(pc.hardRegs) AS hardRegs
+            SUM(pc.rideRegCalls + pc.gourmetRegCalls + pc.groceryRegCalls + pc.noMembershipCalls) AS shortRegCalls
        FROM operatorPerformanceCalls pc
        JOIN callLogs cl ON cl.id = pc.callLogId
       WHERE pc.date >= DATE_SUB(?, INTERVAL 14 DAY)
         AND pc.operatorId IN (?)
         AND (pc.rideRegCalls + pc.gourmetRegCalls + pc.groceryRegCalls + pc.noMembershipCalls) > 0
-        AND TIMESTAMPDIFF(SECOND, cl.timeStart, cl.timeEnd) >= ?
+        AND TIMESTAMPDIFF(SECOND, cl.timeStart, cl.timeEnd) < ?
       GROUP BY pc.operatorId, pc.date`,
     [earliestGradDate(), operators.map((o) => o.id), LONG_CALL_SECONDS],
     90_000,
   );
-  if (longCallsRes.error) {
-    console.error(`[tracker] 2 min+ call query failed, that column will be blank: ${longCallsRes.error.slice(0, 200)}`);
+  if (shortCallsRes.error) {
+    console.error(`[tracker] short-call query failed, the 2 min+ column will be blank: ${shortCallsRes.error.slice(0, 200)}`);
   }
-  return { conn, operators, perf, longCalls: longCallsRes.rows ?? [] };
+  return { conn, operators, perf, shortCalls: shortCallsRes.rows ?? [] };
 }
 
 async function main() {
   if (!TRACKER_SHEET_ID) {
     throw new Error('OPS_TRACKER_SHEET_ID is not set. The team-facing sheet has nowhere to go.');
   }
-  const { conn, operators, perf, longCalls } = await loadData();
+  const { conn, operators, perf, shortCalls } = await loadData();
 
   console.log(`[tracker] ${TRAINED_SLACK_IDS.length} trained operators on the roster, ${operators.length} matched in the database`);
   if (TRAINED_WITHOUT_SLACK.length) {
@@ -328,26 +334,40 @@ async function main() {
   // The same months, counting only calls that lasted 2 minutes or more. Kept in its own
   // map so nothing above can accidentally use it: the ratio on the rest of the sheet, and
   // everything Priority does, stays on ALL calls.
-  const longByOp = {};
-  for (const r of longCalls) {
+  const shortByOp = {};
+  for (const r of shortCalls) {
     const t = traineeOfOp(byId[r.operatorId]);
     if (!t) continue;
     const m = monthOf(t.gradDate, isoOf(r.aggregationDate));
     if (!m) continue;
-    const e = (longByOp[r.operatorId] ??= { 1: { regCalls: 0, hardRegs: 0 }, 2: { regCalls: 0, hardRegs: 0 }, 3: { regCalls: 0, hardRegs: 0 } });
-    e[m].regCalls += Number(r.regCalls || 0);
-    e[m].hardRegs += Number(r.hardRegs || 0);
+    const e = (shortByOp[r.operatorId] ??= { 1: 0, 2: 0, 3: 0 });
+    e[m] += Number(r.shortRegCalls || 0);
   }
-  console.log(`[tracker] ${longCalls.length} day rows of calls ${LONG_CALL_SECONDS}s or longer, for ${Object.keys(longByOp).length} operators`);
+  console.log(`[tracker] ${shortCalls.length} day rows of calls under ${LONG_CALL_SECONDS}s, for ${Object.keys(shortByOp).length} operators`);
 
-  /** The 3-month reg ratio counting only calls of 2 minutes or more. Blank when unknown. */
-  const longRatioOf = (t) => {
+  /**
+   * The 3-month reg ratio with calls under 2 minutes taken OFF the denominator.
+   *
+   * Same hard regs as the column beside it, same reg calls minus the short ones — so the
+   * only difference between the two numbers is the thing Marcia described, and this one can
+   * never come out lower. Blank when we have no call lengths for that person.
+   */
+  // `rows` is built just below this, so the lookup is made on first use, not now.
+  let perfBySlackMemo = null;
+  const perfFor = (slackId) => {
+    if (!perfBySlackMemo) perfBySlackMemo = Object.fromEntries(rows.filter((x) => x.o.slackId).map((x) => [x.o.slackId, x]));
+    return perfBySlackMemo[slackId] ?? null;
+  };
+  const shortAdjustedRatioOf = (t) => {
+    const r = t.slackId ? perfFor(t.slackId) : null;
     const o = t.slackId ? bySlack[t.slackId] : null;
-    const e = o ? longByOp[o.id] : null;
-    if (!e) return '';
-    const calls = BLOCKS.reduce((s, b) => s + e[b.month].regCalls, 0);
-    const hard = BLOCKS.reduce((s, b) => s + e[b.month].hardRegs, 0);
-    return calls > 0 ? pctStr(ratio(hard, calls)) : '';
+    const e = o ? shortByOp[o.id] : null;
+    if (!r || !e) return '';
+    const calls = BLOCKS.reduce((s, b) => s + r.a.block[b.month].regCalls, 0);
+    const hard = BLOCKS.reduce((s, b) => s + r.a.block[b.month].hardRegs, 0);
+    const short = BLOCKS.reduce((s, b) => s + (e[b.month] || 0), 0);
+    const kept = calls - short;
+    return kept > 0 ? pctStr(ratio(hard, kept)) : '';
   };
 
   // -------------------------------------------------------------- per-op rows
@@ -631,7 +651,7 @@ async function main() {
         all3,
         t.status === 'active' ? opReportsFor(t).length : '',
         t.slackId ? starBySlack[t.slackId] ?? '' : '',
-        longRatioOf(t),
+        shortAdjustedRatioOf(t),
       ];
     };
 
