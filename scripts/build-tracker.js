@@ -32,6 +32,13 @@ import {
 
 const RECENT_WEEKS = 4; // the "(4wk)" columns on Team Leads
 
+// "The 1 or 2 min calls they filter those out so they don't affect" — Marcia, via Vee,
+// 2026-09-24. Two minutes is the longer of the two cutoffs she mentioned, and the one that
+// actually moves numbers: of 6,237 reg calls in the two weeks to 9/19, 528 were under it and
+// none of them produced a single registration. Used for an EXTRA column only — the reg ratio
+// everywhere else, and Priority, still count every call, the way management's star model does.
+const LONG_CALL_SECONDS = 120;
+
 // REGISTRATIONS COUNT IN CALENDAR MONTHS FROM GRADUATION — Vee, 2026-09-11.
 //
 // "Count everybody from the twenty first… twenty first is their graduation date…
@@ -161,6 +168,9 @@ async function loadData() {
       conn: null,
       operators: f.operators.map((o) => ({ ...o, createdAt: d(o.createdAt), closedAt: d(o.closedAt), suspendedAt: d(o.suspendedAt) })),
       perf: f.perf.map((r) => ({ ...r, aggregationDate: new Date(r.aggregationDate) })),
+      // Call length is not in the fixture: made-up data cannot answer a question about
+      // real call logs, so the 2 min+ column is simply blank in a local test.
+      longCalls: [],
     };
   }
 
@@ -192,14 +202,44 @@ async function loadData() {
     [earliestGradDate(), operators.map((o) => o.id)],
     60_000,
   );
-  return { conn, operators, perf };
+  // CALLS OF 2 MINUTES OR MORE, per operator per day.
+  //
+  // Marcia (via Vee, 2026-09-24): the team filters out the 1-2 minute calls so they do not
+  // drag a rating down. Checked on 2026-09-24 (Build Notes tab 18): 8.5% of reg calls are
+  // under 2 minutes and NOT ONE of them ever produced a registration — but management's star
+  // model does not filter them, and our unfiltered numbers match their document operator for
+  // operator. So this is an EXTRA column, never the ratio Priority is judged on (Vee's call:
+  // "show both").
+  //
+  // The daily table has no call length, so this is the per-call table joined to the call log.
+  // tryQ, not q: if this one query fails the rest of the tracker still runs and the column is
+  // simply blank. NO CUSTOMER DETAILS — callerName and callerPhoneNumber are never selected.
+  const longCallsRes = await tryQ(
+    conn,
+    `SELECT pc.operatorId, pc.date AS aggregationDate,
+            SUM(pc.rideRegCalls + pc.gourmetRegCalls + pc.groceryRegCalls + pc.noMembershipCalls) AS regCalls,
+            SUM(pc.hardRegs) AS hardRegs
+       FROM operatorPerformanceCalls pc
+       JOIN callLogs cl ON cl.id = pc.callLogId
+      WHERE pc.date >= DATE_SUB(?, INTERVAL 14 DAY)
+        AND pc.operatorId IN (?)
+        AND (pc.rideRegCalls + pc.gourmetRegCalls + pc.groceryRegCalls + pc.noMembershipCalls) > 0
+        AND TIMESTAMPDIFF(SECOND, cl.timeStart, cl.timeEnd) >= ?
+      GROUP BY pc.operatorId, pc.date`,
+    [earliestGradDate(), operators.map((o) => o.id), LONG_CALL_SECONDS],
+    90_000,
+  );
+  if (longCallsRes.error) {
+    console.error(`[tracker] 2 min+ call query failed, that column will be blank: ${longCallsRes.error.slice(0, 200)}`);
+  }
+  return { conn, operators, perf, longCalls: longCallsRes.rows ?? [] };
 }
 
 async function main() {
   if (!TRACKER_SHEET_ID) {
     throw new Error('OPS_TRACKER_SHEET_ID is not set. The team-facing sheet has nowhere to go.');
   }
-  const { conn, operators, perf } = await loadData();
+  const { conn, operators, perf, longCalls } = await loadData();
 
   console.log(`[tracker] ${TRAINED_SLACK_IDS.length} trained operators on the roster, ${operators.length} matched in the database`);
   if (TRAINED_WITHOUT_SLACK.length) {
@@ -284,6 +324,31 @@ async function main() {
     a.plans.basic += Number(r.basicMonthlyHardRegs || 0);
     a.plans.fixedIncome += Number(r.fixedIncomeMonthlyHardRegs || 0);
   }
+
+  // The same months, counting only calls that lasted 2 minutes or more. Kept in its own
+  // map so nothing above can accidentally use it: the ratio on the rest of the sheet, and
+  // everything Priority does, stays on ALL calls.
+  const longByOp = {};
+  for (const r of longCalls) {
+    const t = traineeOfOp(byId[r.operatorId]);
+    if (!t) continue;
+    const m = monthOf(t.gradDate, isoOf(r.aggregationDate));
+    if (!m) continue;
+    const e = (longByOp[r.operatorId] ??= { 1: { regCalls: 0, hardRegs: 0 }, 2: { regCalls: 0, hardRegs: 0 }, 3: { regCalls: 0, hardRegs: 0 } });
+    e[m].regCalls += Number(r.regCalls || 0);
+    e[m].hardRegs += Number(r.hardRegs || 0);
+  }
+  console.log(`[tracker] ${longCalls.length} day rows of calls ${LONG_CALL_SECONDS}s or longer, for ${Object.keys(longByOp).length} operators`);
+
+  /** The 3-month reg ratio counting only calls of 2 minutes or more. Blank when unknown. */
+  const longRatioOf = (t) => {
+    const o = t.slackId ? bySlack[t.slackId] : null;
+    const e = o ? longByOp[o.id] : null;
+    if (!e) return '';
+    const calls = BLOCKS.reduce((s, b) => s + e[b.month].regCalls, 0);
+    const hard = BLOCKS.reduce((s, b) => s + e[b.month].hardRegs, 0);
+    return calls > 0 ? pctStr(ratio(hard, calls)) : '';
+  };
 
   // -------------------------------------------------------------- per-op rows
   // THE RATIO THAT DECIDES PRIORITY — and the order people are listed in. The rule is
@@ -501,6 +566,10 @@ async function main() {
       // Vee, 2026-09-11: "we just need their numbers... add it to the performance versus,
       // you know, like, the three point seven". One column, from the Star Model tab.
       'Star (3 months)',
+      // Vee, 2026-09-24, after Marcia's "they filter the 1 or 2 min calls": show both. This
+      // one counts only calls of 2 minutes or more; the ratio beside it, and Priority, still
+      // count every call, which is what management's star model does.
+      'Reg ratio 2 min+ (all 3 months)',
     ];
     const WIDTH = tvpHeader.length;
     const banner = (text) => [text, ...Array(WIDTH - 1).fill('')];
@@ -562,6 +631,7 @@ async function main() {
         all3,
         t.status === 'active' ? opReportsFor(t).length : '',
         t.slackId ? starBySlack[t.slackId] ?? '' : '',
+        longRatioOf(t),
       ];
     };
 
