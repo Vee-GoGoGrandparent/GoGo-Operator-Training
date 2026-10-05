@@ -18,6 +18,9 @@
 // Right now that is August 2026. September's class will land here the same way.
 
 import { AUG_2026, CLASS_META as AUG_META } from './class-aug-2026.js';
+// September is the first class read straight from the orientation team's live workbook
+// (scripts/pull-class-sheet.js) instead of being typed out of a PDF.
+import { SEP_2026, CLASS_META as SEP_META } from './class-sep-2026.js';
 import { JUN_2026, CLASS_META as JUN_META, PUBLISHED as JUN_PUBLISHED } from './class-jun-2026.js';
 
 /**
@@ -31,6 +34,7 @@ import { JUN_2026, CLASS_META as JUN_META, PUBLISHED as JUN_PUBLISHED } from './
 export const CLASSES = [
   { meta: JUN_META, trainees: JUN_2026, published: JUN_PUBLISHED },
   { meta: AUG_META, trainees: AUG_2026, published: null },
+  { meta: SEP_META, trainees: SEP_2026, published: null },
 ];
 
 /** Classes we can only report, not compute — no roster, so nobody to look up. */

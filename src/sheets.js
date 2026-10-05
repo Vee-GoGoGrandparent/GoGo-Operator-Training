@@ -172,6 +172,28 @@ export function sheets() {
 }
 
 /**
+ * A READ-ONLY client for spreadsheets we do NOT own — the orientation team's class
+ * workbooks (Vee shared the September one on 2026-10-05).
+ *
+ * The guard above blocks those sheets on purpose, and widening it would weaken the one
+ * promise this project makes: it cannot write anywhere except Build Notes and the yearly
+ * trackers. So instead this client is built with Google's READ-ONLY scope. Writing through
+ * it is impossible rather than merely forbidden — the token itself cannot do it.
+ *
+ * Only for reading someone else's workbook. Everything of ours goes through sheets().
+ */
+let _readOnly;
+export function readOnlyClient() {
+  if (_readOnly) return _readOnly;
+  const auth = new google.auth.GoogleAuth({
+    credentials: loadCredentials(),
+    scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+  });
+  _readOnly = google.sheets({ version: 'v4', auth });
+  return _readOnly;
+}
+
+/**
  * Rewrite `rows` so its columns sit in whatever order the tab already uses.
  *
  * WHY THIS EXISTS

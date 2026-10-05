@@ -443,7 +443,12 @@ async function main() {
     const yearCohorts = new Set(CLASSES.map((c) => c.meta.cohort));
     const tracked = trackedAll.filter((r) => yearCohorts.has(r.cohort));
 
-    const classesNewestFirst = [...CLASSES].reverse().filter((c) => c.trainees.length);
+    // NEWEST CLASS ON TOP, on every tab — Vee, 2026-10-05: "newest class at the top... make
+    // sure you check every tab". Sorted by graduation date, not by the order someone happened
+    // to list the classes in: adding a class in the wrong place must not be able to break it.
+    const classesNewestFirst = [...CLASSES]
+      .filter((c) => c.trainees.length)
+      .sort((a, b) => String(b.meta.classEnd).localeCompare(String(a.meta.classEnd)));
     const classBanner = (cls) => `${cls.meta.label || cls.meta.cohort} ${cls.meta.classEnd.slice(0, 4)} CLASS`.toUpperCase();
 
     /**
@@ -590,6 +595,10 @@ async function main() {
       // one counts only calls of 2 minutes or more; the ratio beside it, and Priority, still
       // count every call, which is what management's star model does.
       'Reg ratio 2 min+ (all 3 months)',
+      // Vee, 2026-10-05: the September class is 35 ride operators and 16 Delivery. Delivery
+      // people take different calls and are not in management's ride star model, so their
+      // reg ratio and star will look thin — this says why. Blank for everyone else.
+      'Department',
     ];
     const WIDTH = tvpHeader.length;
     const banner = (text) => [text, ...Array(WIDTH - 1).fill('')];
@@ -652,6 +661,7 @@ async function main() {
         t.status === 'active' ? opReportsFor(t).length : '',
         t.slackId ? starBySlack[t.slackId] ?? '' : '',
         shortAdjustedRatioOf(t),
+        t.department ?? '',
       ];
     };
 
