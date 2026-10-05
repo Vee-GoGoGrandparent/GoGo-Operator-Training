@@ -452,23 +452,45 @@ async function main() {
     const classBanner = (cls) => `${cls.meta.label || cls.meta.cohort} ${cls.meta.classEnd.slice(0, 4)} CLASS`.toUpperCase();
 
     /**
-     * A per-person tab split by class, newest class on top — the layout Vee built by
-     * hand on Hard Regs on 2026-09-11: header, "Last updated", then for each class still
-     * inside its 3 months a banner and that class's people, leavers at the bottom of
-     * their own class. No blank row between classes, no "NO LONGER AT GOGO" banner.
+     * A per-person tab split by class, newest class on top — the layout Vee built by hand on
+     * Hard Regs on 2026-09-11: header, "Last updated", then for each class still inside its
+     * 3 months a banner and that class's people. No blank row between classes.
+     *
+     * Changed 2026-10-05 at her request: leavers no longer sit at the foot of their own
+     * class. Everyone who has left GoGo is gathered into a single "NO LONGER AT GOGO" block
+     * at the very bottom, newest departure first, carrying their class in the Priority column.
      */
     const splitByClass = (header, rowOf) => {
       const values = [header, stampRow(header.length)];
       const kinds = ['header', 'stamp'];
+      // Vee, 2026-10-05: everyone who has left GoGo goes in ONE block at the very bottom,
+      // whatever class they came from — "putting all the way at the bottom, regardless of
+      // what class they were" — so the top of the tab is only people a trainer can still do
+      // something about. Their class moves into the Priority column, which is blank for them
+      // anyway. A class past its 3 months drops off this tab and its leavers go with it (her
+      // call), so the bottom block cannot quietly grow all year.
+      const gone = [];
       for (const cls of classesNewestFirst) {
         if (classOver(cls.meta.classEnd)) continue;
         const members = tracked.filter((r) => r.cohort === cls.meta.cohort);
         if (!members.length) continue;
+        gone.push(...members.filter((r) => r.o.closedAt).map((r) => ({ r, cls })));
+        const here = members.filter((r) => !r.o.closedAt);
+        if (!here.length) continue;
         values.push([classBanner(cls), ...Array(header.length - 1).fill('')]);
         kinds.push('classBanner');
-        for (const r of members) {
-          values.push(rowOf(r));
-          kinds.push(r.o.closedAt ? 'gone' : 'active');
+        for (const r of here) {
+          values.push(rowOf(r, cls));
+          kinds.push('active');
+        }
+      }
+      if (gone.length) {
+        gone.sort((a, b) => isoOf(b.r.o.closedAt).localeCompare(isoOf(a.r.o.closedAt)));
+        values.push(['NO LONGER AT GOGO', ...Array(header.length - 1).fill('')]);
+        kinds.push('goneBanner');
+        for (const { r, cls } of gone) {
+          values.push(rowOf(r, cls));
+          kinds.push('gone');
         }
       }
       return { values, kinds };
@@ -508,14 +530,15 @@ async function main() {
       'Operator', 'Slack ID', 'Team lead', 'Class', 'Weeks active',
       ...MONTH_HEADERS, 'Reg ratio all 3 months', 'Soft regs', 'Trials',
       'Annual', 'Value', 'Basic', 'Fixed income', 'Priority', 'Status',
-    ], (r) => {
+    ], (r, cls) => {
       const m = monthCells(r, r.t.gradDate);
       return [
         name(r.o), r.o.slackId || '', teamLeadOf(r.o), r.cohort, r.weeksActive || '',
         ...m.cells, m.all3,
         r.a.sinceGrad.softRegs, r.a.sinceGrad.trialRegs,
         r.a.plans.annual, r.a.plans.value, r.a.plans.basic, r.a.plans.fixedIncome,
-        r.level,
+        // Priority is noise for someone who has gone, so it carries their class instead.
+        r.o.closedAt ? `${cls.meta.label} class` : r.level,
         r.o.closedAt ? `Left ${isoOf(r.o.closedAt)}` : r.o.suspendedAt ? 'Suspended' : 'Active',
       ];
     });
@@ -523,8 +546,10 @@ async function main() {
     // --- Weekly Trend: the shape of the ramp, week by week, one section per class ---
     // Only weeks in which somebody from a still-tracked class took a real call.
     const weeks = [...new Set(tracked.flatMap((r) => Object.keys(r.a.byWeek)))].sort();
-    const trend = splitByClass(['Operator', 'Slack ID', 'Team lead', ...weeks], (r) => [
-      name(r.o), r.o.slackId || '', teamLeadOf(r.o),
+    // This tab has no Priority column to hand over to the leavers' class, so it gets a Class
+    // column of its own — otherwise the block at the bottom would not say who came from where.
+    const trend = splitByClass(['Operator', 'Slack ID', 'Team lead', 'Class', ...weeks], (r, cls) => [
+      name(r.o), r.o.slackId || '', teamLeadOf(r.o), `${cls.meta.label} class`,
       ...weeks.map((w) => {
         const wk = r.a.byWeek[w];
         if (!wk || wk.regCalls === 0) return '';
@@ -646,7 +671,7 @@ async function main() {
       return DEPARTMENT[d.toLowerCase()] ?? d.charAt(0).toUpperCase() + d.slice(1);
     };
 
-    const rowFor = (t) => {
+    const rowFor = (t, cls) => {
       const r = t.slackId ? perfBySlack[t.slackId] : null;
       // The same month cells as Hard Regs, from the same function, so the two tabs can
       // never show different numbers for one person.
@@ -664,9 +689,10 @@ async function main() {
         r && r.a.first ? r.a.first : (t.status === 'active' ? '(not started)' : ''),
         r && r.daysWorked != null ? r.daysWorked : '',
         ...cells,
-        // Priority is about people we are still coaching. Once someone is gone it is
-        // noise, and "OK" next to a departure reads badly.
-        left ? '' : (r ? r.level : ''),
+        // Priority is about people we are still coaching. Once someone is gone it is noise,
+        // and "OK" next to a departure reads badly — so it carries their class instead
+        // (Vee, 2026-10-05), which is the one thing you still want to know about them.
+        left ? (cls ? `${cls.meta.label} class` : '') : (r ? r.level : ''),
         t.status !== 'active'
           ? `${t.status}${t.reason ? ` — ${t.reason}` : ''}`
           : o && o.closedAt
@@ -682,49 +708,52 @@ async function main() {
       ];
     };
 
-    // One section per class, newest class on top, each with its OWN leavers list —
-    // September's departures must never sit under August's heading.
+    // One section per class, newest class on top — then EVERYONE who has left GoGo in a
+    // single block at the very bottom, whatever class they came from (Vee, 2026-10-05).
+    // The top of the tab is a worklist; the bottom is the record. Unlike Hard Regs, this tab
+    // keeps every class after its 3 months, so nobody who left ever disappears from here.
     // A class workbook row does not carry its graduation date — the class does.
     const withClass = (cls) => cls.trainees.map((t) => ({ ...t, cohort: cls.meta.cohort, gradDate: cls.meta.classEnd }));
+    const ratioOf = (t) => (t.slackId ? perfBySlack[t.slackId]?.priorityRatio ?? null : null);
+    const everyoneGone = [];
 
     for (const cls of classesNewestFirst) {
+      const members = withClass(cls).map((t) => ({ t, left: leftOn(t), cls }));
+      everyoneGone.push(...members.filter((m) => m.left));
+      const here = members.filter((m) => !m.left);
+      if (!here.length) continue;
+
       tvp.values.push(banner(classBanner(cls)));
       tvp.kinds.push('classBanner');
-
-      const members = withClass(cls).map((t) => ({ t, left: leftOn(t) }));
       // Still here: LOWEST ratio first (Vee, 2026-09-11) — "that way we know who are the
       // people we need to talk to" at the start of the month. Same ratio as Priority and
-      // the same order as Hard Regs. Anyone with no ratio yet goes after them. This
-      // replaces "best training total first".
-      const ratioOf = (t) => (t.slackId ? perfBySlack[t.slackId]?.priorityRatio ?? null : null);
-      members
-        .filter((m) => !m.left)
+      // the same order as Hard Regs. Anyone with no ratio yet goes after them.
+      here
         .sort((a, b) => {
           const x = ratioOf(a.t);
           const y = ratioOf(b.t);
           if ((x === null) !== (y === null)) return x === null ? 1 : -1;
           return (x ?? 0) - (y ?? 0);
         })
-        .forEach((m) => { tvp.values.push(rowFor(m.t)); tvp.kinds.push('active'); });
-
-      // Gone: most recent departure first, then the people who never finished the class.
-      const gone = members.filter((m) => m.left);
-      if (gone.length) {
-        tvp.values.push(banner('NO LONGER AT GOGO'));
-        tvp.kinds.push('goneBanner');
-        gone
-          .sort((a, b) => {
-            const ad = a.left === 'during training';
-            const bd = b.left === 'during training';
-            if (ad !== bd) return ad ? 1 : -1;
-            if (ad && bd) return b.t.total - a.t.total;
-            return b.left.localeCompare(a.left);
-          })
-          .forEach((m) => { tvp.values.push(rowFor(m.t)); tvp.kinds.push('gone'); });
-      }
+        .forEach((m) => { tvp.values.push(rowFor(m.t, m.cls)); tvp.kinds.push('active'); });
 
       tvp.values.push(banner(''));
       tvp.kinds.push('blank');
+    }
+
+    // Gone: most recent departure first, and the people who never finished a class after them.
+    if (everyoneGone.length) {
+      tvp.values.push(banner('NO LONGER AT GOGO'));
+      tvp.kinds.push('goneBanner');
+      everyoneGone
+        .sort((a, b) => {
+          const ad = a.left === 'during training';
+          const bd = b.left === 'during training';
+          if (ad !== bd) return ad ? 1 : -1;
+          if (ad && bd) return b.t.total - a.t.total;
+          return b.left.localeCompare(a.left);
+        })
+        .forEach((m) => { tvp.values.push(rowFor(m.t, m.cls)); tvp.kinds.push('gone'); });
     }
     if (tvp.kinds[tvp.kinds.length - 1] === 'blank') { tvp.values.pop(); tvp.kinds.pop(); }
 
