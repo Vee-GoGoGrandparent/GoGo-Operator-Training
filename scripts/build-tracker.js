@@ -396,7 +396,12 @@ async function main() {
       weeksActive: Math.floor(daysWorked / 7),
       over: classOver(t.gradDate),
       priorityRatio,
-      level: priorityOf(priorityRatio),
+      // NO PRIORITY IN THE FIRST MONTH. Vee, 2026-10-05: "they just started, they just got on
+      // the phone, they just finished training... we don't want to be having this escalate
+      // bullshit now." So nobody is judged until their first month is actually up — a handful
+      // of calls in week one is not a rating. The ratio columns still fill in meanwhile, and
+      // from month 2 the usual rules take over (month 1's figure rules for the first week).
+      level: todayISO < milestoneDate(t.gradDate, 1) ? '' : priorityOf(priorityRatio),
     });
   }
 
@@ -485,7 +490,12 @@ async function main() {
         }
       }
       if (gone.length) {
-        gone.sort((a, b) => isoOf(b.r.o.closedAt).localeCompare(isoOf(a.r.o.closedAt)));
+        // GROUPED BY CLASS inside the block, newest class first, and within a class the most
+        // recent departure on top (Vee, 2026-10-05: "it should group all of August class
+        // together... the one that left a long time ago goes at the bottom for June").
+        const classRank = (cls) => classesNewestFirst.indexOf(cls);
+        gone.sort((a, b) => classRank(a.cls) - classRank(b.cls)
+          || isoOf(b.r.o.closedAt).localeCompare(isoOf(a.r.o.closedAt)));
         values.push(['NO LONGER AT GOGO', ...Array(header.length - 1).fill('')]);
         kinds.push('goneBanner');
         for (const { r, cls } of gone) {
@@ -663,12 +673,16 @@ async function main() {
       operations: 'Operations', groceries: 'Groceries', gourmet: 'Gourmet',
       registrations: 'Registrations', homeservices: 'Home Services', supervisor: 'Supervisor',
     };
+    // THE SYSTEM WINS. Vee, 2026-10-05: "I see that you put some operators as delivery
+    // operators, but they're not. I just checked the system and they're in operations." The
+    // class workbook writes "- Delivery" after some names, but that is what they were trained
+    // for, not where they ended up. So the database's own defaultType decides, and the
+    // workbook is only a fallback for someone the database says nothing about.
     const departmentOf = (t) => {
-      if (t.department) return t.department;
       const o = t.slackId ? bySlack[t.slackId] : null;
       const d = String(o?.defaultType ?? '').trim();
-      if (!d) return '';
-      return DEPARTMENT[d.toLowerCase()] ?? d.charAt(0).toUpperCase() + d.slice(1);
+      if (d) return DEPARTMENT[d.toLowerCase()] ?? d.charAt(0).toUpperCase() + d.slice(1);
+      return t.department ?? '';
     };
 
     const rowFor = (t, cls) => {
@@ -746,7 +760,11 @@ async function main() {
       tvp.values.push(banner('NO LONGER AT GOGO'));
       tvp.kinds.push('goneBanner');
       everyoneGone
+        // Grouped by class, newest class first; inside a class the most recent departure on
+        // top, with the people who never finished the class after them (Vee, 2026-10-05).
         .sort((a, b) => {
+          const byClass = classesNewestFirst.indexOf(a.cls) - classesNewestFirst.indexOf(b.cls);
+          if (byClass) return byClass;
           const ad = a.left === 'during training';
           const bd = b.left === 'during training';
           if (ad !== bd) return ad ? 1 : -1;
