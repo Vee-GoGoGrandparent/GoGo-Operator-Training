@@ -48,6 +48,20 @@ const SOURCE = {
 
 // Their workbook, not ours: a client that cannot write, by scope.
 const api = readOnlyClient();
+
+// Facts the orientation team told us that their workbook does not record. Keyed by Slack ID,
+// so a spelling change in their sheet cannot quietly detach a note from its person. These are
+// merged into the generated file, which is why re-running the script does not lose them.
+const FROM_THE_TEAM = {
+  // Oscar, 2026-10-05: "Aug class and he stepped out. Was rehired on Sept but he never showed
+  // up — so it is the same guy." Their SLI tab still scores him 100 for participation, which
+  // leaves a training total of 15 rather than 0, so the Scorecard would otherwise count him as
+  // someone who started and then left. Vee's call: fix this person, leave the rule alone.
+  U0BLTPD912R: {
+    neverStarted: true,
+    note: 'Was in the August class and stepped out; rehired for September but never showed up (Oscar, 2026-10-05). Counted as never started despite the participation score on their SLI tab.',
+  },
+};
 const get = async (tab, range) => {
   const r = await api.spreadsheets.values.get({ spreadsheetId: SOURCE.sheetId, range: `'${tab}'!${range}` });
   return r.data.values ?? [];
@@ -172,8 +186,12 @@ const people = roster.map((p) => {
     status: gone ? gone.status : 'active',
     ...(gone?.reason ? { reason: gone.reason } : {}),
     ...(gone?.leftOn ? { leftTraining: gone.leftOn } : {}),
+    ...(FROM_THE_TEAM[p.slackId] ?? {}),
   };
 });
+// A note keyed to a Slack ID nobody in this class has would do nothing at all, quietly.
+const strayNotes = Object.keys(FROM_THE_TEAM).filter((id) => !people.some((p) => p.slackId === id));
+if (strayNotes.length) console.log(`⚠️  note written for a Slack ID that is not in this class: ${strayNotes.join(', ')}`);
 for (const [what, list] of Object.entries(unmatched)) {
   if (list.length) console.log(`⚠️  no ${what} row matched for ${list.length}: ${list.join(', ')}`);
 }

@@ -629,6 +629,23 @@ async function main() {
       return t.status !== 'active' ? 'during training' : null;
     };
 
+    // DEPARTMENT for every class, not just September — Vee, 2026-10-05: "be sure to add it to
+    // other ops as well. Whether rides, deliveries, etc." September's own workbook says
+    // "Delivery" outright; June and August come from the database's `defaultType`, tidied but
+    // NOT renamed — "operations" is what it calls the ride side, and inventing a word for it
+    // would be us deciding something the data did not say. Blank where the database is blank.
+    const DEPARTMENT = {
+      operations: 'Operations', groceries: 'Groceries', gourmet: 'Gourmet',
+      registrations: 'Registrations', homeservices: 'Home Services', supervisor: 'Supervisor',
+    };
+    const departmentOf = (t) => {
+      if (t.department) return t.department;
+      const o = t.slackId ? bySlack[t.slackId] : null;
+      const d = String(o?.defaultType ?? '').trim();
+      if (!d) return '';
+      return DEPARTMENT[d.toLowerCase()] ?? d.charAt(0).toUpperCase() + d.slice(1);
+    };
+
     const rowFor = (t) => {
       const r = t.slackId ? perfBySlack[t.slackId] : null;
       // The same month cells as Hard Regs, from the same function, so the two tabs can
@@ -661,7 +678,7 @@ async function main() {
         t.status === 'active' ? opReportsFor(t).length : '',
         t.slackId ? starBySlack[t.slackId] ?? '' : '',
         shortAdjustedRatioOf(t),
-        t.department ?? '',
+        departmentOf(t),
       ];
     };
 
@@ -761,7 +778,11 @@ async function main() {
     // CUMULATIVE, unlike the registration months: the 60 day figure includes the 30 day
     // people. Denominator is who COMPLETED training — 3 of their 46 is 6.52%, exactly
     // what they publish.
-    const startedTraining = (t) => Number(t.total) > 0;
+    // `neverStarted` is a per-person fact from the orientation team, not a change to the rule
+    // above (Vee, 2026-10-05: "only fix this one person"). Laurence Sindol was rehired into
+    // September and never showed, but their SLI tab scores him 100 for participation, which
+    // leaves a total of 15 — so the total alone would count him as a starter who then left.
+    const startedTraining = (t) => !t.neverStarted && Number(t.total) > 0;
 
     for (const cls of [...CLASSES].reverse()) {
       const meta = cls.meta;
