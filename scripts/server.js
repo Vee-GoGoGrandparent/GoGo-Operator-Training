@@ -53,11 +53,21 @@ function run(script) {
   });
 }
 
-// Railway wants something listening. It also gives us a trivially cheap way to
-// confirm the service is actually up before blaming the database.
+// Railway wants something listening. The web port serves the Pin Academy (pin-academy/),
+// the trainees' pin practice and tests. If it ever fails to load, the tracker keeps
+// running and the port just answers "alive", so a Pin Academy problem can never stop
+// the daily refresh. /alive always answers, for checking the service is up.
+let pinAcademy = null;
+try {
+  ({ handle: pinAcademy } = await import('../pin-academy/server.js'));
+  console.log('[pin-academy] ready');
+} catch (err) {
+  console.error('[pin-academy] did not start (tracker unaffected):', err.message);
+}
 const port = process.env.PORT || 3000;
 http
-  .createServer((_req, res) => {
+  .createServer((req, res) => {
+    if (pinAcademy && req.url !== '/alive') return pinAcademy(req, res);
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('gogo-operator-training: alive\n');
   })

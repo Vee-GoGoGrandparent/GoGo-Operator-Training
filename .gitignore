@@ -7,3 +7,5 @@ google-service-account.json
 # Conversation backup: local only, never on GitHub
 entire conversation.md
 scripts/.export-state.json
+# Pin Academy local database
+pin-academy/data/
