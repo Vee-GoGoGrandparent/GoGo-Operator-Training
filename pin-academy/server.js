@@ -43,7 +43,7 @@ const sqlNow = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 const toMs = (sqlTime) => Date.parse(sqlTime.replace(' ', 'T') + 'Z');
 
 function needUser(req) { const u = auth.currentUser(req); if (!u) fail(401, 'Please sign in.'); return u; }
-function needAdmin(req) { const u = needUser(req); if (u.role !== 'admin') fail(403, 'Trainers only.'); return u; }
+function needAdmin(req) { const u = needUser(req); if (u.role !== 'admin') fail(403, 'Admins only.'); return u; }
 
 const publicUser = (u) => u && ({
   slackId: u.slack_id, name: u.name, role: u.role, classId: u.class_id,

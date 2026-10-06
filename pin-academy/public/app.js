@@ -4,6 +4,8 @@ const $tabs = document.getElementById('tabs');
 const $who = document.getElementById('who');
 
 let ME = null, CONFIG = {}, mapsReady = null;
+// One colour per type of place, so the practice page reads at a glance.
+const catColour = (cat) => `--c: var(--c${(Math.max(0, CATEGORIES.indexOf(cat)) % 6) + 1})`;
 const CATEGORIES = ['Hospital', 'Medical office', 'Airport', 'Apartment complex', 'Senior living', 'Gated community', 'Shopping center', 'Other'];
 
 // ── tiny helpers ─────────────────────────────────────────────────────
@@ -63,20 +65,25 @@ async function pinMap(host, { start, draggable = true, onMove } = {}) {
   const [{ Map }, { AdvancedMarkerElement, PinElement }, { StreetViewPanorama, StreetViewService }, { Polyline }] = await Promise.all(
     ['maps', 'marker', 'streetView', 'maps'].map((l) => google.maps.importLibrary(l)));
 
+  // Laid out like the GoGo dashboard's Location Map: Street View on top, satellite map below, legend underneath.
   const mapDiv = h('div', { class: 'pm-map' }), panoDiv = h('div', { class: 'pm-pano' });
   const sv = h('span', { class: 'tag' }, 'Street View: –');
-  const labels = h('input', { type: 'checkbox', checked: true, disabled: true });
-  const segMap = h('button', { class: 'on' }, 'Map'), segSat = h('button', {}, 'Satellite');
+  const labels = h('input', { type: 'checkbox', checked: true });
+  const segMap = h('button', {}, 'Map'), segSat = h('button', { class: 'on' }, 'Satellite');
+  const dot = (c) => h('span', { class: 'dot', style: `background:${c}` });
   host.append(h('div', { class: 'pm' },
-    h('div', { class: 'pm-bar' }, h('div', { class: 'seg' }, segMap, segSat), h('label', { class: 'check', style: 'margin:0' }, labels, 'Labels'),
-      h('span', { class: 'grow' }), sv),
-    h('div', { class: 'pm-grid' }, mapDiv, panoDiv)));
+    h('div', { class: 'pm-bar' }, 'Location Map', h('span', { class: 'grow' }), sv),
+    panoDiv, mapDiv,
+    h('div', { class: 'pm-legend' }, h('span', {}, 'Pickup:', dot('#2e9b4f')), h('span', {}, 'Original:', dot('#9a9aa8')),
+      h('span', { class: 'grow' }), h('div', { class: 'seg' }, segMap, segSat), h('label', { class: 'check', style: 'margin:0' }, labels, 'Labels'))));
 
   const pano = new StreetViewPanorama(panoDiv, { addressControl: false, fullscreenControl: true, motionTracking: false, visible: true });
-  const map = new Map(mapDiv, { center: start, zoom: 19, mapId: CONFIG.mapId, mapTypeId: 'roadmap', streetView: pano,
+  const map = new Map(mapDiv, { center: start, zoom: 19, mapId: CONFIG.mapId, mapTypeId: 'hybrid', streetView: pano,
     gestureHandling: 'greedy', mapTypeControl: false, clickableIcons: false, tilt: 0 });
-  const pin = new PinElement({ background: '#f28c28', borderColor: '#b35f0e', glyphColor: '#fff' });
-  const marker = new AdvancedMarkerElement({ map, position: start, gmpDraggable: draggable, content: pin.element, title: 'Pickup pin' });
+  // "Original" = where Google dropped the pin (fixed, grey). "Pickup" = the pin the trainee moves (green), as on the dashboard.
+  new AdvancedMarkerElement({ map, position: start, content: new PinElement({ background: '#9a9aa8', borderColor: '#6e6e7c', glyphColor: '#fff', scale: 0.85 }).element, title: 'Original', zIndex: 1 });
+  const pin = new PinElement({ background: '#2e9b4f', borderColor: '#1d6b35', glyphColor: '#fff' });
+  const marker = new AdvancedMarkerElement({ map, position: start, gmpDraggable: draggable, content: pin.element, title: 'Pickup', zIndex: 3 });
   const svService = new StreetViewService();
   let extras = [];
 
@@ -131,7 +138,7 @@ function drawShell(active) {
   const tab = ([id, name]) => h('button', { class: id === active ? 'on' : '', onclick: () => go(id) }, name);
   $tabs.append(...TRAINEE_TABS.map(tab));
   if (ME.role === 'admin') $tabs.append(h('span', { class: 'sep' }), ...ADMIN_TABS.map(tab));
-  $who.append(h('span', {}, ME.name, ME.className ? ` · ${ME.className}` : '', ME.role === 'admin' ? ' · Trainer' : ''),
+  $who.append(h('span', {}, ME.name, ME.className ? ` · ${ME.className}` : '', ME.role === 'admin' ? ' · Admin' : ''),
     h('button', { onclick: safe(async () => { await api('/auth/logout', {}); location.href = '/'; }) }, 'Sign out'));
 }
 
@@ -153,6 +160,7 @@ function drawLogin(me) {
     h('img', { src: '/pin.svg', width: 56, height: 56, alt: '' }),
     h('h1', {}, 'GoGo Pin Academy'),
     h('p', { class: 'lead' }, 'Practise putting the pickup pin in the right spot, then take your class pin test.'),
+    h('div', { class: 'chips' }, h('span', {}, 'Street View'), h('span', {}, 'Satellite'), h('span', {}, 'Pin tests'), h('span', {}, 'Your progress')),
     me.slackReady
       ? h('a', { class: 'slackbtn', href: '/auth/slack' }, slackLogo(), 'Sign in with Slack')
       : h('p', { class: 'tag warn' }, 'Slack sign-in is not switched on yet.'));
@@ -161,7 +169,7 @@ function drawLogin(me) {
     const nm = h('input', { type: 'text', placeholder: 'Name', value: 'Test Trainee' });
     const ad = h('input', { type: 'checkbox' });
     box.append(h('hr'), h('p', { class: 'small muted' }, 'Local testing only (hidden on the live site)'), id, nm,
-      h('label', { class: 'check' }, ad, 'Trainer'),
+      h('label', { class: 'check' }, ad, 'Admin'),
       h('button', { class: 'btn ghost', onclick: () => (location.href = `/auth/dev?as=${encodeURIComponent(id.value)}&name=${encodeURIComponent(nm.value)}${ad.checked ? '&role=admin' : ''}`) }, 'Test sign-in'));
   }
   mount(box);
@@ -203,7 +211,7 @@ VIEWS.practice = async () => {
     h('p', { class: 'lead' }, 'Pick a place. The pin starts where Google drops it, just like on the dashboard. Move it to where the driver should actually stop, then lock it in. You will see the right spot and why.'),
     !list.length ? h('div', { class: 'card muted' }, 'No practice addresses yet. Your trainer adds them.') : null,
     Object.entries(groups).map(([cat, items]) => [h('h3', {}, cat),
-      h('div', { class: 'tiles' }, items.map((a, i) => h('button', { class: 'tile', onclick: () => practiceOne(items, i) },
+      h('div', { class: 'tiles' }, items.map((a, i) => h('button', { class: 'tile', style: catColour(cat), onclick: () => practiceOne(items, i) },
         h('span', { class: 'tag' }, a.category), h('b', {}, a.label), h('span', { class: 'small muted' }, a.address))))]));
 };
 
@@ -331,8 +339,8 @@ function showTestResult(r) {
 VIEWS.progress = async () => {
   const p = await api('/api/my/history');
   mount(h('h1', {}, 'My progress'),
-    h('div', { class: 'grid2' }, h('div', { class: 'card' }, h('div', { class: 'muted small' }, 'Practice pins'), h('div', { class: 'big' }, p.practice.pins)),
-      h('div', { class: 'card' }, h('div', { class: 'muted small' }, 'Within 15 m'), h('div', { class: 'big' }, p.practice.pins ? `${Math.round(100 * p.practice.within15 / p.practice.pins)}%` : '–'))),
+    h('div', { class: 'grid2' }, h('div', { class: 'card stat s1' }, h('div', { class: 'muted small' }, 'Practice pins'), h('div', { class: 'big' }, p.practice.pins)),
+      h('div', { class: 'card stat s2' }, h('div', { class: 'muted small' }, 'Within 15 m'), h('div', { class: 'big' }, p.practice.pins ? `${Math.round(100 * p.practice.within15 / p.practice.pins)}%` : '–'))),
     h('div', { class: 'card' }, h('h2', {}, 'Recent practice'), !p.recent.length ? h('p', { class: 'muted' }, 'Nothing yet.') :
       h('table', {}, h('tr', {}, h('th', {}, 'Address'), h('th', {}, 'Off by'), h('th', {}, 'Points'), h('th', {}, 'When')),
         p.recent.map((r) => h('tr', {}, h('td', {}, r.label), h('td', {}, m(r.distance)), h('td', {}, r.points), h('td', { class: 'small muted' }, when(r.at)))))));
@@ -464,8 +472,8 @@ VIEWS['a-results'] = async () => {
     const done = r.rows.filter((x) => x.state === 'done');
     host.replaceChildren(
       h('div', { class: 'grid2' },
-        h('div', { class: 'card' }, h('div', { class: 'muted small' }, 'Handed in'), h('div', { class: 'big' }, `${done.length} / ${r.rows.length}`)),
-        h('div', { class: 'card' }, h('div', { class: 'muted small' }, 'Passed'), h('div', { class: 'big' }, done.length ? `${done.filter((x) => x.passed).length} / ${done.length}` : '–'))),
+        h('div', { class: 'card stat s1' }, h('div', { class: 'muted small' }, 'Handed in'), h('div', { class: 'big' }, `${done.length} / ${r.rows.length}`)),
+        h('div', { class: 'card stat s2' }, h('div', { class: 'muted small' }, 'Passed'), h('div', { class: 'big' }, done.length ? `${done.filter((x) => x.passed).length} / ${done.length}` : '–'))),
       h('div', { class: 'card' }, h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Trainees'), h('a', { class: 'btn ghost small', href: `/api/admin/results/${id}.csv` }, 'Download CSV')),
         h('table', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Right pins'), h('th', {}, 'Result'), h('th', {}, 'Missed')),
           r.rows.map((x) => h('tr', {}, h('td', {}, x.name), h('td', {}, x.correct == null ? '–' : `${x.correct} / ${x.total}`),
@@ -488,13 +496,13 @@ VIEWS['a-people'] = async () => {
       h('table', {}, classes.map((c) => h('tr', {}, h('td', {}, h('b', {}, c.name)), h('td', {}, `${c.people} people`),
         h('td', {}, h('span', { class: `tag ${c.active ? 'pass' : ''}` }, c.active ? 'open' : 'closed')),
         h('td', {}, h('button', { class: 'btn ghost small', onclick: safe(async () => { await api('/api/admin/classes', { id: c.id, active: !c.active }); go('a-people'); }) }, c.active ? 'Close' : 'Re-open')))))),
-    h('div', { class: 'card' }, h('h2', {}, 'People'), h('p', { class: 'small muted' }, 'Everyone who has signed in with Slack. Fix someone’s class or make a trainer here.'),
+    h('div', { class: 'card' }, h('h2', {}, 'People'), h('p', { class: 'small muted' }, 'Everyone who has signed in with Slack. Fix someone’s class or give someone admin access here.'),
       h('table', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Slack ID'), h('th', {}, 'Class'), h('th', {}, 'Role'), h('th', {}, 'Last sign-in')),
         people.map((p) => {
           const c = h('select', { onchange: safe(async () => { await api('/api/admin/people', { slackId: p.slack_id, classId: c.value ? Number(c.value) : null }); toast('Class updated'); }) },
             h('option', { value: '' }, '–'), classes.map((k) => h('option', { value: k.id, selected: k.id === p.class_id }, k.name)));
           const r = h('select', { onchange: safe(async () => { await api('/api/admin/people', { slackId: p.slack_id, role: r.value }); toast('Role updated'); }) },
-            ['trainee', 'admin'].map((x) => h('option', { value: x, selected: x === p.role }, x === 'admin' ? 'Trainer' : 'Trainee')));
+            ['trainee', 'admin'].map((x) => h('option', { value: x, selected: x === p.role }, x === 'admin' ? 'Admin' : 'Trainee')));
           return h('tr', {}, h('td', {}, p.name), h('td', { class: 'small muted' }, p.slack_id), h('td', {}, c), h('td', {}, r), h('td', { class: 'small muted' }, when(p.last_login)));
         }))));
 };
