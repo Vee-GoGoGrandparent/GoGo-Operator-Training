@@ -36,28 +36,27 @@ import { summarize, themesOf, isTruncated, NOT_DISCLOSED, textOf, loadArchive, A
 const pct = (x) => `${(x * 100).toFixed(1)}%`;
 
 /**
- * Is this theme covered by the training material?
+ * What does the training material have for each theme today?
  *
- * CORRECTED 2026-09-10 after reading the full Canva library. An earlier version of
- * this said Need Love had no module, and that surge and cancellation fees were not
- * taught. All three were wrong — they were based on four decks when there are around
- * twenty. Every single theme below turns out to be covered, most of them thoroughly.
+ * History, because this column has been wrong twice in opposite directions:
+ *   - Before 2026-09-10 it said Need Love, surge and cancellation fees were not taught,
+ *     from reading four decks.
+ *   - 2026-09-10 it swung to "every theme is covered, these are execution gaps only",
+ *     from a skim of all ~20 decks.
+ *   - 2026-10-05 every slide of all 20 decks was read page by page. Both halves are true:
+ *     the topics appear, but several have no words to say, no decision guide, or no
+ *     practice, and some decks contradict each other on prices and refunds. Vee approved
+ *     correcting the tab. Each entry below says what exists AND what is missing.
  *
- * That flips the conclusion. These are not content gaps. They are execution gaps —
- * which is exactly what GoGo's own Registration Call Coaching Breakdown already said:
- * "bottom performers are not struggling from a lack of product knowledge... the gap
- * is in execution."
- *
- * A content gap is fixed by writing a slide. An execution gap is fixed by practice,
- * and the two need completely different responses. Getting this backwards would have
- * sent Oscar off to write material that already exists.
+ * The coaching breakdown's point still stands for registration calls ("the gap is in
+ * execution"), which is why practice is in every entry, but it is not the whole story.
  */
 const COVERAGE = {
-  address: 'Taught twice over. "Registration Structure" says confirm addresses back; "Mistakes We See Most Often" makes failing to confirm ride details its own lesson. Pin adjustment has a deck of its own and "adjust the pin properly" is in Targets and Metrics.',
-  fees: 'Taught. The Need Love deck covers cancellation fees, the 2-minute vendor window, fare reviews, surge, and the $20 lost item fee. It states outright that informing customers of surge before ordering is a requirement.',
-  membership: 'Taught heavily. Plan pricing with the dollar savings, plus a low-performer versus top-performer comparison built from real call transcripts.',
-  nl: 'Taught in a 54-page deck: every ticket type, how to file two ways, the 30-day dispute window, duplicate prevention, scenarios and a knowledge check.',
-  accessibility: 'Taught — mobility and accessibility questions are covered in the registration material.',
+  address: 'Taught: confirm addresses back, pins in the Rides deck, pin exercises in the Upselling deck. Missing: two pin sections in that deck are empty title slides, no pin scenario of the day, no pass/fail pin test.',
+  fees: 'Partly taught: the Need Love deck mentions the 2-minute vendor window and the $20 lost item fee. Missing: no deck explains the cancellation fee or gives words to say, and decks disagree on refunds ("non-refundable" vs "90% within 3 business days").',
+  membership: 'Taught: plans and prices. Problems: "monthly and renews automatically" is said clearly on one slide only, decks give different prices, and the Rebuttals deck teaches "coverage" and "kind of like insurance".',
+  nl: 'Taught in a 54-page deck: every ticket type, two ways to file, the 30-day window. Missing: no guide for choosing the category, duplicate checks only for lost items, quiz mostly tests memory.',
+  accessibility: 'Taught: the Setting Expectations deck (what drivers will and won\'t do, WAV, service animals) and the Rides deck.',
 };
 
 async function main() {
@@ -88,7 +87,7 @@ async function main() {
   push(['']);
 
   banner('WHAT THE REPORTS ARE ABOUT');
-  header('Theme', 'Reports', 'Share', 'Where the training already covers it');
+  header('Theme', 'Reports', 'Share', 'What training has today, and what is missing');
   for (const t of s.themes) push([t.label, t.n, pct(t.pct), COVERAGE[t.key] || '']);
   push(['Matched none of these', s.untouched, pct(s.untouched / s.total),
         'Worth reading by hand — probably a fifth theme']);
@@ -118,7 +117,10 @@ async function main() {
   const [, topCount] = s.byReporter[0] ?? ['', 0];
   push([`Volume reflects who is watching as well as who is erring. The busiest reviewer filed ${topCount} of ${s.total} (${pct(s.total ? topCount / s.total : 0)}) on their own.`]);
   push([`${s.truncated} of ${s.total} reports have their text cut off by Slack, so some corrections read as half sentences.`]);
-  push(['Every theme here IS covered by the training material — checked against the full Canva library, about twenty decks, on 2026-09-10. So these are execution gaps, not content gaps. They are fixed by practice, not by writing new slides.']);
+  // Corrected 2026-10-05 (Vee approved). The old line said every theme was already covered and
+  // only practice was missing. A page-by-page read of all 20 Canva decks on 2026-10-05 showed
+  // otherwise, so the tab now says both halves.
+  push(['Some of these are missing from the training material, not just under-practised. A page-by-page review of all 20 Canva decks (2026-10-05) found no words to say for the cancellation fee, no guide for choosing a Need Love category, and no account-closure lesson. Pin placement is taught, but there is no pin scenario or pass/fail drill. So the fix is new material in some places and more practice in others.']);
   push(['No customer names or phone numbers are stored or shown anywhere.']);
   push(['The working detail — who filed what, and every individual report — is on the Build Notes sheet, not here.']);
 

@@ -22,6 +22,9 @@ import { AUG_2026, CLASS_META as AUG_META } from './class-aug-2026.js';
 // (scripts/pull-class-sheet.js) instead of being typed out of a PDF.
 import { SEP_2026, CLASS_META as SEP_META } from './class-sep-2026.js';
 import { JUN_2026, CLASS_META as JUN_META, PUBLISHED as JUN_PUBLISHED } from './class-jun-2026.js';
+// May (graduated 2026-06-05) added 2026-10-05 at Vee's request. Its three tracked months are
+// already over, so it lands on the Scorecard and Training vs Performance with final numbers.
+import { MAY_2026, CLASS_META as MAY_META } from './class-may-2026.js';
 
 /**
  * Every class, oldest first. Add new classes here and every tab picks them up.
@@ -32,6 +35,7 @@ import { JUN_2026, CLASS_META as JUN_META, PUBLISHED as JUN_PUBLISHED } from './
  * the honest state of things, not a bug to paper over.
  */
 export const CLASSES = [
+  { meta: MAY_META, trainees: MAY_2026, published: null },
   { meta: JUN_META, trainees: JUN_2026, published: JUN_PUBLISHED },
   { meta: AUG_META, trainees: AUG_2026, published: null },
   { meta: SEP_META, trainees: SEP_2026, published: null },
