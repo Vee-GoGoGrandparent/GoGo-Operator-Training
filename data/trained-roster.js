@@ -22,9 +22,13 @@ import { AUG_2026, CLASS_META as AUG_META } from './class-aug-2026.js';
 // (scripts/pull-class-sheet.js) instead of being typed out of a PDF.
 import { SEP_2026, CLASS_META as SEP_META } from './class-sep-2026.js';
 import { JUN_2026, CLASS_META as JUN_META, PUBLISHED as JUN_PUBLISHED } from './class-jun-2026.js';
-// May (graduated 2026-06-05) added 2026-10-05 at Vee's request. Its three tracked months are
-// already over, so it lands on the Scorecard and Training vs Performance with final numbers.
-import { MAY_2026, CLASS_META as MAY_META } from './class-may-2026.js';
+// NOT HERE ON PURPOSE: May 2026 (data/class-may-2026.js) and any older class.
+// Vee, 2026-10-05: "May doesn't count against them [the trainers]. The whole thing started in
+// June/July for them. We don't need to do every single tab... we're adding these other classes
+// just to see if we can find patterns to make the training material better."
+// So older classes are ANALYSIS-ONLY: read them for pattern work (pull-class-sheet.js --class may),
+// never list them in CLASSES, which feeds every tab of the trainers' tracker. June is the first
+// class the trainers are graded on.
 
 /**
  * Every class, oldest first. Add new classes here and every tab picks them up.
@@ -35,7 +39,6 @@ import { MAY_2026, CLASS_META as MAY_META } from './class-may-2026.js';
  * the honest state of things, not a bug to paper over.
  */
 export const CLASSES = [
-  { meta: MAY_META, trainees: MAY_2026, published: null },
   { meta: JUN_META, trainees: JUN_2026, published: JUN_PUBLISHED },
   { meta: AUG_META, trainees: AUG_2026, published: null },
   { meta: SEP_META, trainees: SEP_2026, published: null },

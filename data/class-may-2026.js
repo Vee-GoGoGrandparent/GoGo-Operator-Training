@@ -1,9 +1,9 @@
 // May 2026 class — read from the LIVE class workbook "May 2026 Class"
 // by scripts/pull-class-sheet.js. Do not hand-edit: re-run the script instead.
 //
-// Added 2026-10-05 (Vee: "Yes, add May to the tracker"). May graduated 2026-06-05, so its three
-// tracked months are already over: it shows on the Scorecard and on Training vs Performance with
-// final numbers, and not on the per-person tabs that drop a class after 3 months.
+// ANALYSIS ONLY. Not on the trainers' tracker. Vee, 2026-10-05: May "doesn't count against" the
+// trainers (their grading starts with June), so this class is read only to look for patterns that
+// can improve the training material. It is deliberately NOT listed in data/trained-roster.js.
 //
 // Scores come from the "SLI" tabs, which in May still weighted Knowledge 30% · Call Handling 25%
 // · System Navigation 20% · Punctuality & Participation 10% · Engagement 10% · Technical
