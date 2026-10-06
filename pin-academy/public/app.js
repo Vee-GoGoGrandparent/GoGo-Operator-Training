@@ -523,7 +523,7 @@ function editScenario(existing) {
 
   mount(h('button', { class: 'btn ghost small', onclick: () => go('a-scenarios') }, '← Scenarios'),
     h('h1', {}, existing ? 'Edit scenario' : 'New scenario'),
-    h('div', { class: 'card' }, h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Scenario name (trainees see it, so don't give the answer away)'), title), h('div', {}, h('label', {}, 'Type of place'), cat)),
+    h('div', { class: 'card' }, h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Scenario name (trainees see it, so do not give the answer away)'), title), h('div', {}, h('label', {}, 'Type of place'), cat)),
       h('label', {}, 'What the caller says'), caller,
       h('label', { class: 'check' }, practice, 'Use in practice (untick to keep it for tests only)')),
     stopsHost,
