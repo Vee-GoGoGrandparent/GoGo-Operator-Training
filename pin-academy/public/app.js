@@ -4,9 +4,15 @@ const $tabs = document.getElementById('tabs');
 const $who = document.getElementById('who');
 
 let ME = null, CONFIG = {}, mapsReady = null;
+const CATEGORIES = ['Hospital', 'Medical office', 'Airport', 'Restaurant or shop', 'Apartment complex', 'Senior living', 'Gated community', 'Shopping center', 'Other'];
 // One colour per type of place, so the practice page reads at a glance.
 const catColour = (cat) => `--c: var(--c${(Math.max(0, CATEGORIES.indexOf(cat)) % 6) + 1})`;
-const CATEGORIES = ['Hospital', 'Medical office', 'Airport', 'Apartment complex', 'Senior living', 'Gated community', 'Shopping center', 'Other'];
+const STOP_NAME = { pickup: 'Start Address (pickup)', dropoff: 'End Address (drop-off)' };
+const PIN_COLOUR = { pickup: ['#2e9b4f', '#1d6b35'], dropoff: ['#d6336c', '#9c1f4c'] };
+const SUGGESTED_QUESTIONS = [
+  'Which business or building are you at?', 'Which entrance or side of the building will you be at?',
+  'What are you wearing, so the driver can spot you?', 'Have you had any trouble being picked up there before?',
+];
 
 // ── tiny helpers ─────────────────────────────────────────────────────
 function h(tag, attrs = {}, ...kids) {
@@ -55,37 +61,49 @@ function loadMaps() {
   return mapsReady;
 }
 const ll = (p) => (p ? { lat: typeof p.lat === 'function' ? p.lat() : p.lat, lng: typeof p.lng === 'function' ? p.lng() : p.lng } : null);
+const noMap = () => h('div', { class: 'pm nomap' }, 'The map is not connected yet. It switches on once the Google Maps key is added in Railway.');
 
-// The map + Street View pair used everywhere. Street View always looks at the pin.
-async function pinMap(host, { start, draggable = true, onMove } = {}) {
-  if (!(await loadMaps())) {
-    host.append(h('div', { class: 'pm nomap' }, 'The map is not connected yet. It switches on once the Google Maps key is added in Railway.'));
-    return null;
-  }
-  const [{ Map }, { AdvancedMarkerElement, PinElement }, { StreetViewPanorama, StreetViewService }, { Polyline }] = await Promise.all(
-    ['maps', 'marker', 'streetView', 'maps'].map((l) => google.maps.importLibrary(l)));
+// The dashboard's address search box (Google's own suggestions). Calls onPick({ lat, lng, name, address }).
+async function placeSearch(host, onPick) {
+  if (!(await loadMaps())) return;
+  const { PlaceAutocompleteElement } = await google.maps.importLibrary('places');
+  const ac = new PlaceAutocompleteElement({ includedRegionCodes: ['us'] });
+  ac.style.width = '100%';
+  host.append(ac);
+  const picked = async (place) => {
+    await place.fetchFields({ fields: ['displayName', 'formattedAddress', 'location'] });
+    onPick({ ...ll(place.location), name: place.displayName || '', address: place.formattedAddress || '' });
+  };
+  ac.addEventListener('gmp-select', (e) => picked(e.placePrediction.toPlace()));
+  ac.addEventListener('gmp-placeselect', (e) => picked(e.place)); // older event name, same thing
+}
 
-  // Laid out like the GoGo dashboard's Location Map: Street View on top, satellite map below, legend underneath.
+// Laid out like the GoGo dashboard's Location Map: Street View on top, satellite map below, legend underneath.
+// Grey = where Google put it ("Original"), green/pink = the pin you move, blue numbered = entrances.
+async function pinMap(host, { start, kind = 'pickup', draggable = true, onMove, entrances = [], onEntrance } = {}) {
+  if (!(await loadMaps())) { host.append(noMap()); return null; }
+  const [{ Map, Polyline }, { AdvancedMarkerElement, PinElement }, { StreetViewPanorama, StreetViewService }] = await Promise.all(
+    ['maps', 'marker', 'streetView'].map((l) => google.maps.importLibrary(l)));
   const mapDiv = h('div', { class: 'pm-map' }), panoDiv = h('div', { class: 'pm-pano' });
   const sv = h('span', { class: 'tag' }, 'Street View: –');
   const labels = h('input', { type: 'checkbox', checked: true });
   const segMap = h('button', {}, 'Map'), segSat = h('button', { class: 'on' }, 'Satellite');
   const dot = (c) => h('span', { class: 'dot', style: `background:${c}` });
+  const [col, edge] = PIN_COLOUR[kind] || PIN_COLOUR.pickup;
   host.append(h('div', { class: 'pm' },
     h('div', { class: 'pm-bar' }, 'Location Map', h('span', { class: 'grow' }), sv),
     panoDiv, mapDiv,
-    h('div', { class: 'pm-legend' }, h('span', {}, 'Pickup:', dot('#2e9b4f')), h('span', {}, 'Original:', dot('#9a9aa8')),
+    h('div', { class: 'pm-legend' }, h('span', {}, kind === 'dropoff' ? 'Drop-off:' : 'Pickup:', dot(col)), h('span', {}, 'Original:', dot('#9a9aa8')),
+      h('span', {}, 'Entrances:', dot('#3d9df5')),
       h('span', { class: 'grow' }), h('div', { class: 'seg' }, segMap, segSat), h('label', { class: 'check', style: 'margin:0' }, labels, 'Labels'))));
 
   const pano = new StreetViewPanorama(panoDiv, { addressControl: false, fullscreenControl: true, motionTracking: false, visible: true });
   const map = new Map(mapDiv, { center: start, zoom: 19, mapId: CONFIG.mapId, mapTypeId: 'hybrid', streetView: pano,
     gestureHandling: 'greedy', mapTypeControl: false, clickableIcons: false, tilt: 0 });
-  // "Original" = where Google dropped the pin (fixed, grey). "Pickup" = the pin the trainee moves (green), as on the dashboard.
-  new AdvancedMarkerElement({ map, position: start, content: new PinElement({ background: '#9a9aa8', borderColor: '#6e6e7c', glyphColor: '#fff', scale: 0.85 }).element, title: 'Original', zIndex: 1 });
-  const pin = new PinElement({ background: '#2e9b4f', borderColor: '#1d6b35', glyphColor: '#fff' });
-  const marker = new AdvancedMarkerElement({ map, position: start, gmpDraggable: draggable, content: pin.element, title: 'Pickup', zIndex: 3 });
+  const original = new AdvancedMarkerElement({ map, position: start, content: new PinElement({ background: '#9a9aa8', borderColor: '#6e6e7c', glyphColor: '#fff', scale: 0.85 }).element, title: 'Original', zIndex: 1 });
+  const marker = new AdvancedMarkerElement({ map, position: start, gmpDraggable: draggable, content: new PinElement({ background: col, borderColor: edge, glyphColor: '#fff' }).element, title: kind, zIndex: 3 });
   const svService = new StreetViewService();
-  let extras = [];
+  let extras = [], entranceMarkers = [];
 
   const setType = () => map.setMapTypeId(segSat.classList.contains('on') ? (labels.checked ? 'hybrid' : 'satellite') : 'roadmap');
   segMap.onclick = () => { segMap.classList.add('on'); segSat.classList.remove('on'); labels.disabled = true; setType(); };
@@ -96,29 +114,40 @@ async function pinMap(host, { start, draggable = true, onMove } = {}) {
     svService.getPanorama({ location: pos, radius: 60 }, (data, status) => {
       if (status !== 'OK') { sv.textContent = 'Street View: none nearby'; sv.className = 'tag warn'; return; }
       pano.setPosition(data.location.latLng);
-      pano.setPov({ heading: google.maps.geometry ? google.maps.geometry.spherical.computeHeading(data.location.latLng, pos) : headingTo(ll(data.location.latLng), pos), pitch: 0 });
+      pano.setPov({ heading: headingTo(ll(data.location.latLng), pos), pitch: 0 });
       sv.textContent = 'Street View: facing the pin'; sv.className = 'tag pass';
     });
   }
   const moved = () => { const p = ll(marker.position); lookAt(p); onMove && onMove(p); };
   marker.addListener('dragend', moved);
   map.addListener('click', (e) => { if (!draggable) return; marker.position = e.latLng; moved(); });
+
+  function setEntrances(list) {
+    entranceMarkers.forEach((x) => (x.map = null));
+    entranceMarkers = list.map((e, i) => {
+      const mk = new AdvancedMarkerElement({ map, position: { lat: e.lat, lng: e.lng }, title: e.name, zIndex: 2,
+        content: new PinElement({ background: '#3d9df5', borderColor: '#1f6fb8', glyph: String(i + 1), glyphColor: '#fff', scale: 0.95 }).element });
+      mk.addListener('click', () => { if (!draggable) return; marker.position = { lat: e.lat, lng: e.lng }; moved(); onEntrance && onEntrance(i); });
+      return mk;
+    });
+  }
+  setEntrances(entrances);
   lookAt(start);
 
   return {
-    map,
+    map, setEntrances,
     getPin: () => ll(marker.position),
     setPin(p, center = true) { marker.position = p; if (center) map.setCenter(p); lookAt(p); onMove && onMove(p); },
+    setOriginal(p) { original.position = p; },
     lock() { marker.gmpDraggable = false; draggable = false; },
     showAnswer(answer, mine) {
       const ok = new PinElement({ background: '#1e8a4c', borderColor: '#0f5a30', glyph: '✓', glyphColor: '#fff' });
-      extras.push(new AdvancedMarkerElement({ map, position: answer, content: ok.element, title: 'Correct spot', zIndex: 5 }));
-      extras.push(new Polyline({ map, path: [mine, answer], strokeColor: '#c0392b', strokeOpacity: .9, strokeWeight: 3 }));
-      const b = new google.maps.LatLngBounds(); b.extend(mine); b.extend(answer);
+      extras.push(new AdvancedMarkerElement({ map, position: answer, content: ok.element, title: 'Right spot', zIndex: 5 }));
+      if (mine) extras.push(new Polyline({ map, path: [mine, answer], strokeColor: '#d64545', strokeOpacity: .9, strokeWeight: 3 }));
+      const b = new google.maps.LatLngBounds(); b.extend(answer); if (mine) b.extend(mine);
       map.fitBounds(b, 80); if (map.getZoom() > 20) map.setZoom(20);
       lookAt(answer);
     },
-    clearExtras() { extras.forEach((x) => (x.map = null, x.setMap && x.setMap(null))); extras = []; },
   };
 }
 function headingTo(a, b) {
@@ -129,7 +158,7 @@ function headingTo(a, b) {
 
 // ── shell: sign-in, tabs ─────────────────────────────────────────────
 const TRAINEE_TABS = [['practice', 'Practice'], ['tests', 'Tests'], ['progress', 'My progress']];
-const ADMIN_TABS = [['a-addresses', 'Addresses'], ['a-tests', 'Build tests'], ['a-results', 'Results'], ['a-people', 'People & classes']];
+const ADMIN_TABS = [['a-scenarios', 'Scenarios'], ['a-tests', 'Build tests'], ['a-results', 'Results'], ['a-people', 'People & classes']];
 
 function drawShell(active) {
   $tabs.replaceChildren();
@@ -151,7 +180,7 @@ async function boot() {
   if (err) { history.replaceState(null, '', '/'); toast(err, true); }
   if (!ME) return drawLogin(me);
   if (!ME.classId && ME.role !== 'admin') return drawClassPicker();
-  render(location.hash.slice(1) || (ME.role === 'admin' ? 'a-addresses' : 'practice'));
+  render(location.hash.slice(1) || (ME.role === 'admin' ? 'a-scenarios' : 'practice'));
 }
 
 function drawLogin(me) {
@@ -159,7 +188,7 @@ function drawLogin(me) {
   const box = h('div', { class: 'card login' },
     h('img', { src: '/pin.svg', width: 56, height: 56, alt: '' }),
     h('h1', {}, 'GoGo Pin Academy'),
-    h('p', { class: 'lead' }, 'Practise putting the pickup pin in the right spot, then take your class pin test.'),
+    h('p', { class: 'lead' }, 'Practise real calls: find the right place, put the pin on the right door, and write a note the driver can use.'),
     h('div', { class: 'chips' }, h('span', {}, 'Street View'), h('span', {}, 'Satellite'), h('span', {}, 'Pin tests'), h('span', {}, 'Your progress')),
     me.slackReady
       ? h('a', { class: 'slackbtn', href: '/auth/slack' }, slackLogo(), 'Sign in with Slack')
@@ -197,50 +226,128 @@ async function drawClassPicker() {
 
 const VIEWS = {};
 async function render(id) {
-  if (!VIEWS[id] || (id.startsWith('a-') && ME.role !== 'admin')) id = 'practice';
+  // #s-12 opens practice scenario 12 directly, so a trainer can send one call as a link.
+  const direct = /^s-(\d+)$/.exec(id || '');
+  if (direct) {
+    drawShell('practice');
+    const list = await api('/api/practice');
+    const i = list.findIndex((x) => x.id === Number(direct[1]));
+    if (i >= 0) return practiceOne(list, i);
+    toast('That scenario is not in practice.', true); id = 'practice';
+  }
+  if (!VIEWS[id] || (id.startsWith('a-') && ME.role !== 'admin')) id = ME.role === 'admin' ? 'a-scenarios' : 'practice';
   drawShell(id);
   try { await VIEWS[id](); } catch (e) { mount(h('div', { class: 'card' }, h('p', {}, e.message))); }
+}
+
+// ── one scenario, as a trainee sees it (practice and tests) ───────────
+// Returns { el, getSubmission(), showResult(result) }.
+function scenarioForm(s) {
+  const t0 = Date.now();
+  const asked = new Set();
+  const transcript = h('div', { class: 'transcript' }, h('div', { class: 'line caller' }, h('b', {}, 'Caller: '), s.caller));
+  const qButtons = s.questions.map((q, i) => h('button', { class: 'qbtn', onclick: () => {
+    if (asked.has(i)) return;
+    asked.add(i); qButtons[i].classList.add('on');
+    transcript.append(h('div', { class: 'line you' }, h('b', {}, 'You: '), q.q), h('div', { class: 'line caller' }, h('b', {}, 'Caller: '), q.a));
+  } }, q.q));
+
+  const stops = s.stops.map((stop) => {
+    const st = { pin: null, entrance: null, picked: '', pm: null };
+    const specific = h('input', { type: 'text', placeholder: 'e.g. front door facing the parking lot' });
+    const venue = h('select', { onchange: () => {
+      const i = venue.value === '' ? null : Number(venue.value);
+      st.entrance = i;
+      if (i != null) { const e = stop.entrances[i]; specific.value = e.name; st.pm && st.pm.setPin({ lat: e.lat, lng: e.lng }); }
+    } }, h('option', { value: '' }, 'Original Address'), stop.entrances.map((e, i) => h('option', { value: i }, `${i + 1}. ${e.name}`)));
+    const picked = h('div', { class: 'small muted' }, 'Nothing searched yet.');
+    const searchHost = h('div', { class: 'search' });
+    const mapHost = h('div');
+    const card = h('div', { class: `card stop ${stop.kind}` },
+      h('h2', {}, STOP_NAME[stop.kind] || stop.kind),
+      h('label', {}, 'Street Address1* (search the way you would on the dashboard)'), searchHost, picked,
+      stop.entrances.length ? h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Venue Entrance or Side'), venue), h('div', {}, h('label', {}, 'Specific Entrance or Side'), specific))
+        : h('div', {}, h('label', {}, 'Specific Entrance or Side'), specific),
+      h('p'), mapHost);
+    st.specific = specific;
+    placeSearch(searchHost, (p) => {
+      picked.textContent = `Picked: ${p.name}${p.address ? ' · ' + p.address : ''}`;
+      st.picked = p.name;
+      if (st.pm) { st.pm.setOriginal(p); st.pm.setPin(p); }
+    });
+    pinMap(mapHost, { start: stop.start, kind: stop.kind, entrances: stop.entrances, onMove: (p) => (st.pin = p),
+      onEntrance: (i) => { venue.value = String(i); st.entrance = i; specific.value = stop.entrances[i].name; } })
+      .then((pm) => { st.pm = pm; if (pm) st.pin = pm.getPin(); });
+    return { stop, st, card };
+  });
+
+  const note = h('textarea', { placeholder: 'Anything else the driver needs to know? Write it for an Uber or Lyft driver: where exactly the customer is, how to find them, how to reach them.' });
+  const result = h('div');
+  const el = h('div', {},
+    h('div', { class: 'card call' }, h('div', { class: 'row' }, h('h2', { class: 'grow' }, '📞 The call'), h('span', { class: 'tag' }, s.category)),
+      transcript,
+      s.questions.length ? [h('label', {}, 'Ask the caller (pick the questions you would ask)'), h('div', { class: 'qbtns' }, qButtons)] : null),
+    stops.map((x) => x.card),
+    h('div', { class: 'card' }, h('h2', {}, 'Driver Message Preview'), note),
+    result);
+  return {
+    el,
+    getSubmission: () => ({
+      pins: stops.map((x) => x.st.pin), entrances: stops.map((x) => x.st.entrance), asked: [...asked],
+      note: note.value, specific: stops.map((x) => x.st.specific.value), seconds: Math.round((Date.now() - t0) / 1000),
+    }),
+    showResult(r) {
+      stops.forEach((x, i) => { const g = r.stops[i]; if (x.st.pm) { x.st.pm.lock(); x.st.pm.showAnswer(g.answer, x.st.pin); } });
+      note.disabled = true;
+      result.replaceChildren(resultCard(r));
+      result.scrollIntoView({ behavior: 'smooth' });
+    },
+  };
+}
+
+function resultCard(r) {
+  const ok = (b) => h('span', { class: `tag ${b ? 'pass' : 'fail'}` }, b ? '✓' : '✗');
+  return h('div', { class: `card result ${r.passed ? 'good' : 'bad'}` },
+    h('div', { class: 'row' }, h('div', { class: 'big' }, r.passed ? 'Got it' : 'Not quite'), h('span', { class: `tag ${r.passed ? 'pass' : 'fail'}` }, r.passed ? 'Passed' : 'Try again')),
+    h('table', {},
+      r.stops.map((s) => h('tr', {}, h('td', {}, ok(s.passed)), h('td', {}, h('b', {}, s.kind === 'dropoff' ? 'Drop-off pin' : 'Pickup pin')),
+        h('td', {}, s.distance == null ? 'No pin placed' : `${m(s.distance)} from the right spot`,
+          s.entrance && s.entrance.correct ? h('div', { class: 'small muted' }, `Right entrance: ${s.entrance.correct}${s.entrance.chose ? ` · you picked: ${s.entrance.chose}` : ''}`) : null))),
+      h('tr', {}, h('td', {}, ok(!r.missingQuestions.length)), h('td', {}, h('b', {}, 'Questions')),
+        h('td', {}, r.missingQuestions.length ? `You didn't ask: ${r.missingQuestions.join(' · ')}` : 'You asked what you needed to.')),
+      h('tr', {}, h('td', {}, ok(r.note.ok)), h('td', {}, h('b', {}, 'Driver note')),
+        h('td', {}, r.note.ok ? 'Clear and useful for the driver.' : r.note.problems.join(' ')))),
+    r.modelNote ? [h('h3', {}, 'A good note looks like this'), h('p', { class: 'model' }, r.modelNote)] : null,
+    r.why ? [h('h3', {}, 'Why'), h('p', {}, r.why)] : null);
 }
 
 // ── practice ─────────────────────────────────────────────────────────
 VIEWS.practice = async () => {
   const list = await api('/api/practice');
   const groups = {};
-  list.forEach((a) => (groups[a.category] ||= []).push(a));
+  list.forEach((s) => (groups[s.category] ||= []).push(s));
   mount(h('h1', {}, 'Practice'),
-    h('p', { class: 'lead' }, 'Pick a place. The pin starts where Google drops it, just like on the dashboard. Move it to where the driver should actually stop, then lock it in. You will see the right spot and why.'),
-    !list.length ? h('div', { class: 'card muted' }, 'No practice addresses yet. Your trainer adds them.') : null,
+    h('p', { class: 'lead' }, 'Each one is a short call. Read what the caller says, ask what you need to, search the place the way you would on the dashboard, put the pin on the right spot, and write the driver note. Then see how you did and why.'),
+    !list.length ? h('div', { class: 'card muted' }, 'No practice scenarios yet. Your trainer adds them.') : null,
     Object.entries(groups).map(([cat, items]) => [h('h3', {}, cat),
-      h('div', { class: 'tiles' }, items.map((a, i) => h('button', { class: 'tile', style: catColour(cat), onclick: () => practiceOne(items, i) },
-        h('span', { class: 'tag' }, a.category), h('b', {}, a.label), h('span', { class: 'small muted' }, a.address))))]));
+      h('div', { class: 'tiles' }, items.map((s, i) => h('button', { class: 'tile', style: catColour(cat), onclick: () => practiceOne(items, i) },
+        h('span', { class: 'tag' }, s.category), h('b', {}, s.title), h('span', { class: 'small muted' }, s.stops.map((x) => x.kind === 'dropoff' ? 'drop-off' : 'pickup').join(' + ')))))]));
 };
 
-async function practiceOne(items, i) {
-  const a = items[i];
-  const t0 = Date.now();
-  const mapHost = h('div');
-  const out = h('div');
-  const lockBtn = h('button', { class: 'btn orange' }, 'Lock in my pin');
-  mount(h('div', { class: 'row' }, h('button', { class: 'btn ghost small', onclick: () => go('practice') }, '← All addresses'), h('span', { class: 'grow' }),
-      h('span', { class: 'small muted' }, `${i + 1} of ${items.length} in ${a.category}`)),
-    h('div', { class: 'card' }, h('div', { class: 'small muted' }, 'The customer says:'), h('div', { class: 'question' }, a.label), h('div', { class: 'muted' }, a.address)),
-    mapHost, h('p'), h('div', { class: 'row' }, lockBtn, h('span', { class: 'small muted' }, 'Drag the pin, or click the map. Street View on the right always looks at the pin.')), out);
-  const pm = await pinMap(mapHost, { start: a.start });
-  if (!pm) return lockBtn.disabled = true;
-  lockBtn.onclick = safe(async () => {
-    lockBtn.disabled = true;
-    const mine = pm.getPin();
-    const r = await api('/api/practice/answer', { addressId: a.id, ...mine, seconds: Math.round((Date.now() - t0) / 1000) });
-    pm.lock(); pm.showAnswer(r.answer, mine);
-    const good = r.distance <= 15;
-    out.replaceChildren(h('div', { class: `card result ${good ? 'good' : 'bad'}` },
-      h('div', { class: 'row' }, h('div', { class: 'big' }, m(r.distance)), h('span', { class: `tag ${good ? 'pass' : 'fail'}` }, r.tier),
-        h('span', { class: 'muted' }, `${r.points} points`)),
-      h('p', { class: 'muted' }, `Google's pin was ${r.googleWasOffBy} m from the right spot. The green ✓ is where the driver should stop.`),
-      r.why ? [h('h3', {}, 'Why there'), h('p', {}, r.why)] : null,
-      h('div', { class: 'row' }, h('button', { class: 'btn ghost', onclick: () => practiceOne(items, i) }, 'Try again'),
-        i + 1 < items.length ? h('button', { class: 'btn', onclick: () => practiceOne(items, i + 1) }, 'Next address →') : null)));
-    out.scrollIntoView({ behavior: 'smooth' });
+function practiceOne(items, i) {
+  const s = items[i];
+  const form = scenarioForm(s);
+  const btn = h('button', { class: 'btn orange' }, 'Check my answer');
+  const next = h('div', { class: 'row' });
+  mount(h('div', { class: 'row' }, h('button', { class: 'btn ghost small', onclick: () => go('practice') }, '← All scenarios'), h('span', { class: 'grow' }),
+      h('span', { class: 'small muted' }, `${i + 1} of ${items.length} in ${s.category}`)),
+    h('h1', {}, s.title), form.el, h('div', { class: 'row' }, btn), h('p'), next);
+  btn.onclick = safe(async () => {
+    btn.disabled = true;
+    const r = await api(`/api/practice/${s.id}`, form.getSubmission());
+    form.showResult(r);
+    next.replaceChildren(h('button', { class: 'btn ghost', onclick: () => practiceOne(items, i) }, 'Try again'),
+      i + 1 < items.length ? h('button', { class: 'btn', onclick: () => practiceOne(items, i + 1) }, 'Next scenario →') : null);
   });
 }
 
@@ -251,7 +358,7 @@ VIEWS.tests = async () => {
     !tests.length ? h('div', { class: 'card muted' }, ME.classId ? 'No test is open for your class right now.' : 'You are not in a class yet.') : null,
     tests.map((t) => h('div', { class: 'card row' },
       h('div', { class: 'grow' }, h('b', {}, t.name), h('div', { class: 'small muted' },
-        `${t.questions} addresses · ${t.timeLimitMin} min · pass = ${t.passCount} of ${t.questions} within ${t.passMeters} m`)),
+        `${t.questions} calls · ${t.timeLimitMin} min · pass = ${t.passCount} of ${t.questions} right (pins within ${t.passMeters} m, right questions, clear note)`)),
       h('span', { class: `tag ${t.state === 'done' ? 'pass' : ''}` }, t.state),
       t.state === 'done' ? h('button', { class: 'btn ghost', onclick: () => takeTest(t.id) }, 'See results')
         : t.status === 'open' ? h('button', { class: 'btn orange', onclick: () => takeTest(t.id) }, t.state === 'in progress' ? 'Continue' : 'Start test')
@@ -263,18 +370,16 @@ async function takeTest(id) {
   if (d.done) return showTestResult(d.result);
   const answered = new Set(d.answered);
   const offset = d.serverNow - Date.now();
-  let idx = d.questions.findIndex((q) => !answered.has(q.id)); if (idx < 0) idx = 0;
-  let qStart = Date.now(), pm = null, finished = false;
-
+  let idx = d.scenarios.findIndex((q) => !answered.has(q.id)); if (idx < 0) idx = 0;
+  let form = null, finished = false;
   const timer = h('span', { class: 'timer' });
   const dots = h('div', { class: 'dots' });
-  const qBox = h('div', { class: 'card' });
-  const mapHost = h('div');
-  const saveBtn = h('button', { class: 'btn orange' }, 'Save pin & next');
+  const body = h('div');
+  const saveBtn = h('button', { class: 'btn orange' }, 'Save & next');
   const handIn = h('button', { class: 'btn ghost' }, 'Hand in test');
   mount(h('div', { class: 'row' }, h('h1', { class: 'grow' }, d.name), h('span', { class: 'muted small' }, 'Time left'), timer),
-    h('p', { class: 'muted small' }, `Pass = ${d.passCount} of ${d.questions.length} within ${d.passMeters} m. You can go back and change a pin until you hand in.`),
-    dots, h('p'), qBox, mapHost, h('p'), h('div', { class: 'row' }, saveBtn, h('span', { class: 'grow' }), handIn));
+    h('p', { class: 'muted small' }, `Pass = ${d.passCount} of ${d.scenarios.length} calls right. You can go back and change an answer until you hand in.`),
+    dots, h('p'), body, h('div', { class: 'row' }, saveBtn, h('span', { class: 'grow' }), handIn));
 
   const tick = setInterval(() => {
     const left = Math.max(0, d.deadline - (Date.now() + offset));
@@ -282,152 +387,171 @@ async function takeTest(id) {
     timer.className = 'timer' + (left < 60000 ? ' low' : '');
     if (left <= 0) finish(true);
   }, 500);
-
   const finish = safe(async (auto) => {
     if (finished) return; finished = true; clearInterval(tick);
     const r = await api(`/api/tests/${id}/submit`, {});
     if (auto) toast('Time is up. Your test was handed in.');
     showTestResult(r.result);
   });
-
-  async function show(i) {
-    idx = i; qStart = Date.now();
-    const q = d.questions[i];
-    dots.replaceChildren(...d.questions.map((x, j) => h('button', { class: `${answered.has(x.id) ? 'done' : ''} ${j === i ? 'on' : ''}`, onclick: () => show(j), title: x.label }, j + 1)));
-    qBox.replaceChildren(h('div', { class: 'small muted' }, `Address ${i + 1} of ${d.questions.length}`), h('div', { class: 'question' }, q.label), h('div', { class: 'muted' }, q.address));
-    mapHost.replaceChildren();
-    pm = await pinMap(mapHost, { start: q.start });
-    saveBtn.disabled = !pm;
+  function show(i) {
+    idx = i;
+    const s = d.scenarios[i];
+    dots.replaceChildren(...d.scenarios.map((x, j) => h('button', { class: `${answered.has(x.id) ? 'done' : ''} ${j === i ? 'on' : ''}`, onclick: () => show(j), title: x.title }, j + 1)));
+    form = scenarioForm(s);
+    body.replaceChildren(h('h2', {}, `Call ${i + 1} of ${d.scenarios.length}: ${s.title}`), form.el);
+    window.scrollTo(0, 0);
   }
-
   saveBtn.onclick = safe(async () => {
-    const q = d.questions[idx];
-    await api(`/api/tests/${id}/answer`, { addressId: q.id, ...pm.getPin(), seconds: Math.round((Date.now() - qStart) / 1000) });
-    answered.add(q.id); toast('Pin saved');
-    const next = d.questions.findIndex((x, j) => j > idx && !answered.has(x.id));
-    const any = d.questions.findIndex((x) => !answered.has(x.id));
-    if (next >= 0) show(next); else if (any >= 0) show(any); else { show(idx); toast('All pins saved. Hand in when you are ready.'); }
+    const s = d.scenarios[idx];
+    await api(`/api/tests/${id}/answer`, { scenarioId: s.id, ...form.getSubmission() });
+    answered.add(s.id); toast('Saved');
+    const next = d.scenarios.findIndex((x, j) => j > idx && !answered.has(x.id));
+    const any = d.scenarios.findIndex((x) => !answered.has(x.id));
+    if (next >= 0) show(next); else if (any >= 0) show(any); else toast('All calls saved. Hand in when you are ready.');
   });
   handIn.onclick = () => {
-    const missing = d.questions.length - answered.size;
-    if (confirm(missing ? `${missing} address(es) have no saved pin and will count as wrong. Hand in anyway?` : 'Hand in your test? You cannot change pins after this.')) finish(false);
+    const missing = d.scenarios.length - answered.size;
+    if (confirm(missing ? `${missing} call(s) are not saved and will count as wrong. Hand in anyway?` : 'Hand in your test? You cannot change answers after this.')) finish(false);
   };
   show(idx);
 }
 
 function showTestResult(r) {
-  const reviewHost = h('div');
   mount(h('button', { class: 'btn ghost small', onclick: () => go('tests') }, '← Tests'), h('p'),
     h('div', { class: `card result ${r.passed ? 'good' : 'bad'}` }, h('h1', {}, r.testName),
       h('div', { class: 'row' }, h('div', { class: 'big' }, `${r.correct} / ${r.total}`), h('span', { class: `tag ${r.passed ? 'pass' : 'fail'}` }, r.passed ? 'Passed' : 'Not passed yet'),
-        h('span', { class: 'muted' }, `Needed ${r.passCount} within ${r.passMeters} m`))),
-    h('div', { class: 'card' }, h('h2', {}, 'Each address'), h('p', { class: 'small muted' }, 'Click a row to see your pin and the right spot on the map.'),
-      h('table', {}, h('tr', {}, h('th', {}, 'Address'), h('th', {}, 'Your pin was'), h('th', {}, ''), h('th', {}, 'Why')),
-        r.rows.map((x) => h('tr', { style: 'cursor:pointer', onclick: () => review(x) }, h('td', {}, h('b', {}, x.label), h('div', { class: 'small muted' }, x.address)),
-          h('td', {}, x.distance == null ? 'No pin' : `${m(x.distance)} off`, x.pin && !x.moved ? h('div', { class: 'small muted' }, 'Pin not moved') : null),
-          h('td', {}, h('span', { class: `tag ${x.passed ? 'pass' : 'fail'}` }, x.passed ? '✓' : '✗')), h('td', { class: 'small' }, x.why || ''))))),
-    reviewHost);
-  async function review(x) {
-    reviewHost.replaceChildren(h('h3', {}, x.label));
-    const pm = await pinMap(reviewHost, { start: x.pin || x.answer, draggable: false });
-    if (pm && x.pin) pm.showAnswer(x.answer, x.pin);
-    reviewHost.scrollIntoView({ behavior: 'smooth' });
-  }
+        h('span', { class: 'muted' }, `Needed ${r.passCount} calls right`))),
+    r.rows.map((x) => [h('h2', {}, x.title), x.answered ? resultCard(x.result) : h('div', { class: 'card muted' }, 'No answer saved for this call.')]));
 }
 
 // ── my progress ──────────────────────────────────────────────────────
 VIEWS.progress = async () => {
   const p = await api('/api/my/history');
   mount(h('h1', {}, 'My progress'),
-    h('div', { class: 'grid2' }, h('div', { class: 'card stat s1' }, h('div', { class: 'muted small' }, 'Practice pins'), h('div', { class: 'big' }, p.practice.pins)),
-      h('div', { class: 'card stat s2' }, h('div', { class: 'muted small' }, 'Within 15 m'), h('div', { class: 'big' }, p.practice.pins ? `${Math.round(100 * p.practice.within15 / p.practice.pins)}%` : '–'))),
+    h('div', { class: 'grid2' }, h('div', { class: 'card stat s1' }, h('div', { class: 'small' }, 'Practice calls'), h('div', { class: 'big' }, p.tries)),
+      h('div', { class: 'card stat s2' }, h('div', { class: 'small' }, 'Got right'), h('div', { class: 'big' }, p.tries ? `${Math.round(100 * p.passed / p.tries)}%` : '–'))),
     h('div', { class: 'card' }, h('h2', {}, 'Recent practice'), !p.recent.length ? h('p', { class: 'muted' }, 'Nothing yet.') :
-      h('table', {}, h('tr', {}, h('th', {}, 'Address'), h('th', {}, 'Off by'), h('th', {}, 'Points'), h('th', {}, 'When')),
-        p.recent.map((r) => h('tr', {}, h('td', {}, r.label), h('td', {}, m(r.distance)), h('td', {}, r.points), h('td', { class: 'small muted' }, when(r.at)))))));
+      h('table', {}, h('tr', {}, h('th', {}, 'Scenario'), h('th', {}, 'Result'), h('th', {}, 'To work on'), h('th', {}, 'When')),
+        p.recent.map((r) => h('tr', {}, h('td', {}, r.title), h('td', {}, h('span', { class: `tag ${r.passed ? 'pass' : 'fail'}` }, r.passed ? 'Right' : 'Not yet')),
+          h('td', { class: 'small' }, r.misses.join(', ') || '–'), h('td', { class: 'small muted' }, when(r.at)))))));
 };
 
-// ── trainer: addresses ───────────────────────────────────────────────
-VIEWS['a-addresses'] = async () => {
-  const list = await api('/api/admin/addresses');
-  mount(h('div', { class: 'row' }, h('h1', { class: 'grow' }, 'Addresses'), h('button', { class: 'btn orange', onclick: () => editAddress() }, '+ Add an address')),
-    h('p', { class: 'lead' }, 'Hard places with the right pin set by a trainer. Use public places only (hospitals, airports, complexes), never a customer’s home address.'),
-    h('div', { class: 'card' }, !list.length ? h('p', { class: 'muted' }, 'No addresses yet. Add the hard ones trainees get wrong on calls.') :
-      h('table', {}, h('tr', {}, h('th', {}, 'Place'), h('th', {}, 'Type'), h('th', {}, "Google's pin off by"), h('th', {}, 'Tries'), h('th', {}, 'Average miss'), h('th', {}, '')),
-        list.map((a) => h('tr', {}, h('td', {}, h('b', {}, a.label), h('div', { class: 'small muted' }, a.address), !a.practice ? h('span', { class: 'tag' }, 'tests only') : null),
-          h('td', {}, a.category),
-          h('td', {}, `${a.google_off_by} m `, a.google_off_by < 15 ? h('span', { class: 'tag warn', title: "Google already gets this one right, so it doesn't test much" }, 'easy') : null),
-          h('td', {}, a.tries), h('td', {}, m(a.avg_miss)),
-          h('td', {}, h('button', { class: 'btn ghost small', onclick: () => editAddress(a) }, 'Edit'), ' ',
-            h('button', { class: 'btn ghost small', onclick: safe(async () => { if (!confirm(`Archive "${a.label}"? Past results keep it.`)) return; await api(`/api/admin/addresses/${a.id}/archive`, {}); go('a-addresses'); }) }, 'Archive')))))));
+// ── admins: scenarios ────────────────────────────────────────────────
+VIEWS['a-scenarios'] = async () => {
+  const list = await api('/api/admin/scenarios');
+  mount(h('div', { class: 'row' }, h('h1', { class: 'grow' }, 'Scenarios'),
+      h('button', { class: 'btn ghost', onclick: safe(async () => { const r = await api('/api/admin/scenarios/examples', {}); toast(r.added ? `Added ${r.added} example(s)` : 'Examples are already here'); go('a-scenarios'); }) }, 'Add the example scenarios'),
+      h('button', { class: 'btn orange', onclick: () => editScenario() }, '+ New scenario')),
+    h('p', { class: 'lead' }, 'A scenario is a short pretend call: what the caller says, the place(s), the right pin and entrance, the questions worth asking, and what the driver note must say. Use public places only, and made-up customer details.'),
+    h('div', { class: 'card' }, !list.length ? h('p', { class: 'muted' }, 'No scenarios yet. Start with the examples, or make your own from real cases.') :
+      h('table', {}, h('tr', {}, h('th', {}, 'Scenario'), h('th', {}, 'Type'), h('th', {}, 'Stops'), h('th', {}, 'Tries'), h('th', {}, 'Got right'), h('th', {}, '')),
+        list.map((s) => h('tr', {}, h('td', {}, h('b', {}, s.title), !s.practice ? h('div', {}, h('span', { class: 'tag' }, 'tests only')) : null),
+          h('td', {}, s.category), h('td', {}, s.data.stops.map((x) => x.kind === 'dropoff' ? 'drop-off' : 'pickup').join(' + ')),
+          h('td', {}, s.tries), h('td', {}, s.tries ? `${Math.round(100 * s.passes / s.tries)}%` : '–'),
+          h('td', {}, s.practice ? h('button', { class: 'btn ghost small', title: 'Copy a link that opens this call', onclick: safe(async () => { await navigator.clipboard.writeText(`${location.origin}/#s-${s.id}`); toast('Link copied'); }) }, 'Copy link') : null, ' ',
+            h('button', { class: 'btn ghost small', onclick: () => editScenario(s) }, 'Edit'), ' ',
+            h('button', { class: 'btn ghost small', onclick: safe(async () => { if (!confirm(`Archive "${s.title}"? Past results keep it.`)) return; await api(`/api/admin/scenarios/${s.id}/archive`, {}); go('a-scenarios'); }) }, 'Archive')))))));
 };
 
-async function editAddress(a) {
-  let start = a ? { lat: a.start_lat, lng: a.start_lng } : null;
-  const label = h('input', { type: 'text', value: a?.label || '', placeholder: 'e.g. Mercy Hospital, main entrance' });
-  const address = h('input', { type: 'text', value: a?.address || '', readOnly: true, placeholder: 'Filled in when you search' });
-  const cat = h('select', {}, CATEGORIES.map((c) => h('option', { value: c, selected: c === (a?.category || 'Hospital') }, c)));
-  const why = h('textarea', { value: a?.why || '', placeholder: 'Where exactly the driver should stop and why. e.g. "Pick-up is at the Patient Discharge door on Elm St, not the ER entrance Google picks."' });
-  const practice = h('input', { type: 'checkbox', checked: a ? !!a.practice : true });
-  const off = h('span', { class: 'tag' }, '–');
-  const searchHost = h('div');
-  const mapHost = h('div');
-  let pm = null;
-
-  const showOff = (p) => {
-    if (!start || !p) return;
-    const d = Math.round(metersApprox(start, p));
-    off.textContent = `Google's pin is ${d} m from your pin`; off.className = `tag ${d < 15 ? 'warn' : 'pass'}`;
+function editScenario(existing) {
+  const d = existing ? structuredClone(existing.data) : {
+    caller: '', why: '', stops: [{ kind: 'pickup', label: '', addressGiven: '', answer: null, start: null, entrances: [], correctEntrance: null }],
+    questions: SUGGESTED_QUESTIONS.map((q) => ({ q, a: '', needed: false })), note: { mustMention: [], model: '' },
   };
+  const title = h('input', { type: 'text', value: existing?.title || '', placeholder: "e.g. Menchie's on Petrovitsky Road" });
+  const cat = h('select', {}, CATEGORIES.map((c) => h('option', { value: c, selected: c === (existing?.category || 'Restaurant or shop') }, c)));
+  const practice = h('input', { type: 'checkbox', checked: existing ? existing.practice : true });
+  const caller = h('textarea', { value: d.caller, placeholder: 'What the caller says, e.g. "Can you pick me up at 14060 Southeast Petrovitsky Road? I\'m at Menchie\'s."' });
+  const why = h('textarea', { value: d.why, placeholder: 'Shown after they answer: what goes wrong if you only use the address, and how to get it right.' });
+  const stopsHost = h('div');
+  const qHost = h('div');
+  const must = h('input', { type: 'text', value: d.note.mustMention.join(', '), placeholder: "e.g. Menchie, blue, jeans" });
+  const model = h('textarea', { value: d.note.model, placeholder: "e.g. Customer is waiting at Menchie's Frozen Yogurt. Please call her if you can't find her. She is wearing a blue top and black jeans." });
 
-  mount(h('button', { class: 'btn ghost small', onclick: () => go('a-addresses') }, '← Addresses'),
-    h('h1', {}, a ? 'Edit address' : 'Add an address'),
-    h('p', { class: 'lead' }, '1. Search the place. The pin drops where Google puts it. 2. Drag the pin to where the driver should really stop. 3. Say why.'),
-    h('div', { class: 'card' }, h('label', {}, 'Search'), searchHost,
-      h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Name trainees see'), label), h('div', {}, h('label', {}, 'Type of place'), cat)),
-      h('label', {}, 'Address'), address),
-    mapHost, h('p'), h('div', { class: 'row' }, off, h('span', { class: 'small muted' }, 'Under 15 m means Google already gets it right, so it is an easy one.')),
-    h('div', { class: 'card' }, h('label', {}, 'Why this is the right spot (shown after they answer)'), why,
-      h('label', { class: 'check' }, practice, 'Use in practice (untick to keep it for tests only)'), h('p'),
-      h('button', { class: 'btn', onclick: safe(async () => {
-        if (!start || !pm) return toast('Search the address first.', true);
-        await api('/api/admin/addresses', { id: a?.id, label: label.value, address: address.value, category: cat.value, why: why.value,
-          practice: practice.checked, start, answer: pm.getPin() });
-        toast('Saved'); go('a-addresses');
-      }) }, 'Save address')));
+  function drawStops() {
+    stopsHost.replaceChildren(...d.stops.map((stop, si) => stopEditor(stop, si)),
+      d.stops.length < 2 ? h('button', { class: 'btn ghost', onclick: () => { d.stops.push({ kind: d.stops[0].kind === 'pickup' ? 'dropoff' : 'pickup', label: '', addressGiven: '', answer: null, start: null, entrances: [], correctEntrance: null }); drawStops(); } },
+        `+ Add a ${d.stops[0].kind === 'pickup' ? 'drop-off' : 'pickup'}`) : null);
+  }
+  function stopEditor(stop, si) {
+    const kind = h('select', { onchange: () => { stop.kind = kind.value; } }, ['pickup', 'dropoff'].map((k) => h('option', { value: k, selected: k === stop.kind }, k === 'pickup' ? 'Pickup' : 'Drop-off')));
+    const label = h('input', { type: 'text', value: stop.label, placeholder: 'Name of the place, e.g. Menchie\'s Frozen Yogurt', oninput: () => (stop.label = label.value) });
+    const given = h('input', { type: 'text', value: stop.addressGiven, placeholder: 'The address the caller gives', oninput: () => (stop.addressGiven = given.value) });
+    const searchHost = h('div', { class: 'search' }), mapHost = h('div'), entHost = h('div');
+    let pm = null;
+    const drawEntrances = () => {
+      entHost.replaceChildren(h('label', {}, 'Entrances (blue numbered pins, like the dashboard suggestions)'),
+        !stop.entrances.length ? h('p', { class: 'small muted' }, 'None. Add one if the place has more than one door or side.') :
+        stop.entrances.map((e, i) => {
+          const nm = h('input', { type: 'text', value: e.name, oninput: () => (e.name = nm.value) });
+          const right = h('input', { type: 'radio', name: `right-${si}`, checked: stop.correctEntrance === i, onchange: () => (stop.correctEntrance = i) });
+          return h('div', { class: 'row' }, h('b', {}, `${i + 1}.`), h('div', { class: 'grow' }, nm), h('label', { class: 'check', style: 'margin:0' }, right, 'Right one'),
+            h('button', { class: 'btn ghost small', onclick: () => { stop.entrances.splice(i, 1); if (stop.correctEntrance === i) stop.correctEntrance = null; else if (stop.correctEntrance > i) stop.correctEntrance--; drawEntrances(); pm && pm.setEntrances(stop.entrances); } }, 'Remove'));
+        }),
+        h('button', { class: 'btn ghost small', onclick: () => {
+          const p = pm && pm.getPin(); if (!p) return toast('Search the place first.', true);
+          stop.entrances.push({ name: `Entrance ${stop.entrances.length + 1}`, ...p }); drawEntrances(); pm.setEntrances(stop.entrances);
+        } }, '+ Add an entrance where the pin is now'));
+    };
+    const card = h('div', { class: `card stop ${stop.kind}` },
+      h('div', { class: 'row' }, h('h2', { class: 'grow' }, `Stop ${si + 1}`), kind,
+        si > 0 ? h('button', { class: 'btn ghost small', onclick: () => { d.stops.splice(si, 1); drawStops(); } }, 'Remove stop') : null),
+      h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Place name'), label), h('div', {}, h('label', {}, 'Address the caller gives'), given)),
+      h('label', {}, 'Search the place, then drag the pin to exactly where the driver should stop'), searchHost, mapHost, entHost);
+    placeSearch(searchHost, async (p) => {
+      stop.start = stop.start || { lat: p.lat, lng: p.lng };
+      if (!stop.label) { stop.label = p.name; label.value = p.name; }
+      if (!stop.addressGiven) { stop.addressGiven = p.address; given.value = p.address; }
+      if (!pm) pm = await pinMap(mapHost, { start: p, kind: stop.kind, entrances: stop.entrances, onMove: (q) => (stop.answer = q) });
+      pm && pm.setPin(p);
+      stop.answer = { lat: p.lat, lng: p.lng };
+    });
+    if (stop.answer) pinMap(mapHost, { start: stop.start || stop.answer, kind: stop.kind, entrances: stop.entrances, onMove: (q) => (stop.answer = q) })
+      .then((x) => { pm = x; if (pm) pm.setPin(stop.answer); });
+    drawEntrances();
+    return card;
+  }
+  function drawQuestions() {
+    qHost.replaceChildren(...d.questions.map((q, i) => {
+      const qq = h('input', { type: 'text', value: q.q, placeholder: 'Question the trainee could ask', oninput: () => (q.q = qq.value) });
+      const aa = h('input', { type: 'text', value: q.a, placeholder: 'What the caller answers', oninput: () => (q.a = aa.value) });
+      const need = h('input', { type: 'checkbox', checked: q.needed, onchange: () => (q.needed = need.checked) });
+      return h('div', { class: 'qrow' }, qq, aa, h('label', { class: 'check', style: 'margin:0' }, need, 'Must ask'),
+        h('button', { class: 'btn ghost small', onclick: () => { d.questions.splice(i, 1); drawQuestions(); } }, '✕'));
+    }), h('button', { class: 'btn ghost small', onclick: () => { d.questions.push({ q: '', a: '', needed: false }); drawQuestions(); } }, '+ Add a question'));
+  }
 
-  if (!(await loadMaps())) return mapHost.append(h('div', { class: 'pm nomap' }, 'The map is not connected yet, so addresses cannot be pinned. It switches on once the Google Maps key is added in Railway.'));
-  const { PlaceAutocompleteElement } = await google.maps.importLibrary('places');
-  const ac = new PlaceAutocompleteElement({ includedRegionCodes: ['us'] });
-  ac.style.width = '100%';
-  searchHost.append(ac);
-  const picked = async (place) => {
-    await place.fetchFields({ fields: ['displayName', 'formattedAddress', 'location'] });
-    start = ll(place.location);
-    address.value = place.formattedAddress || '';
-    if (!label.value) label.value = place.displayName || '';
-    if (!pm) pm = await pinMap(mapHost, { start, onMove: showOff });
-    pm.setPin(start); showOff(start);
-  };
-  ac.addEventListener('gmp-select', (e) => picked(e.placePrediction.toPlace()));
-  ac.addEventListener('gmp-placeselect', (e) => picked(e.place)); // older event name, same thing
-  if (a) { pm = await pinMap(mapHost, { start, onMove: showOff }); pm.setPin({ lat: a.answer_lat, lng: a.answer_lng }, false); showOff(pm.getPin()); }
+  mount(h('button', { class: 'btn ghost small', onclick: () => go('a-scenarios') }, '← Scenarios'),
+    h('h1', {}, existing ? 'Edit scenario' : 'New scenario'),
+    h('div', { class: 'card' }, h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Scenario name (trainees see it, so don't give the answer away)'), title), h('div', {}, h('label', {}, 'Type of place'), cat)),
+      h('label', {}, 'What the caller says'), caller,
+      h('label', { class: 'check' }, practice, 'Use in practice (untick to keep it for tests only)')),
+    stopsHost,
+    h('div', { class: 'card' }, h('h2', {}, 'Questions'), h('p', { class: 'small muted' }, 'Trainees pick which ones to ask. Tick "Must ask" for the ones they need to get it right. Leave an answer blank to remove a question.'), qHost),
+    h('div', { class: 'card' }, h('h2', {}, 'Driver note'),
+      h('label', {}, 'The note must mention (comma separated, any order)'), must,
+      h('label', {}, 'A good note (shown after they answer)'), model,
+      h('label', {}, 'Why (shown after they answer)'), why),
+    h('button', { class: 'btn', onclick: safe(async () => {
+      const data = { ...d, caller: caller.value, why: why.value, questions: d.questions.filter((q) => q.q && q.a),
+        note: { mustMention: must.value.split(',').map((x) => x.trim()).filter(Boolean), model: model.value } };
+      if (data.stops.some((s) => !s.answer)) return toast('Search each stop and place its pin first.', true);
+      await api('/api/admin/scenarios', { id: existing?.id, title: title.value, category: cat.value, practice: practice.checked, data });
+      toast('Saved'); go('a-scenarios');
+    }) }, 'Save scenario'));
+  drawStops(); drawQuestions();
 }
-function metersApprox(a, b) {
-  const R = 6371008.8, r = Math.PI / 180;
-  const x = (b.lng - a.lng) * r * Math.cos(((a.lat + b.lat) / 2) * r), y = (b.lat - a.lat) * r;
-  return Math.sqrt(x * x + y * y) * R;
-}
 
-// ── trainer: tests ───────────────────────────────────────────────────
+// ── admins: tests ────────────────────────────────────────────────────
 VIEWS['a-tests'] = async () => {
   const [tests, classes] = await Promise.all([api('/api/admin/tests'), api('/api/admin/classes')]);
   const setStatus = (t, status) => safe(async () => { await api(`/api/admin/tests/${t.id}/status`, { status }); go('a-tests'); });
   mount(h('div', { class: 'row' }, h('h1', { class: 'grow' }, 'Build tests'), h('button', { class: 'btn orange', onclick: () => editTest(null, classes) }, '+ New test')),
-    h('p', { class: 'lead' }, 'A test is a set of addresses for one class. Trainees only see it once you open it.'),
+    h('p', { class: 'lead' }, 'A test is a set of scenarios for one class. Trainees only see it once you open it.'),
     h('div', { class: 'card' }, !tests.length ? h('p', { class: 'muted' }, 'No tests yet.') :
       h('table', {}, h('tr', {}, h('th', {}, 'Test'), h('th', {}, 'Class'), h('th', {}, 'Rule'), h('th', {}, 'Handed in'), h('th', {}, 'Status'), h('th', {}, '')),
         tests.map((t) => h('tr', {}, h('td', {}, h('b', {}, t.name)), h('td', {}, t.class_name || '–'),
-          h('td', { class: 'small' }, `${t.pass_count} of ${t.questions} within ${t.pass_meters} m · ${t.time_limit_min} min`), h('td', {}, t.handed_in),
+          h('td', { class: 'small' }, `${t.pass_count} of ${t.questions} right · pins within ${t.pass_meters} m · ${t.time_limit_min} min`), h('td', {}, t.handed_in),
           h('td', {}, h('span', { class: `tag ${t.status === 'open' ? 'pass' : ''}` }, t.status)),
           h('td', {}, t.status === 'draft' ? [h('button', { class: 'btn ghost small', onclick: () => editTest(t, classes) }, 'Edit'), ' ', h('button', { class: 'btn small', onclick: setStatus(t, 'open') }, 'Open')]
             : t.status === 'open' ? h('button', { class: 'btn ghost small', onclick: setStatus(t, 'closed') }, 'Close')
@@ -435,58 +559,63 @@ VIEWS['a-tests'] = async () => {
 };
 
 async function editTest(t, classes) {
-  const addrs = await api('/api/admin/addresses');
-  const chosen = new Set(t?.addressIds || []);
+  const list = await api('/api/admin/scenarios');
+  const chosen = new Set(t?.scenarioIds || []);
   const name = h('input', { type: 'text', value: t?.name || '', placeholder: 'e.g. Week 1 pin test' });
   const cls = h('select', {}, h('option', { value: '' }, 'Choose…'), classes.filter((c) => c.active).map((c) => h('option', { value: c.id, selected: c.id === t?.class_id }, c.name)));
   const meters = h('input', { type: 'number', min: 1, max: 200, value: t?.pass_meters ?? 15 });
-  const count = h('input', { type: 'number', min: 1, value: t?.pass_count ?? 8 });
-  const mins = h('input', { type: 'number', min: 1, max: 240, value: t?.time_limit_min ?? 20 });
+  const count = h('input', { type: 'number', min: 1, value: t?.pass_count ?? 4 });
+  const mins = h('input', { type: 'number', min: 1, max: 240, value: t?.time_limit_min ?? 30 });
   const n = h('span', { class: 'tag' });
   const upd = () => (n.textContent = `${chosen.size} chosen`);
   upd();
   mount(h('button', { class: 'btn ghost small', onclick: () => go('a-tests') }, '← Tests'), h('h1', {}, t ? 'Edit test' : 'New test'),
     h('div', { class: 'card' }, h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Test name'), name), h('div', {}, h('label', {}, 'Class'), cls)),
       h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'A pin counts as right within (metres)'), meters),
-        h('div', {}, h('label', {}, 'To pass, right pins needed'), count)),
+        h('div', {}, h('label', {}, 'To pass, calls right needed'), count)),
       h('label', {}, 'Time limit (minutes)'), mins),
-    h('div', { class: 'card' }, h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Addresses'), n),
-      !addrs.length ? h('p', { class: 'muted' }, 'Add addresses first.') :
-      addrs.map((a) => { const cb = h('input', { type: 'checkbox', checked: chosen.has(a.id), onchange: () => { cb.checked ? chosen.add(a.id) : chosen.delete(a.id); upd(); } });
-        return h('label', { class: 'check' }, cb, `${a.label} `, h('span', { class: 'small muted' }, `· ${a.category} · Google off by ${a.google_off_by} m`)); })),
+    h('div', { class: 'card' }, h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Scenarios'), n),
+      !list.length ? h('p', { class: 'muted' }, 'Add scenarios first.') :
+      list.map((s) => { const cb = h('input', { type: 'checkbox', checked: chosen.has(s.id), onchange: () => { cb.checked ? chosen.add(s.id) : chosen.delete(s.id); upd(); } });
+        return h('label', { class: 'check' }, cb, `${s.title} `, h('span', { class: 'small muted' }, `· ${s.category}`)); })),
     h('button', { class: 'btn', onclick: safe(async () => {
-      await api('/api/admin/tests', { id: t?.id, name: name.value, classId: Number(cls.value), addressIds: [...chosen],
+      await api('/api/admin/tests', { id: t?.id, name: name.value, classId: Number(cls.value), scenarioIds: [...chosen],
         passMeters: Number(meters.value), passCount: Number(count.value), timeLimitMin: Number(mins.value) });
       toast('Saved as a draft. Open it when the class is ready.'); go('a-tests');
     }) }, 'Save test'));
 }
 
-// ── trainer: results ─────────────────────────────────────────────────
+// ── admins: results ──────────────────────────────────────────────────
 VIEWS['a-results'] = async () => {
   const tests = (await api('/api/admin/tests')).filter((t) => t.status !== 'draft');
   const host = h('div');
   const sel = h('select', { onchange: () => show(Number(sel.value)) }, tests.map((t) => h('option', { value: t.id }, `${t.name} · ${t.class_name || ''}`)));
-  mount(h('h1', {}, 'Results'), !tests.length ? h('div', { class: 'card muted' }, 'Results appear here once a test is opened.') : [h('div', { class: 'row' }, h('div', { class: 'grow' }, sel)), h('p'), host]);
+  mount(h('h1', {}, 'Results'), !tests.length ? h('div', { class: 'card muted' }, 'Results appear here once a test is opened.') : [sel, h('p'), host]);
   async function show(id) {
     const r = await api(`/api/admin/results/${id}`);
     const done = r.rows.filter((x) => x.state === 'done');
+    const what = (s) => [...s.stops.filter((x) => !x.passed).map((x) => `${x.kind === 'dropoff' ? 'drop-off' : 'pickup'} pin ${x.distance == null ? 'missing' : m(x.distance) + ' off'}`),
+      ...(s.missingQuestions.length ? [`didn't ask: ${s.missingQuestions.join(' / ')}`] : []), ...(s.noteProblems.length ? ['note: ' + s.noteProblems.join(' ')] : [])];
     host.replaceChildren(
       h('div', { class: 'grid2' },
-        h('div', { class: 'card stat s1' }, h('div', { class: 'muted small' }, 'Handed in'), h('div', { class: 'big' }, `${done.length} / ${r.rows.length}`)),
-        h('div', { class: 'card stat s2' }, h('div', { class: 'muted small' }, 'Passed'), h('div', { class: 'big' }, done.length ? `${done.filter((x) => x.passed).length} / ${done.length}` : '–'))),
+        h('div', { class: 'card stat s1' }, h('div', { class: 'small' }, 'Handed in'), h('div', { class: 'big' }, `${done.length} / ${r.rows.length}`)),
+        h('div', { class: 'card stat s2' }, h('div', { class: 'small' }, 'Passed'), h('div', { class: 'big' }, done.length ? `${done.filter((x) => x.passed).length} / ${done.length}` : '–'))),
       h('div', { class: 'card' }, h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Trainees'), h('a', { class: 'btn ghost small', href: `/api/admin/results/${id}.csv` }, 'Download CSV')),
-        h('table', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Right pins'), h('th', {}, 'Result'), h('th', {}, 'Missed')),
+        h('table', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Calls right'), h('th', {}, 'Result'), h('th', {}, 'What went wrong')),
           r.rows.map((x) => h('tr', {}, h('td', {}, x.name), h('td', {}, x.correct == null ? '–' : `${x.correct} / ${x.total}`),
             h('td', {}, x.state !== 'done' ? h('span', { class: 'tag' }, x.state) : h('span', { class: `tag ${x.passed ? 'pass' : 'fail'}` }, x.passed ? 'Passed' : 'Not passed')),
-            h('td', { class: 'small' }, (x.misses || []).filter((y) => !y.passed).map((y) => `${y.label} (${y.distance == null ? 'no pin' : m(y.distance)}${y.distance != null && !y.moved ? ', not moved' : ''})`).join(' · ')))))),
-      h('div', { class: 'card' }, h('h2', {}, 'Which addresses the class gets wrong'), h('p', { class: 'small muted' }, 'Low pass rates point at what to re-teach.'),
-        h('table', {}, h('tr', {}, h('th', {}, 'Address'), h('th', {}, 'Got it right'), h('th', {}, 'Typical miss')),
-          r.perAddress.map((a) => h('tr', {}, h('td', {}, a.label), h('td', {}, a.answered ? `${a.passed} of ${a.answered}` : '–'), h('td', {}, a.medianMiss == null ? '–' : `${a.medianMiss} m`))))));
+            h('td', { class: 'small' }, (x.scenarios || []).filter((s) => s.answered && !s.passed).map((s) => h('details', {}, h('summary', {}, `${s.title}: ${what(s).join('; ')}`),
+              h('div', { class: 'muted' }, 'Their note: ', s.note || '(empty)'))),
+              (x.scenarios || []).filter((s) => !s.answered).map((s) => h('div', { class: 'muted' }, `${s.title}: no answer`))))))),
+      h('div', { class: 'card' }, h('h2', {}, 'Which calls the class gets wrong'), h('p', { class: 'small muted' }, 'Where most people slip is what to re-teach.'),
+        h('table', {}, h('tr', {}, h('th', {}, 'Scenario'), h('th', {}, 'Got it right'), h('th', {}, 'Pin wrong'), h('th', {}, 'Missed questions'), h('th', {}, 'Weak note')),
+          r.perScenario.map((s) => h('tr', {}, h('td', {}, s.title), h('td', {}, s.answered ? `${s.passed} of ${s.answered}` : '–'),
+            h('td', {}, s.pinWrong), h('td', {}, s.questionsMissed), h('td', {}, s.noteWrong))))));
   }
   if (tests.length) show(tests[0].id);
 };
 
-// ── trainer: people & classes ────────────────────────────────────────
+// ── admins: people & classes ─────────────────────────────────────────
 VIEWS['a-people'] = async () => {
   const [classes, people] = await Promise.all([api('/api/admin/classes'), api('/api/admin/people')]);
   const newName = h('input', { type: 'text', placeholder: 'e.g. October 2026' });

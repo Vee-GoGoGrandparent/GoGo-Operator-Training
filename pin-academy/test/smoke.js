@@ -1,4 +1,4 @@
-// End-to-end check on a throwaway database: a trainer builds a test, a trainee practises and takes it.
+// End-to-end check on a throwaway database: admins build scenarios and a test, trainees practise and take it.
 // Every "must fail" case is checked too, so a broken guard shows up as a failure here.
 import os from 'node:os';
 import fs from 'node:fs';
@@ -14,112 +14,135 @@ await new Promise((r) => server.listen(0, r));
 const BASE = `http://localhost:${server.address().port}`;
 
 let passed = 0;
-const check = (name, fn) => { fn(); passed++; console.log(`  ✓ ${name}`); };
+const check = (name) => { passed++; console.log(`  ✓ ${name}`); };
 
 function client() {
   let cookie = '';
   return async function call(p, body, { raw } = {}) {
     const res = await fetch(BASE + p, { redirect: 'manual', headers: { cookie, ...(body ? { 'Content-Type': 'application/json' } : {}) },
       method: body ? 'POST' : 'GET', body: body ? JSON.stringify(body) : undefined });
-    const set = res.headers.getSetCookie?.() || [];
-    for (const c of set) { const [kv] = c.split(';'); const [k] = kv.split('='); cookie = [...cookie.split('; ').filter((x) => x && !x.startsWith(k + '=')), kv].join('; '); }
+    for (const c of res.headers.getSetCookie?.() || []) { const [kv] = c.split(';'); const [k] = kv.split('='); cookie = [...cookie.split('; ').filter((x) => x && !x.startsWith(k + '=')), kv].join('; '); }
     if (raw) return res;
-    const data = await res.json().catch(() => ({}));
-    return { status: res.status, data };
+    return { status: res.status, data: await res.json().catch(() => ({})) };
   };
 }
 
+// Vee's Menchie's case: the address alone vs. the business picked by name.
+const ADDRESS_ONLY = { lat: 47.4460548, lng: -122.1517119 };
+const MENCHIES = { lat: 47.4460118, lng: -122.1522953 };
+const GOOD_NOTE = "Customer is waiting inside Menchie's Frozen Yogurt. She is wearing a blue top and black jeans, please call her if you can't find her.";
+
 try {
-  const trainer = client(), trainee = client(), other = client();
-  await trainer('/auth/dev?as=UTRAINER&name=Oscar&role=admin', null, { raw: true });
-  await trainee('/auth/dev?as=UTRAINEE1&name=Ana%20Trainee', null, { raw: true });
-  await other('/auth/dev?as=UTRAINEE2&name=Ben%20Other', null, { raw: true });
-
-  assert.equal((await trainer('/api/me')).data.user.role, 'admin');
-  assert.equal((await trainee('/api/me')).data.user.role, 'trainee');
-  check('dev sign-in gives the right roles', () => {});
-
-  // must fail: trainee on trainer pages; nobody signed in
-  assert.equal((await trainee('/api/admin/addresses')).status, 403);
+  const admin = client(), ana = client(), ben = client();
+  await admin('/auth/dev?as=UADMIN&name=Oscar&role=admin', null, { raw: true });
+  await ana('/auth/dev?as=UANA&name=Ana%20Trainee', null, { raw: true });
+  await ben('/auth/dev?as=UBEN&name=Ben%20Other', null, { raw: true });
+  assert.equal((await admin('/api/me')).data.user.role, 'admin');
+  assert.equal((await ana('/api/me')).data.user.role, 'trainee');
+  assert.equal((await ana('/api/admin/scenarios')).status, 403);
   assert.equal((await client()('/api/practice')).status, 401);
-  check('trainee blocked from trainer pages, signed-out blocked from everything', () => {});
+  check('roles right; trainees blocked from admin pages; signed-out blocked');
 
-  const oct = (await trainer('/api/admin/classes', { name: 'October 2026' })).data.id;
-  const nov = (await trainer('/api/admin/classes', { name: 'November 2026' })).data.id;
-  assert.equal((await trainer('/api/admin/classes', { name: 'October 2026' })).status, 409);
-  check('classes created, duplicate name refused', () => {});
+  const oct = (await admin('/api/admin/classes', { name: 'October 2026' })).data.id;
+  const nov = (await admin('/api/admin/classes', { name: 'November 2026' })).data.id;
+  await ana('/api/me/class', { classId: oct });
+  await ben('/api/me/class', { classId: nov });
+  assert.equal((await ana('/api/me/class', { classId: nov })).status, 409);
+  check('classes made; a trainee can pick their class only once');
 
-  // Google drops the pin ~40 m from the right door; answer set by the trainer.
-  const hosp = { label: 'Test Hospital', address: '1 Main St, Springfield, IL', category: 'Hospital', why: 'Discharge door on Elm St.',
-    start: { lat: 39.80000, lng: -89.65000 }, answer: { lat: 39.80036, lng: -89.65000 } };
-  const a1 = (await trainer('/api/admin/addresses', hosp)).data.id;
-  const a2 = (await trainer('/api/admin/addresses', { ...hosp, label: 'Test Airport', practice: false, start: { lat: 39.84, lng: -89.68 }, answer: { lat: 39.8402, lng: -89.68 } })).data.id;
-  assert.equal((await trainer('/api/admin/addresses', { ...hosp, answer: { lat: 999, lng: 0 } })).status, 400);
-  check('addresses saved, bad coordinates refused', () => {});
+  assert.equal((await admin('/api/admin/scenarios/examples', {})).data.added, 1);
+  assert.equal((await admin('/api/admin/scenarios/examples', {})).data.added, 0);
+  const list = (await admin('/api/admin/scenarios')).data;
+  const men = list.find((s) => s.title.startsWith("Menchie's"));
+  assert.ok(men, 'example missing');
+  check('example scenario added once, not twice');
 
-  // must fail: trainee cannot see answers in the practice list
-  await trainee('/api/me/class', { classId: oct });
-  await other('/api/me/class', { classId: nov });
-  assert.equal((await trainee('/api/me/class', { classId: nov })).status, 409);
-  const plist = (await trainee('/api/practice')).data;
-  assert.equal(plist.length, 1, 'tests-only address must not be in practice');
-  assert.ok(!JSON.stringify(plist).includes('answer') && !JSON.stringify(plist).includes('why'), 'practice list leaks the answer');
-  check('practice list hides answers and tests-only addresses; class can only be picked once', () => {});
+  const pub = (await ana('/api/practice')).data;
+  const json = JSON.stringify(pub);
+  for (const secret of ['answer', 'needed', 'model', 'mustMention', 'why', String(MENCHIES.lng)]) assert.ok(!json.includes(secret), `practice list leaks ${secret}`);
+  assert.deepEqual(pub[0].stops[0].start, ADDRESS_ONLY, 'map should open where the address alone puts it');
+  check('practice list hides the right pin, must-ask flags, model note and why');
 
-  const pr = (await trainee('/api/practice/answer', { addressId: a1, lat: 39.80036, lng: -89.65003, seconds: 12 })).data;
-  assert.ok(pr.distance > 1 && pr.distance < 4, `distance ${pr.distance}`);
-  assert.equal(pr.points, 100);
-  assert.equal(pr.googleWasOffBy, 40);
-  assert.equal((await trainee('/api/practice/answer', { addressId: a2, lat: 1, lng: 1 })).status, 404);
-  check('practice scores on the server (≈2.6 m → 100 pts; Google 40 m off); tests-only address refused', () => {});
+  // Address only, no questions, emoji fragment note: everything wrong.
+  const bad = (await ana(`/api/practice/${men.id}`, { pins: [ADDRESS_ONLY], asked: [], note: "🚪 Menchie's ☎️ Call Sheryl upon arrival" })).data;
+  assert.equal(bad.passed, false);
+  assert.ok(bad.stops[0].distance > 35 && bad.stops[0].distance < 50, `distance ${bad.stops[0].distance}`);
+  assert.equal(bad.missingQuestions.length, 2);
+  assert.ok(bad.note.problems.some((p) => p.includes('emoji')) && bad.note.problems.some((p) => p.includes('short')) && bad.note.missing.includes('blue'));
+  check(`address-only pin is ${bad.stops[0].distance} m off; missed questions and the emoji note all caught`);
 
-  const t = (await trainer('/api/admin/tests', { name: 'Week 1 pin test', classId: oct, addressIds: [a1, a2], passMeters: 15, passCount: 2, timeLimitMin: 20 })).data.id;
-  assert.equal((await trainee('/api/tests')).data.length, 0, 'draft test must be invisible');
-  await trainer(`/api/admin/tests/${t}/status`, { status: 'open' });
-  assert.equal((await trainee('/api/tests')).data.length, 1);
-  assert.equal((await other('/api/tests')).data.length, 0, 'other class must not see it');
-  assert.equal((await other(`/api/tests/${t}/start`, {})).status, 404);
-  check('draft tests hidden; open test only visible to its own class', () => {});
+  const good = (await ana(`/api/practice/${men.id}`, { pins: [MENCHIES], asked: [0, 1], note: GOOD_NOTE })).data;
+  assert.equal(good.passed, true, JSON.stringify(good));
+  assert.ok(good.modelNote && good.why);
+  check('right business pin + right questions + clear note passes, then shows the model note and why');
 
-  const st = (await trainee(`/api/tests/${t}/start`, {})).data;
-  assert.equal(st.questions.length, 2);
-  assert.ok(!JSON.stringify(st).includes('answer_lat') && !JSON.stringify(st).match(/"answer"/), 'test start leaks answers');
-  const ans = (await trainee(`/api/tests/${t}/answer`, { addressId: a1, lat: 39.80036, lng: -89.65 })).data;
-  assert.deepEqual(ans, { saved: true }, 'answer response must not reveal distance');
-  // a2 left on Google's pin (20+ m off) → should fail that one
-  await trainee(`/api/tests/${t}/answer`, { addressId: a2, lat: 39.84, lng: -89.68 });
-  assert.equal((await trainer(`/api/admin/tests/${t}/status`, { status: 'draft' })).status, 409);
-  check('test hides answers while running; started test cannot go back to draft', () => {});
+  // Two-stop scenario with entrances, made in the admin builder.
+  assert.equal((await admin('/api/admin/scenarios', { title: 'Broken', category: 'Hospital', data: { stops: [{ kind: 'pickup', label: 'X' }] } })).status, 400);
+  const hosp = (await admin('/api/admin/scenarios', { title: 'Hospital to home', category: 'Hospital', data: {
+    caller: 'I am being discharged from Mercy Hospital, take me home.',
+    stops: [
+      { kind: 'pickup', label: 'Mercy Hospital', addressGiven: '1 Main St', start: { lat: 39.8, lng: -89.65 }, answer: { lat: 39.8004, lng: -89.65 },
+        entrances: [{ name: 'ER', lat: 39.8008, lng: -89.65 }, { name: 'Discharge door, Elm St', lat: 39.8004, lng: -89.65 }], correctEntrance: 1 },
+      { kind: 'dropoff', label: 'Home', addressGiven: '5 Oak Ave', start: { lat: 39.81, lng: -89.66 }, answer: { lat: 39.81, lng: -89.66 } },
+    ],
+    questions: [{ q: 'Which entrance will you be at?', a: 'The discharge door on Elm Street.', needed: true }],
+    note: { mustMention: ['discharge', 'Elm'], model: 'Customer will be at the discharge door on Elm Street.' } } })).data.id;
+  assert.ok(hosp);
+  check('admin builder saves a two-stop scenario with entrances; a stop with no pin is refused');
 
-  const res = (await trainee(`/api/tests/${t}/submit`, {})).data.result;
+  const t = (await admin('/api/admin/tests', { name: 'Week 1', classId: oct, scenarioIds: [men.id, hosp], passMeters: 15, passCount: 2, timeLimitMin: 30 })).data.id;
+  assert.equal((await ana('/api/tests')).data.length, 0, 'draft visible');
+  await admin(`/api/admin/tests/${t}/status`, { status: 'open' });
+  assert.equal((await ana('/api/tests')).data.length, 1);
+  assert.equal((await ben('/api/tests')).data.length, 0);
+  assert.equal((await ben(`/api/tests/${t}/start`, {})).status, 404);
+  check('draft tests hidden; an open test only shows to its own class');
+
+  const st = (await ana(`/api/tests/${t}/start`, {})).data;
+  assert.equal(st.scenarios.length, 2);
+  assert.ok(!JSON.stringify(st).includes('"answer":') && !JSON.stringify(st).includes('needed') && !JSON.stringify(st).includes(String(MENCHIES.lng)), 'test start leaks answers');
+  const saved = (await ana(`/api/tests/${t}/answer`, { scenarioId: men.id, pins: [MENCHIES], asked: [0, 1], note: GOOD_NOTE })).data;
+  assert.deepEqual(saved, { saved: true }, 'answer must not reveal the result during a test');
+  // Hospital: right pickup door but the ER entrance picked from the list, no question asked, good drop-off.
+  await ana(`/api/tests/${t}/answer`, { scenarioId: hosp, pins: [{ lat: 39.8008, lng: -89.65 }, { lat: 39.81, lng: -89.66 }], entrances: [0, null], asked: [],
+    note: 'Customer will be waiting at the discharge door on Elm Street, please call when you arrive.' });
+  assert.equal((await admin(`/api/admin/tests/${t}/status`, { status: 'draft' })).status, 409);
+  check('during a test nothing is revealed; a started test cannot go back to draft');
+
+  const res = (await ana(`/api/tests/${t}/submit`, {})).data.result;
   assert.equal(res.correct, 1); assert.equal(res.passed, false);
-  assert.equal(res.rows.find((r) => r.addressId === a2).moved, false);
-  assert.equal((await trainee(`/api/tests/${t}/answer`, { addressId: a2, lat: 39.8402, lng: -89.68 })).status, 409);
-  check('hand-in scores 1 of 2 (not passed), flags the unmoved pin, and locks answers', () => {});
+  const h = res.rows.find((r) => r.scenarioId === hosp).result;
+  assert.equal(h.stops[0].passed, false); assert.equal(h.stops[1].passed, true);
+  assert.equal(h.stops[0].entrance.correct, 'Discharge door, Elm St'); assert.equal(h.stops[0].entrance.chose, 'ER');
+  assert.equal((await ana(`/api/tests/${t}/answer`, { scenarioId: hosp, pins: [] })).status, 409);
+  check('hand-in: 1 of 2 right (wrong entrance caught, drop-off right), answers locked after');
 
-  const rr = (await trainer(`/api/admin/results/${t}`)).data;
-  assert.equal(rr.rows.length, 1); assert.equal(rr.rows[0].passed, false);
-  assert.equal(rr.perAddress.find((x) => x.label === 'Test Airport').passed, 0);
-  const csv = await (await trainer(`/api/admin/results/${t}.csv`, null, { raw: true })).text();
-  assert.ok(csv.startsWith('"Name","Slack ID"') && csv.includes('Ana Trainee'));
-  assert.equal((await trainee(`/api/admin/results/${t}`)).status, 403);
-  check('trainer results + CSV correct; trainee cannot read results', () => {});
+  const rr = (await admin(`/api/admin/results/${t}`)).data;
+  assert.equal(rr.rows[0].passed, false);
+  assert.equal(rr.perScenario.find((s) => s.title === 'Hospital to home').pinWrong, 1);
+  assert.ok(rr.rows[0].scenarios.find((s) => s.title === 'Hospital to home').note.includes('Elm'), 'admins should see the note text');
+  const csv = await (await admin(`/api/admin/results/${t}.csv`, null, { raw: true })).text();
+  assert.ok(csv.startsWith('"Name","Slack ID"') && csv.includes('Ana Trainee') && csv.includes('"Fail"'));
+  assert.equal((await ana(`/api/admin/results/${t}`)).status, 403);
+  check('admin results show what went wrong and the note text; CSV works; trainees cannot see results');
 
-  // deadline: a test whose time ran out is handed in automatically
-  const t2 = (await trainer('/api/admin/tests', { name: 'Timed', classId: nov, addressIds: [a1], passCount: 1, timeLimitMin: 1 })).data.id;
-  await trainer(`/api/admin/tests/${t2}/status`, { status: 'open' });
-  await other(`/api/tests/${t2}/start`, {});
+  // A stop saved with no start never opens the map on the answer.
+  const nostart = (await admin('/api/admin/scenarios', { title: 'No start', category: 'Other', data: { caller: 'x', stops: [{ kind: 'pickup', label: 'Y', answer: { lat: 40.123456, lng: -75.654321 } }], questions: [], note: {} } })).data.id;
+  const ns = (await ana('/api/practice')).data.find((s) => s.id === nostart);
+  assert.notDeepEqual(ns.stops[0].start, { lat: 40.123456, lng: -75.654321 });
+  check('a scenario without a saved start does not open on the answer');
+
+  const t2 = (await admin('/api/admin/tests', { name: 'Timed', classId: nov, scenarioIds: [men.id], passCount: 1, timeLimitMin: 1 })).data.id;
+  await admin(`/api/admin/tests/${t2}/status`, { status: 'open' });
+  await ben(`/api/tests/${t2}/start`, {});
   const { db } = await import('../src/db.js');
   db.prepare(`UPDATE attempts SET deadline = datetime('now', '-5 minutes') WHERE test_id = ?`).run(t2);
-  assert.equal((await other(`/api/tests/${t2}/answer`, { addressId: a1, lat: 39.80036, lng: -89.65 })).status, 409);
-  assert.equal((await other('/api/tests')).data.find((x) => x.id === t2).state, 'done');
-  check('time limit enforced by the server, late test auto-handed-in', () => {});
+  assert.equal((await ben(`/api/tests/${t2}/answer`, { scenarioId: men.id, pins: [MENCHIES] })).status, 409);
+  assert.equal((await ben('/api/tests')).data.find((x) => x.id === t2).state, 'done');
+  check('time limit enforced by the server; late test handed in automatically');
 
-  // the page itself is served
-  const html = await (await fetch(BASE + '/')).text();
-  assert.ok(html.includes('GoGo Pin Academy'));
-  check('page loads', () => {});
-
+  assert.ok((await (await fetch(BASE + '/')).text()).includes('GoGo Pin Academy'));
+  check('page loads');
   console.log(`\nAll ${passed} checks passed.`);
 } catch (e) {
   console.error('\nFAILED:', e.message);

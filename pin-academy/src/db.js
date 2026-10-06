@@ -86,6 +86,39 @@ CREATE TABLE IF NOT EXISTS answers (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (attempt_id, address_id)
 );
+
+-- Scenarios = a short pretend call: what the caller says, one or two stops (pickup / drop-off) with the right pin
+-- and entrances, the questions worth asking, and what the driver note must say. Details live in data (JSON).
+-- (The addresses / test_items / answers tables above are from the first version and are no longer used.)
+CREATE TABLE IF NOT EXISTS scenarios (
+  id INTEGER PRIMARY KEY,
+  title TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'Other',
+  data TEXT NOT NULL,
+  practice INTEGER NOT NULL DEFAULT 1,
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS test_scenarios (
+  test_id INTEGER NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+  scenario_id INTEGER NOT NULL REFERENCES scenarios(id),
+  position INTEGER NOT NULL,
+  PRIMARY KEY (test_id, scenario_id)
+);
+
+CREATE TABLE IF NOT EXISTS scenario_answers (
+  id INTEGER PRIMARY KEY,
+  attempt_id INTEGER NOT NULL REFERENCES attempts(id) ON DELETE CASCADE,
+  scenario_id INTEGER NOT NULL REFERENCES scenarios(id),
+  submitted TEXT NOT NULL,          -- what the trainee sent (pins, entrances, questions asked, note)
+  result TEXT NOT NULL,             -- the grading, worked out on the server
+  passed INTEGER NOT NULL,
+  seconds INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (attempt_id, scenario_id)
+);
 `);
 
 export const one = (sql, ...p) => db.prepare(sql).get(...p);
