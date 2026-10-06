@@ -831,7 +831,10 @@ async function main() {
     // leaves a total of 15 — so the total alone would count him as a starter who then left.
     const startedTraining = (t) => !t.neverStarted && Number(t.total) > 0;
 
-    for (const cls of [...CLASSES].reverse()) {
+    // Only classes the trainers are graded on. Older classes (May 2026) are on the other tabs
+    // for pattern-finding, but Vee, 2026-10-05: May "doesn't count against them... only take it
+    // off from the scorecard section." `graded: false` in trained-roster.js is that switch.
+    for (const cls of [...CLASSES].reverse().filter((c) => c.graded !== false)) {
       const meta = cls.meta;
       const pub = cls.published;
       const roster = cls.trainees;

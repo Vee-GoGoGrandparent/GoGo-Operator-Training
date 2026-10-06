@@ -89,9 +89,9 @@ const SOURCES = {
       { group: 1, sli: 'SLI Class 1', attendance: 'Attendance Class 1', attendanceNameCol: 1 },
       { group: 2, sli: 'SLI 2', attendance: 'Attendance Class 2', attendanceNameCol: 2 },
     ],
-    header: `ANALYSIS ONLY. Not on the trainers' tracker. Vee, 2026-10-05: May "doesn't count against" the
-// trainers (their grading starts with June), so this class is read only to look for patterns that
-// can improve the training material. It is deliberately NOT listed in data/trained-roster.js.
+    header: `For pattern-finding, NOT for grading the trainers. Vee, 2026-10-05: May "doesn't count against"
+// the trainers (their grading starts with June). It is on the tracker's tabs so its numbers are kept,
+// but carries graded: false in data/trained-roster.js, so the Scorecard leaves it out.
 //
 // Scores come from the "SLI" tabs, which in May still weighted Knowledge 30% · Call Handling 25%
 // · System Navigation 20% · Punctuality & Participation 10% · Engagement 10% · Technical

@@ -22,13 +22,14 @@ import { AUG_2026, CLASS_META as AUG_META } from './class-aug-2026.js';
 // (scripts/pull-class-sheet.js) instead of being typed out of a PDF.
 import { SEP_2026, CLASS_META as SEP_META } from './class-sep-2026.js';
 import { JUN_2026, CLASS_META as JUN_META, PUBLISHED as JUN_PUBLISHED } from './class-jun-2026.js';
-// NOT HERE ON PURPOSE: May 2026 (data/class-may-2026.js) and any older class.
+// May 2026 and any older class: ON the tracker, OFF the Scorecard.
 // Vee, 2026-10-05: "May doesn't count against them [the trainers]. The whole thing started in
-// June/July for them. We don't need to do every single tab... we're adding these other classes
-// just to see if we can find patterns to make the training material better."
-// So older classes are ANALYSIS-ONLY: read them for pattern work (pull-class-sheet.js --class may),
-// never list them in CLASSES, which feeds every tab of the trainers' tracker. June is the first
-// class the trainers are graded on.
+// June/July for them... we're adding these other classes just to see if we can find patterns to
+// make the training material better." Then: "only take it off from the scorecard section, but the
+// other places it's fine." So older classes carry `graded: false`: every tab keeps their numbers
+// (that is where the information lives), and only the Scorecard, which grades the trainers, skips
+// them. June is the first class the trainers are graded on.
+import { MAY_2026, CLASS_META as MAY_META } from './class-may-2026.js';
 
 /**
  * Every class, oldest first. Add new classes here and every tab picks them up.
@@ -39,6 +40,7 @@ import { JUN_2026, CLASS_META as JUN_META, PUBLISHED as JUN_PUBLISHED } from './
  * the honest state of things, not a bug to paper over.
  */
 export const CLASSES = [
+  { meta: MAY_META, trainees: MAY_2026, published: null, graded: false },
   { meta: JUN_META, trainees: JUN_2026, published: JUN_PUBLISHED },
   { meta: AUG_META, trainees: AUG_2026, published: null },
   { meta: SEP_META, trainees: SEP_2026, published: null },
