@@ -133,6 +133,10 @@ addColumn('tests', 'mode', "mode TEXT NOT NULL DEFAULT 'test'"); // 'test' = tim
 addColumn('tests', 'group_id', 'group_id INTEGER');
 // When a class is deleted its (deleted) tests let go of it; the class name is kept here so old answers still say whose they were.
 addColumn('tests', 'deleted_class_name', 'deleted_class_name TEXT');
+// A class can be archived once it is 6 months old (Vee, 2026-10-07): out of the menus, links stop working, data kept.
+addColumn('classes', 'archived', 'archived INTEGER NOT NULL DEFAULT 0');
+// Every sign-in, so admins can see each time a trainee signed in (Vee, 2026-10-07).
+db.exec(`CREATE TABLE IF NOT EXISTS logins (id INTEGER PRIMARY KEY, slack_id TEXT NOT NULL, at TEXT NOT NULL DEFAULT (datetime('now')))`);
 
 export const one = (sql, ...p) => db.prepare(sql).get(...p);
 export const all = (sql, ...p) => db.prepare(sql).all(...p);

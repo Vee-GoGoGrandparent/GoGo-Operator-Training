@@ -308,8 +308,12 @@ try {
   const jan = (await admin('/api/admin/classes', { name: 'January 2027' })).data.id;
   assert.equal((await admin('/api/admin/classes')).data.find((c) => c.id === jan).slug, 'january-2027');
   assert.equal((await admin('/api/admin/classes', { name: 'january-2027!' })).status, 409, 'two classes sharing one link');
-  const redir = await fetch(BASE + '/class/january-2027', { redirect: 'manual' });
-  assert.equal(redir.status, 302); assert.equal(redir.headers.get('location'), '/#class-january-2027');
+  // Two links per class (practice / test); the bare class link is internal and shows nothing.
+  for (const mode of ['practice', 'test']) {
+    const redir = await fetch(BASE + `/class/january-2027/${mode}`, { redirect: 'manual' });
+    assert.equal(redir.status, 302); assert.equal(redir.headers.get('location'), `/#join-${mode}-january-2027`);
+  }
+  assert.equal((await fetch(BASE + '/class/january-2027', { redirect: 'manual' })).status, 404, 'the bare class link should show nothing');
   // One form: Menchie's for practice, the set-only scenario for the test.
   const g = await admin('/api/admin/tests/group', { name: 'January pins', classId: jan, practiceIds: [men.id], testIds: [hidden], passMeters: 15, passCount: 1, timeLimitMin: 20 });
   assert.equal(g.status, 200);
@@ -459,6 +463,26 @@ try {
   assert.ok(new Set(orders).size >= 3, `only ${new Set(orders).size} different test orders for 8 people`);
   assert.equal(new Set(practiceOrders).size, 1, 'practice should be the same order for everyone');
   check(`test calls come in a different order per person (${new Set(orders).size} orders for 8 people, same on reload); practice is the same for everyone`);
+
+  // Archive: only a class 6 months old can be archived; an archived class's link stops working.
+  const young = (await admin('/api/admin/classes', { name: 'Young class' })).data.id;
+  assert.equal((await admin('/api/admin/classes', { id: young, archived: true })).status, 409, 'a new class was archived');
+  db.prepare(`UPDATE classes SET created_at = datetime('now', '-7 months') WHERE id = ?`).run(young);
+  assert.equal((await admin('/api/admin/classes')).data.find((c) => c.id === young).canArchive, true);
+  assert.equal((await admin('/api/admin/classes', { id: young, archived: true })).status, 200);
+  assert.equal((await admin('/api/admin/classes')).data.find((c) => c.id === young).archived, true);
+  const late = client(); await late('/auth/dev?as=ULATE&name=Late%20Joiner', null, { raw: true });
+  assert.equal((await late('/api/class/young-class/join', {})).status, 404, 'an archived class link still works');
+  assert.equal((await admin('/api/admin/classes', { id: young, archived: false })).status, 200);
+  check('a class can be archived once it is 6 months old (not before); an archived class link stops working; it can be brought back');
+
+  // Every sign-in is kept and listed per person.
+  for (let k = 0; k < 2; k++) await ana('/auth/dev?as=UANA&name=Ana%20Trainee', null, { raw: true });
+  const anaRow = (await admin('/api/admin/people')).data.find((p) => p.slack_id === 'UANA');
+  const anaLogins = (await admin('/api/admin/people/UANA/logins')).data;
+  assert.equal(anaRow.logins, anaLogins.length); assert.ok(anaLogins.length >= 3, `only ${anaLogins.length} sign-ins kept`);
+  assert.equal((await ana('/api/admin/people/UANA/logins')).status, 403);
+  check(`every sign-in is kept (${anaLogins.length} for one trainee) and only admins can see the list`);
 
   assert.ok((await (await fetch(BASE + '/')).text()).includes('GoGo Academy'));
   check('page loads');

@@ -212,8 +212,14 @@ function drawShell(active) {
   $who.replaceChildren();
   if (!ME) return;
   const tab = ([id, name]) => h('button', { class: id === active ? 'on' : '', onclick: () => go(id) }, name);
-  // Operators see their tabs; admins see only theirs (they try a call with "Try it" on Scenarios). Vee, 2026-10-07.
-  $tabs.append(...(ME.role === 'admin' ? ADMIN_TABS : TRAINEE_TABS).map(tab));
+  // Operators see their tabs; admins see theirs, and can switch to the trainee view to see what operators see.
+  const asTrainee = ME.role === 'admin' && VIEW_AS === 'trainee';
+  if (ME.role !== 'admin' || asTrainee) $tabs.append(...TRAINEE_TABS.map(tab));
+  else $tabs.append(...ADMIN_TABS.map(([id, name]) => (id === 'a-people' ? peopleMenu(active) : tab([id, name]))));
+  if (ME.role === 'admin') {
+    const sw = (v, label) => h('button', { class: `view-btn ${VIEW_AS === v ? 'on' : ''}`, onclick: () => { VIEW_AS = v; try { sessionStorage.setItem('pa_view', v); } catch {} go(v === 'trainee' ? 'home' : 'a-scenarios'); } }, label);
+    $who.append(h('span', { class: 'view-switch' }, sw('admin', 'Admin view'), sw('trainee', 'Trainee view')));
+  }
   $who.append(h('span', {}, ME.name, ME.className ? ` · ${ME.className}` : '', ME.role === 'admin' ? ' · Admin' : ''),
     h('button', { onclick: safe(async () => { await api('/auth/logout', {}); location.href = '/'; }) }, 'Sign out'));
 }
@@ -230,7 +236,7 @@ async function boot() {
   const hash = location.hash.slice(1) || recall() || '';
   if (!ME) { if (hash) remember(hash); return drawLogin(me); }
   // A class link (/class/october-2026 → #class-october-2026, or an older #t-12) puts someone with no class into that class.
-  if (/^(t-\d+|class-[a-z0-9-]+)$/.test(hash)) return render(hash);
+  if (/^(t-\d+|join-(practice|test)-[a-z0-9-]+)$/.test(hash)) return render(hash);
   if (!ME.classId && ME.role !== 'admin') return drawClassPicker();
   render(hash || 'home');
 }
@@ -278,6 +284,78 @@ async function drawClassPicker() {
 }
 
 const VIEWS = {};
+let VIEW_AS = (() => { try { return sessionStorage.getItem('pa_view') || 'admin'; } catch { return 'admin'; } })();
+
+// "People & classes": hover for Admins, each class, and the Archive (classes 6 months old can be archived there).
+function peopleMenu(active) {
+  const list = h('div', { class: 'menu-list' }, h('div', { class: 'small muted pad-s' }, 'Loading…'));
+  let loaded = false;
+  const load = async () => {
+    if (loaded) return; loaded = true;
+    const classes = await api('/api/admin/classes');
+    const live = classes.filter((c) => !c.archived), old = classes.filter((c) => c.archived);
+    const item = (label, to) => h('button', { class: 'menu-item', onclick: () => go(to) }, label);
+    list.replaceChildren(item('All classes & admins', 'a-people'), item('Admins', 'a-admins'), h('div', { class: 'menu-sep' }),
+      ...live.map((c) => item(c.name, `a-class-${c.id}`)),
+      h('div', { class: 'menu-sep' }),
+      h('div', { class: 'menu-sub' }, h('button', { class: 'menu-item' }, `Archive (${old.length}) ▸`),
+        h('div', { class: 'menu-list sub' }, old.length ? old.map((c) => item(c.name, `a-class-${c.id}`)) : h('div', { class: 'small muted pad-s' }, 'Nothing archived yet.'))));
+  };
+  const wrap = h('div', { class: 'menu', onmouseenter: () => load().catch(() => {}) },
+    h('button', { class: active === 'a-people' || active?.startsWith?.('a-class') || active === 'a-admins' ? 'on' : '', onclick: () => go('a-people') }, 'People & classes ▾'), list);
+  return wrap;
+}
+
+// Admins only.
+VIEWS['a-admins'] = async () => {
+  const people = (await api('/api/admin/people')).filter((p) => p.role === 'admin');
+  mount(h('h1', {}, 'Admins'), h('p', { class: 'lead' }, 'You, Oscar and anyone given admin access. Your own practice is never counted in a class.'),
+    h('div', { class: 'card' }, peopleTable(people, { showClass: false })));
+};
+
+// Name, Slack ID, practice, tests and every sign-in (Vee, 2026-10-07). Practice can be done many times; a test once.
+function peopleTable(list, { classes = [], showClass = true } = {}) {
+  return h('table', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Slack ID'), h('th', {}, 'Practice calls'), h('th', {}, 'Calls got right'),
+    h('th', {}, 'Tests handed in'), showClass ? h('th', {}, 'Class') : null, h('th', {}, 'Role'), h('th', {}, 'Sign-ins')),
+    list.map((p) => {
+      const c = h('select', { onchange: safe(async () => { await api('/api/admin/people', { slackId: p.slack_id, classId: c.value ? Number(c.value) : null }); toast('Class updated'); }) },
+        h('option', { value: '' }, '–'), classes.filter((k) => !k.archived || k.id === p.class_id).map((k) => h('option', { value: k.id, selected: k.id === p.class_id }, k.name)));
+      const r = h('select', { onchange: safe(async () => { await api('/api/admin/people', { slackId: p.slack_id, role: r.value }); toast('Role updated'); }) },
+        ['trainee', 'admin'].map((x) => h('option', { value: x, selected: x === p.role }, x === 'admin' ? 'Admin' : 'Trainee')));
+      const times = h('div', { class: 'small muted' });
+      const signins = h('details', { ontoggle: async (e) => { if (!e.target.open || times.childElementCount) return;
+        const at = await api(`/api/admin/people/${p.slack_id}/logins`); times.replaceChildren(...at.map((t) => h('div', {}, when(t)))); } },
+        h('summary', {}, `${p.logins} · last ${when(p.last_login)}`), times);
+      return h('tr', {}, h('td', {}, p.name), h('td', {}, h('code', { class: 'small' }, p.slack_id)), h('td', {}, p.practice_tries), h('td', {}, p.practice_right),
+        h('td', {}, p.tests_done), showClass ? h('td', {}, c) : null, h('td', {}, r), h('td', {}, signins));
+    }));
+}
+
+// One class: its two links, its trainees, and its controls (rename, close, archive after 6 months, delete).
+async function classAdminPage(id) {
+  const [classes, people, tests] = await Promise.all([api('/api/admin/classes'), api('/api/admin/people'), api('/api/admin/tests')]);
+  const c = classes.find((k) => k.id === id);
+  if (!c) return mount(h('div', { class: 'card' }, 'That class no longer exists.'));
+  const mine = people.filter((p) => p.class_id === id && p.role !== 'admin');
+  const nm = h('input', { type: 'text', value: c.name });
+  const linkRow = (mode) => h('div', { class: 'row', style: 'margin-top:6px' }, h('b', { style: 'min-width:80px' }, mode === 'test' ? 'Test' : 'Practice'),
+    h('code', { class: 'small grow' }, classLink(c.slug, mode)), h('button', { class: 'btn ghost small', onclick: copyClassLink(c.slug, mode) }, `Copy ${mode} link`));
+  const open = tests.filter((t) => t.class_id === id && t.status === 'open');
+  mount(h('h1', {}, c.name, c.archived ? h('span', { class: 'tag', style: 'margin-left:10px' }, 'archived') : null),
+    h('div', { class: 'card' },
+      h('div', { class: 'row' }, h('div', { class: 'grow' }, nm),
+        h('button', { class: 'btn ghost small', onclick: safe(async () => { await api('/api/admin/classes', { id, name: nm.value }); toast('Renamed'); classAdminPage(id); }) }, 'Rename'),
+        h('span', { class: `tag ${c.active ? 'pass' : ''}` }, c.active ? 'open' : 'closed'),
+        h('button', { class: 'btn ghost small', onclick: safe(async () => { await api('/api/admin/classes', { id, active: !c.active }); classAdminPage(id); }) }, c.active ? 'Close' : 'Re-open'),
+        c.archived ? h('button', { class: 'btn ghost small', onclick: safe(async () => { await api('/api/admin/classes', { id, archived: false }); toast('Back from the archive'); classAdminPage(id); }) }, 'Bring back')
+          : h('button', { class: 'btn ghost small', disabled: !c.canArchive, title: c.canArchive ? '' : 'A class can be archived once it is 6 months old', onclick: safe(async () => {
+            if (!confirm(`Archive ${c.name}? Its links stop working; everything is kept and it moves to the Archive menu.`)) return;
+            await api('/api/admin/classes', { id, archived: true }); toast('Archived'); go('a-people'); }) }, 'Archive')),
+      linkRow('practice'), linkRow('test'),
+      h('div', { class: 'small muted', style: 'margin-top:6px' }, open.length ? `Open now: ${open.map((t) => `${t.name} (${t.mode})`).join(', ')}` : 'Nothing is open on these links yet. Make practice or a test on Practice & tests, then press Open.')),
+    h('h2', {}, `Trainees (${mine.length})`),
+    h('div', { class: 'card' }, mine.length ? peopleTable(mine, { classes }) : h('p', { class: 'muted' }, 'No one yet. Send the practice link.')));
+}
 
 // The GoGo Academy home page: one tile per academy. Pin Academy is open; the others are on the way (Vee, 2026-10-07).
 const ACADEMIES = [
@@ -311,8 +389,11 @@ async function render(id) {
       drawShell(j.mode === 'practice' ? 'practice' : 'tests');
       return j.mode === 'practice' ? practiceSet(j.id) : takeTest(j.id);
     }
-    const cls = /^class-([a-z0-9-]+)$/.exec(id || '');
-    if (cls) return classPage(cls[1]);
+    const join = /^join-(practice|test)-([a-z0-9-]+)$/.exec(id || '');
+    if (join) return classPage(join[2], join[1]);
+    if (/^class-[a-z0-9-]+$/.test(id || '')) id = 'home'; // the bare class link is internal: nothing to show
+    const cpage = /^a-class-(\d+)$/.exec(id || '');
+    if (cpage && ME.role === 'admin') { drawShell('a-people'); return classAdminPage(Number(cpage[1])); }
     if (!VIEWS[id] || (id.startsWith('a-') && ME.role !== 'admin')) id = 'home';
     drawShell(id);
     await VIEWS[id]();
@@ -705,20 +786,18 @@ VIEWS.practice = async () => {
         h('span', { class: 'tag' }, s.category), h('b', {}, s.title), h('span', { class: 'small muted' }, s.stops.map((x) => x.kind === 'dropoff' ? 'drop-off' : 'pickup').join(' + ')))))]));
 };
 
-// The class link's page: this class's practice calls and its tests, all in one place.
-async function classPage(slug) {
+// A class has a practice link and a test link (Vee, 2026-10-07): each shows only its own part.
+async function classPage(slug, mode) {
   const d = await api(`/api/class/${slug}/join`, {});
   ME = d.user;
-  drawShell('practice');
-  const back = `class-${slug}`;
-  mount(h('h1', {}, d.class.name),
-    h('p', { class: 'lead' }, 'Your class page. Practice as many times as you like. A test is timed, and you get one go.'),
-    h('h2', {}, 'Practice'),
+  drawShell(mode === 'test' ? 'tests' : 'practice');
+  const back = `join-${mode}-${slug}`;
+  const practicePart = [h('h2', {}, 'Practice'),
     !d.practice.length ? h('div', { class: 'card muted' }, 'No practice is open for this class yet.')
       : h('div', { class: 'tiles' }, d.practice.map((s, i) => h('button', { class: 'tile', style: catColour(s.category), onclick: () => practiceOne(d.practice, i, back) },
         h('span', { class: 'tag' }, s.category), h('b', {}, s.title),
-        h('span', { class: `small ${s.gotRight ? '' : 'muted'}` }, s.gotRight ? '✓ Got it right' : s.tries ? `${s.tries} tries so far` : 'Not tried yet')))),
-    h('h2', {}, 'Tests'),
+        h('span', { class: `small ${s.gotRight ? '' : 'muted'}` }, s.gotRight ? '✓ Got it right' : s.tries ? `${s.tries} tries so far` : 'Not tried yet'))))];
+  const testPart = [h('h2', {}, 'Tests'),
     !d.tests.length ? h('div', { class: 'card muted' }, 'No test is open for this class right now.') : null,
     d.tests.map((t) => h('div', { class: 'card row' },
       h('div', { class: 'grow' }, h('b', {}, t.name), h('div', { class: 'small muted' },
@@ -726,7 +805,10 @@ async function classPage(slug) {
       h('span', { class: `tag ${t.state === 'done' ? 'pass' : ''}` }, t.state),
       t.state === 'done' ? h('button', { class: 'btn ghost', onclick: () => takeTest(t.id) }, 'See results')
         : t.status === 'open' ? h('button', { class: 'btn orange', onclick: () => takeTest(t.id) }, t.state === 'in progress' ? 'Continue' : 'Start test')
-        : h('span', { class: 'muted small' }, 'Closed'))));
+        : h('span', { class: 'muted small' }, 'Closed')))];
+  mount(h('h1', {}, d.class.name),
+    h('p', { class: 'lead' }, mode === 'test' ? 'Your test. It is timed, and you get one go.' : 'Your practice. Do the calls as many times as you like.'),
+    mode === 'test' ? testPart : practicePart);
 }
 
 async function practiceSet(id) {
@@ -1294,8 +1376,8 @@ VIEWS['a-lines'] = async () => {
 
 // ── admins: practice sets & tests ────────────────────────────────────
 // Each class has ONE link, ending with its name: …/class/october-2026. It shows that class's open practice and tests.
-const classLink = (slug) => `${location.origin}/class/${slug}`;
-const copyClassLink = (slug) => safe(async () => { await navigator.clipboard.writeText(classLink(slug)); toast('Class link copied. Send it to the class.'); });
+const classLink = (slug, mode = 'practice') => `${location.origin}/class/${slug}/${mode}`;
+const copyClassLink = (slug, mode = 'practice') => safe(async () => { await navigator.clipboard.writeText(classLink(slug, mode)); toast(`${mode === 'test' ? 'Test' : 'Practice'} link copied. Send it to the class.`); });
 
 VIEWS['a-tests'] = async () => {
   const [tests, classes] = await Promise.all([api('/api/admin/tests'), api('/api/admin/classes')]);
@@ -1314,11 +1396,11 @@ VIEWS['a-tests'] = async () => {
       h('table', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Kind'), h('th', {}, 'Class'), h('th', {}, 'Done by'), h('th', {}, 'Status'), h('th', {}, '')),
         tests.map((t) => h('tr', {}, h('td', {}, h('b', {}, t.name), h('div', { class: 'small muted' }, t.mode === 'practice' ? `${t.questions} calls` : `${t.pass_count} of ${t.questions} right · ${t.pass_meters} m · ${t.time_limit_min} min`)),
           h('td', {}, h('span', { class: 'tag' }, t.mode === 'practice' ? 'Practice' : 'Test')),
-          h('td', {}, t.class_name || '–', t.classSlug ? h('div', { class: 'small muted' }, `/class/${t.classSlug}`) : null),
+          h('td', {}, t.class_name || '–', t.classSlug ? h('div', { class: 'small muted' }, `/class/${t.classSlug}/${t.mode}`) : null),
           h('td', {}, t.mode === 'practice' ? `${t.practised} practised` : `${t.handed_in} handed in`),
           h('td', {}, h('span', { class: `tag ${t.status === 'open' ? 'pass' : ''}` }, t.status === 'draft' ? 'draft (hidden)' : t.status)),
           h('td', { class: 'actions' },
-            t.classSlug ? h('button', { class: 'btn ghost small', onclick: copyClassLink(t.classSlug) }, 'Copy class link') : null,
+            t.classSlug ? h('button', { class: 'btn ghost small', onclick: copyClassLink(t.classSlug, t.mode) }, t.mode === 'practice' ? 'Copy practice link' : 'Copy test link') : null,
             h('button', { class: 'btn ghost small', onclick: () => editGroup(t, tests, classes, t.mode) }, 'Edit'),
             t.status === 'open' ? h('button', { class: 'btn ghost small', onclick: setStatus(t, 'closed') }, 'Close')
               : h('button', { class: 'btn small', onclick: setStatus(t, 'open') }, 'Open'),
@@ -1346,7 +1428,7 @@ async function editGroup(t, tests, classes, mode = 'test') {
   const upd = () => { tally.textContent = `${role.size} call${role.size === 1 ? '' : 's'}`; };
   upd();
   const linkNote = h('div', { class: 'small muted' });
-  const showLink = () => { const c = classes.find((k) => k.id === Number(cls.value)); linkNote.textContent = c ? `Class link: ${classLink(c.slug)}` : ''; };
+  const showLink = () => { const c = classes.find((k) => k.id === Number(cls.value)); linkNote.textContent = c ? `${mode === 'practice' ? 'Practice' : 'Test'} link: ${classLink(c.slug, mode)}` : ''; };
   cls.onchange = showLink; showLink();
   const word = mode === 'practice' ? 'practice' : 'test';
   mount(h('button', { class: 'btn ghost small', onclick: () => go('a-tests') }, '← Practice & tests'), h('h1', {}, t ? `Edit ${word}` : `New ${word}`),
@@ -1429,8 +1511,9 @@ VIEWS['a-people'] = async () => {
           if (!confirm(`Delete the class "${c.name}"?${own.length ? `\n\nThis also deletes its ${own.length} practice set(s)/test(s): ${own.map((t) => t.name).join(', ')}.` : ''}`)) return;
           await api(`/api/admin/classes/${c.id}/delete`, {}); toast('Deleted'); go('a-people'); }) }, 'Delete')),
       h('div', { class: 'small muted' }, `${c.people} people`),
-      h('div', { class: 'row', style: 'margin-top:8px' }, h('code', { class: 'small' }, classLink(c.slug)),
-        h('button', { class: 'btn ghost small', onclick: copyClassLink(c.slug) }, 'Copy class link')),
+      h('div', { class: 'row', style: 'margin-top:8px' }, h('code', { class: 'small grow' }, classLink(c.slug, 'practice')), h('button', { class: 'btn ghost small', onclick: copyClassLink(c.slug, 'practice') }, 'Copy practice link')),
+      h('div', { class: 'row' }, h('code', { class: 'small grow' }, classLink(c.slug, 'test')), h('button', { class: 'btn ghost small', onclick: copyClassLink(c.slug, 'test') }, 'Copy test link')),
+      h('div', { class: 'row' }, h('button', { class: 'btn ghost small', onclick: () => go(`a-class-${c.id}`) }, 'Open this class →')),
       h('div', { class: 'small muted' }, shown.length ? `Open on the link now: ${shown.map((t) => `${t.name} (${t.mode === 'practice' ? 'practice' : 'test'})`).join(', ')}`
         : 'Nothing is open on this link yet. Make practice and a test on Practice & tests, then press Open.'));
   };
@@ -1442,7 +1525,7 @@ VIEWS['a-people'] = async () => {
     h('p', { class: 'lead' }, 'Make a class, then its practice and test on Practice & tests. Each class has one link that ends with its name: whoever opens it joins the class. A class with trainees in it can’t be deleted (move them first).'),
     h('div', { class: 'card' }, h('h2', {}, 'Add a class'), h('div', { class: 'row' }, h('div', { class: 'grow' }, newName),
       h('button', { class: 'btn', onclick: safe(async () => { await api('/api/admin/classes', { name: newName.value }); go('a-people'); }) }, 'Add class'))),
-    classes.map(classCard),
+    classes.filter((c) => !c.archived).map(classCard),
     h('h2', {}, 'Admins & trainers'),
     h('div', { class: 'card admins' }, h('p', { class: 'small muted' }, 'You, Oscar and anyone given admin access. Your own practice shows here and is never counted in a class or in a scenario\u2019s "Got right".'),
       h('table', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Practice calls'), h('th', {}, 'Calls got right'), h('th', {}, 'Role'), h('th', {}, 'Last sign-in')),
@@ -1454,15 +1537,7 @@ VIEWS['a-people'] = async () => {
     h('h2', {}, 'Trainees by class'),
     !Object.keys(byClass).length ? h('div', { class: 'card muted' }, 'No trainees yet. Send a class its practice or test link.') : null,
     Object.entries(byClass).map(([cname, list]) => h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, cname),
-      h('table', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Practice calls'), h('th', {}, 'Calls got right'), h('th', {}, 'Tests handed in'), h('th', {}, 'Class'), h('th', {}, 'Role'), h('th', {}, 'Last sign-in')),
-        list.map((p) => {
-          const c = h('select', { onchange: safe(async () => { await api('/api/admin/people', { slackId: p.slack_id, classId: c.value ? Number(c.value) : null }); toast('Class updated'); }) },
-            h('option', { value: '' }, '–'), classes.map((k) => h('option', { value: k.id, selected: k.id === p.class_id }, k.name)));
-          const r = h('select', { onchange: safe(async () => { await api('/api/admin/people', { slackId: p.slack_id, role: r.value }); toast('Role updated'); }) },
-            ['trainee', 'admin'].map((x) => h('option', { value: x, selected: x === p.role }, x === 'admin' ? 'Admin' : 'Trainee')));
-          return h('tr', {}, h('td', {}, p.name), h('td', {}, p.practice_tries), h('td', {}, p.practice_right), h('td', {}, p.tests_done),
-            h('td', {}, c), h('td', {}, r), h('td', { class: 'small muted' }, when(p.last_login)));
-        })))));
+      peopleTable(list, { classes }))));
   // (a trainee made admin moves up to Admins & trainers on the next refresh)
 };
 

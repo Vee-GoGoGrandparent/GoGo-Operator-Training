@@ -298,15 +298,17 @@ export const slugify = (name) => String(name || '').toLowerCase().normalize('NFK
   .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'class';
 const classBySlug = (slug) => all('SELECT * FROM classes').find((c) => slugify(c.name) === slug);
 
-route('GET', '/class/([a-z0-9-]+)', (req, res, { m }) => {
-  res.writeHead(302, { Location: `/#class-${m[1]}` });
+// Each class has a practice link and a test link (Vee, 2026-10-07). The bare class link is internal: it shows nothing.
+route('GET', '/class/([a-z0-9-]+)/(practice|test)', (req, res, { m }) => {
+  res.writeHead(302, { Location: `/#join-${m[2]}-${m[1]}` });
   res.end();
 });
+route('GET', '/class/([a-z0-9-]+)', (req, res) => send(res, 404, 'Not found.', 'text/plain; charset=utf-8'));
 
 route('POST', '/api/class/([a-z0-9-]+)/join', (req, res, { m }) => {
   const u = needUser(req);
   const c = classBySlug(m[1]);
-  if (!c) fail(404, 'This class link does not work any more. Ask your trainer for the new one.');
+  if (!c || c.archived) fail(404, 'This class link does not work any more. Ask your trainer for the new one.');
   if (u.role !== 'admin') {
     if (u.class_id && u.class_id !== c.id) fail(409, `This link is for the ${c.name} class, and you are in another class. Ask your trainer.`);
     if (!u.class_id) {
@@ -445,8 +447,9 @@ route('POST', '/api/admin/scenarios/examples', (req, res) => {
 // ── admins: classes and people ─────────────────────────────────────────
 route('GET', '/api/admin/classes', (req, res) => {
   needAdmin(req);
-  send(res, 200, all(`SELECT c.*, (SELECT COUNT(*) FROM users u WHERE u.class_id = c.id) people FROM classes c ORDER BY id DESC`)
-    .map((c) => ({ ...c, slug: slugify(c.name) })));
+  send(res, 200, all(`SELECT c.*, (SELECT COUNT(*) FROM users u WHERE u.class_id = c.id) people,
+    (c.created_at <= datetime('now', '-6 months')) can_archive FROM classes c ORDER BY id DESC`)
+    .map((c) => ({ ...c, archived: !!c.archived, canArchive: !!c.can_archive, slug: slugify(c.name) })));
 });
 // Two classes can't share a link: "October 2026" and "october-2026" would both be /class/october-2026.
 function linkTaken(name, exceptId = 0) {
@@ -459,6 +462,10 @@ route('POST', '/api/admin/classes', async (req, res) => {
   if (b.id) {
     if (!one('SELECT id FROM classes WHERE id = ?', num(b.id))) fail(404, 'Class not found.');
     if ('active' in b) run('UPDATE classes SET active = ? WHERE id = ?', b.active ? 1 : 0, num(b.id));
+    if ('archived' in b) {
+      if (b.archived && !one(`SELECT 1 FROM classes WHERE id = ? AND created_at <= datetime('now', '-6 months')`, num(b.id))) fail(409, 'A class can be archived once it is 6 months old.');
+      run('UPDATE classes SET archived = ? WHERE id = ?', b.archived ? 1 : 0, num(b.id));
+    }
     if ('name' in b) {
       const nm = str(b.name, 80);
       if (!nm) fail(400, 'The class needs a name.');
@@ -492,10 +499,15 @@ route('POST', '/api/admin/classes/(\\d+)/delete', (req, res, { m }) => {
 route('GET', '/api/admin/people', (req, res) => {
   needAdmin(req);
   send(res, 200, all(`SELECT u.slack_id, u.name, u.role, u.class_id, c.name class_name, u.last_login,
+    (SELECT COUNT(*) FROM logins l WHERE l.slack_id = u.slack_id) logins,
     (SELECT COUNT(*) FROM scenario_answers sa JOIN attempts a ON a.id = sa.attempt_id WHERE a.slack_id = u.slack_id AND a.test_id IS NULL) practice_tries,
     (SELECT COUNT(DISTINCT sa.scenario_id) FROM scenario_answers sa JOIN attempts a ON a.id = sa.attempt_id WHERE a.slack_id = u.slack_id AND a.test_id IS NULL AND sa.passed = 1) practice_right,
     (SELECT COUNT(*) FROM attempts a WHERE a.slack_id = u.slack_id AND a.test_id IS NOT NULL AND a.submitted_at IS NOT NULL) tests_done
     FROM users u LEFT JOIN classes c ON c.id = u.class_id ORDER BY c.id DESC, u.name`));
+});
+route('GET', '/api/admin/people/([A-Za-z0-9]+)/logins', (req, res, { m }) => {
+  needAdmin(req);
+  send(res, 200, all('SELECT at FROM logins WHERE slack_id = ? ORDER BY id DESC', m[1]).map((r) => r.at));
 });
 route('POST', '/api/admin/people', async (req, res) => {
   const me = needAdmin(req);

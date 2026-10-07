@@ -59,6 +59,7 @@ export function upsertUser({ slackId, name, email }) {
     run(`INSERT INTO users (slack_id, name, email, role, last_login) VALUES (?, ?, ?, ?, datetime('now'))`,
       slackId, name, email || null, isEnvAdmin ? 'admin' : 'trainee');
   }
+  run('INSERT INTO logins (slack_id) VALUES (?)', slackId); // every sign-in is kept
   return one('SELECT * FROM users WHERE slack_id = ?', slackId);
 }
 

@@ -315,3 +315,20 @@ td.actions .btn { margin: 2px 2px 2px 0; }
 .choice-btn.on { background: var(--purple); border-color: var(--purple); color: #fff; }
 .pin-field { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 8px; }
 .draft-card { border: 1.5px dashed var(--purple); }
+
+/* Admin view / Trainee view switch; People & classes drop-down */
+.view-switch { display: inline-flex; border: 1.5px solid #d5d0f3; border-radius: 99px; overflow: hidden; margin-right: 10px; }
+.view-btn { background: #fff; border: 0; padding: 5px 12px; font-size: 12.5px; font-weight: 600; color: var(--indigo); cursor: pointer; }
+.view-btn.on { background: var(--purple); color: #fff; }
+.menu { position: relative; display: inline-block; }
+.menu > .menu-list { display: none; position: absolute; top: 100%; left: 0; z-index: 50; min-width: 220px; background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 24px rgba(40,40,90,.12); padding: 6px; }
+.menu:hover > .menu-list, .menu:focus-within > .menu-list { display: block; }
+.menu-item { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 7px 10px; border-radius: 8px; cursor: pointer; color: var(--ink); font-size: 14px; }
+.menu-item:hover { background: var(--purple-soft); color: var(--indigo); }
+.menu-sep { border-top: 1px solid var(--line); margin: 4px 0; }
+.menu-sub { position: relative; }
+.menu-sub > .menu-list.sub { display: none; position: absolute; left: 100%; top: 0; min-width: 200px; background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 24px rgba(40,40,90,.12); padding: 6px; }
+.menu-sub:hover > .menu-list.sub { display: block; }
+.pad-s { padding: 6px 10px; }
+#who .view-switch .view-btn { background: #fff; border: 0; border-radius: 0; padding: 5px 12px; color: var(--indigo); margin: 0; }
+#who .view-switch .view-btn.on { background: var(--purple); color: #fff; }
