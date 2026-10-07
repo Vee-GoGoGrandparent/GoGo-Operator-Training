@@ -53,9 +53,9 @@ function run(script) {
   });
 }
 
-// Railway wants something listening. The web port serves the Pin Academy (pin-academy/),
+// Railway wants something listening. The web port serves GoGo Academy (pin-academy/),
 // the trainees' pin practice and tests. If it ever fails to load, the tracker keeps
-// running and the port just answers "alive", so a Pin Academy problem can never stop
+// running and the port just answers "alive", so a GoGo Academy problem can never stop
 // the daily refresh. /alive always answers, for checking the service is up.
 let pinAcademy = null, closePinAcademy = null;
 try {
@@ -75,7 +75,7 @@ const web = http
 
 // Railway stops the old copy on every deploy (with a volume attached it must, before the new one can use it).
 // Without this, the stop request cut the process off with an error code and Railway emailed "Deployment crashed".
-// Now: stop taking visits, close the Pin Academy database cleanly (nothing half-written), exit with 0.
+// Now: stop taking visits, close the GoGo Academy database cleanly (nothing half-written), exit with 0.
 // railway.json starts this file with `node` directly: under `npm start` the stop signal never reached this
 // handler, and Railway's default of 0 draining seconds killed it at once (crash emails kept coming, 2026-10-06).
 let stopping = false;

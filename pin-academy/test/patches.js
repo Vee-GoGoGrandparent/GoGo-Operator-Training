@@ -21,6 +21,8 @@ try {
   d.account.saved = [{ label: 'Doctor', address: 'Admin saved place', lat: 47.5, lng: -122.2 }]; delete d.savedFix; // #3 lost, admin's own place kept
   d.questions = d.questions.filter((q) => !['Ask if they go there often', 'Mention the saved location', 'Ask if there is anything else', 'Close the call'].includes(q.q));
   d.questions = d.questions.filter((q) => !['Provide estimate', 'Provide driver info', 'Ask them to spell the street'].includes(q.q));
+  // The live call from before steps: no steps, no "confirm the name" line.
+  delete d.steps; d.questions = d.questions.filter((q) => q.q !== "Confirm the customer's name");
   d.questions[0].say = 'ADMIN WORDING';
   d.questions.push({ q: 'Admin extra line', say: 'Something Vee added', a: 'Sure.', needed: false });
   run('INSERT INTO scenarios (title, category, data) VALUES (?, ?, ?)', ex.title, ex.category, JSON.stringify(cleanScenario(d)));
@@ -28,7 +30,7 @@ try {
   const { runPatches } = await import('../src/patches.js');
   runPatches();
   const after = JSON.parse(one('SELECT data FROM scenarios WHERE title = ?', ex.title).data);
-  assert.equal(after.questions[0].say, 'ADMIN WORDING', 'admin wording was undone');
+  assert.equal(after.questions.find((q) => q.q === 'Ask them to repeat the address').say, 'ADMIN WORDING', 'admin wording was undone');
   assert.ok(after.questions.some((q) => q.q === 'Admin extra line'), 'admin line was removed');
   assert.ok(!after.questions.some((q) => q.q === 'Ask them to spell the street'), 'a line the admin removed came back');
   assert.ok(after.questions.some((q) => q.q === 'Provide estimate') && after.questions.some((q) => q.q === 'Provide driver info'));
@@ -47,6 +49,14 @@ try {
   const sv = after.questions.findIndex((q) => q.q === 'Mention the saved location');
   assert.ok(sv > 0 && /read the address back/i.test(after.questions[sv - 1].q), 'saved-location line missing or misplaced');
   check('closing lines added once (must-ask); "location saved" line right after the read-back');
+  assert.equal(after.questions[0].q, "Confirm the customer's name", 'confirm-name line not added first');
+  assert.equal(after.questions.filter((q) => q.q === "Confirm the customer's name").length, 1);
+  const name = (i) => after.questions[i].q;
+  assert.equal(after.steps.length, 12);
+  assert.deepEqual(after.steps.map((st) => name(st.right[0])).slice(0, 4), ["Confirm the customer's name", 'Ask them to repeat the address', 'Read the address back', 'Ask for the name of the business']);
+  assert.ok(!after.steps.some((st) => st.choices.some((i) => name(i) === 'Ask them to spell the street')), 'a line the admin removed shows as a choice');
+  assert.ok(after.steps.every((st) => st.choices.every((i) => i >= 0 && i < after.questions.length)));
+  check('steps added in order, pointing at the right lines; "confirm the name" first; removed lines never offered');
 
   // Running again changes nothing, and does not add the lines twice.
   run('UPDATE scenarios SET data = ? WHERE title = ?', JSON.stringify({ ...after, why: 'ADMIN WHY' }), ex.title);
@@ -55,6 +65,14 @@ try {
   assert.equal(again.why, 'ADMIN WHY', 'patch ran a second time');
   assert.equal(again.questions.filter((q) => q.q === 'Provide estimate').length, 1);
   check('patch runs only once');
+
+  // If an admin already set the steps, the steps patch leaves them alone (even if it somehow runs again).
+  const own = [{ choices: [0, 1], right: [1] }];
+  run('UPDATE scenarios SET data = ? WHERE title = ?', JSON.stringify({ ...again, steps: own }), ex.title);
+  run(`DELETE FROM patches WHERE name = 'menchies-call-steps-2026-10-07'`);
+  runPatches();
+  assert.deepEqual(JSON.parse(one('SELECT data FROM scenarios WHERE title = ?', ex.title).data).steps, own, "admin's steps were replaced");
+  check("an admin's own steps are never replaced");
 
   // "Add the examples" must leave an existing example alone (test through the server route).
   process.env.DEV_LOGIN = '1';

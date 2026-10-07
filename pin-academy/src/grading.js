@@ -39,15 +39,48 @@ export function gradeScenario(s, sub, passMeters) {
       entrance: correctEntrance == null ? null : { chose: chose == null ? null : stop.entrances[chose]?.name || null, correct: stop.entrances[correctEntrance]?.name || null },
     };
   });
+  // A call with steps is graded on the steps; "Must ask" is only used by calls without steps.
+  const steps = gradeSteps(s, sub);
   const asked = new Set((Array.isArray(sub?.asked) ? sub.asked : []).map(Number));
-  const missingQuestions = s.questions.map((q, i) => ({ ...q, i })).filter((q) => q.needed && !asked.has(q.i)).map((q) => q.q);
+  const missingQuestions = steps ? steps.filter((x) => !x.ok).map((x) => x.text)
+    : s.questions.map((q, i) => ({ ...q, i })).filter((q) => q.needed && !asked.has(q.i)).map((q) => q.q);
   const note = checkNote(sub?.note, s.note?.mustMention || [], sub?.wearing);
   const saved = gradeSavedFix(s, sub, passMeters);
   const ordered = s.mustOrder === false ? null : { ok: !!sub?.ordered };
   return {
-    stops, missingQuestions, note, saved, ordered, modelNote: s.note?.model || '', why: s.why || '',
+    stops, stepMode: !!steps, missingQuestions, note, saved, ordered, modelNote: s.note?.model || '', why: s.why || '',
     passed: stops.every((x) => x.passed) && missingQuestions.length === 0 && note.ok && (!saved || saved.ok) && (!ordered || ordered.ok),
   };
+}
+
+// The call in steps: each step shows a few lines, one or two of them right. sub.steps[n] = every line picked at step n,
+// in order. Practice lets them pick again after a wrong one (still a miss); a test plays the wrong line and moves on.
+// A step is right only if every pick at it was a right line.
+export function isRightPick(s, step, pick) {
+  return !!s.steps?.[step]?.right.includes(pick);
+}
+function gradeSteps(s, sub) {
+  if (!s.steps?.length) return null;
+  const picks = Array.isArray(sub?.steps) ? sub.steps : [];
+  const line = (i) => `"${s.questions[i]?.q || '?'}"`;
+  return s.steps.map((st, n) => {
+    const p = (Array.isArray(picks[n]) ? picks[n] : []).map(Number).filter(Number.isInteger);
+    const should = st.right.map(line).join(' or ');
+    const wrong = p.filter((i) => !st.right.includes(i));
+    if (!p.length) return { ok: false, text: `Step ${n + 1}: not reached (should be ${should})` };
+    if (wrong.length) return { ok: false, text: `Step ${n + 1}: picked ${wrong.map(line).join(', then ')} (should be ${should})` };
+    return { ok: true, text: `Step ${n + 1}: ${line(p[0])}` };
+  });
+}
+
+// Steps point at lines by their place in the list. When lines are dropped, point them at the new places,
+// keep only real choices (max 6), and drop a step that has no right line left.
+export function cleanSteps(steps, newIndex) {
+  return (Array.isArray(steps) ? steps : []).slice(0, 30).map((st) => {
+    const map = (a) => [...new Set((Array.isArray(a) ? a : []).map(Number).filter((i) => newIndex.has(i)).map((i) => newIndex.get(i)))];
+    const choices = map(st?.choices).slice(0, 6);
+    return { choices, right: map(st?.right).filter((i) => choices.includes(i)).slice(0, 3) };
+  }).filter((st) => st.right.length);
 }
 
 // When a scenario has a saved location that was stored wrong (slot 3, 4 or 5): did they fix it the right way?
@@ -77,8 +110,11 @@ export function publicScenario(row) {
     caller: s.caller, account: s.account || { home: null, saved: [] }, ride: cleanRide(s.ride),
     stops: s.stops.map((x) => ({ kind: x.kind, label: x.label, addressGiven: x.addressGiven, start: x.start || nearby(x.answer), entrances: x.entrances.map((e) => ({ name: e.name, lat: e.lat, lng: e.lng })) })),
     questions: s.questions.map((q) => ({ q: q.q, say: q.say || '', a: q.a })),
+    // Only which lines show at each step, mixed up, so the right one is not always in the same place.
+    steps: (s.steps || []).map((st) => ({ choices: shuffle(st.choices) })),
   };
 }
+const shuffle = (a) => { const b = [...a]; for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
 
 const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 // What Get Estimate / Order Ride show. Defaults are Vee's example (made-up customer: Marge Simpson).
@@ -111,14 +147,17 @@ export function cleanScenario(b) {
   if (!stops.length || stops.some((x) => !x.answer || !x.label)) throw new Error('Every stop needs a name and a right pin.');
   if (stops.filter((x) => x.kind === 'pickup').length > 1 || stops.filter((x) => x.kind === 'dropoff').length > 1) throw new Error('One pickup and one drop-off at most.');
   stops.sort((a, b) => (a.kind === 'pickup' ? 0 : 1) - (b.kind === 'pickup' ? 0 : 1)); // pickup first, like the form
+  const lines = (Array.isArray(b.questions) ? b.questions : []).slice(0, 30)
+    .map((q, i) => ({ q: str(q?.q, 160), say: str(q?.say, 400), a: str(q?.a, 300), needed: !!q?.needed, i })).filter((q) => q.q);
+  const newIndex = new Map(lines.map((q, n) => [q.i, n]));
   return {
     caller: str(b.caller, 600), why: str(b.why, 1500),
     ride: cleanRide(b.ride), mustOrder: b.mustOrder !== false,
     savedFix: [3, 4, 5].includes(Number(b.savedFix?.slot)) ? { slot: Number(b.savedFix.slot), action: b.savedFix.action === 'delete' ? 'delete' : 'update', stop: b.savedFix.stop === 'dropoff' ? 'dropoff' : 'pickup' } : null,
     account: { home: savedPlace(b.account?.home), saved: (Array.isArray(b.account?.saved) ? b.account.saved : []).map(savedPlace).filter(Boolean).slice(0, 3) },
     stops,
-    questions: (Array.isArray(b.questions) ? b.questions : []).slice(0, 30)
-      .map((q) => ({ q: str(q.q, 160), say: str(q.say, 400), a: str(q.a, 300), needed: !!q.needed })).filter((q) => q.q),
+    questions: lines.map(({ i, ...q }) => q),
+    steps: cleanSteps(b.steps, newIndex),
     note: { mustMention: (Array.isArray(b.note?.mustMention) ? b.note.mustMention : []).map((k) => str(k, 40)).filter(Boolean).slice(0, 8), model: str(b.note?.model, 600) },
   };
 }

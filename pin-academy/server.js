@@ -1,10 +1,10 @@
-// GoGo Pin Academy: pin practice and class pin tests built from short pretend calls (scenarios).
+// GoGo Academy: pin practice and class pin tests built from short pretend calls (scenarios).
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { db, one, all, run, tx } from './src/db.js';
-import { gradeScenario, publicScenario, cleanScenario } from './src/grading.js';
+import { gradeScenario, publicScenario, cleanScenario, isRightPick } from './src/grading.js';
 import { EXAMPLE_SCENARIOS } from './src/examples.js';
 import { runPatches } from './src/patches.js';
 import * as auth from './src/auth.js';
@@ -63,6 +63,8 @@ function cleanSubmission(b) {
     pins: (Array.isArray(b.pins) ? b.pins : []).slice(0, 2).map((p) => (p ? { lat: num(p.lat), lng: num(p.lng) } : null)),
     entrances: (Array.isArray(b.entrances) ? b.entrances : []).slice(0, 2).map((e) => (Number.isInteger(e) ? e : null)),
     asked: (Array.isArray(b.asked) ? b.asked : []).slice(0, 10).map(Number).filter(Number.isInteger),
+    steps: (Array.isArray(b.steps) ? b.steps : []).slice(0, 30)
+      .map((p) => (Array.isArray(p) ? p : []).slice(0, 6).map(Number).filter(Number.isInteger)),
     note: str(b.note, 800),
     specific: (Array.isArray(b.specific) ? b.specific : []).slice(0, 2).map((s) => str(s, 120)),
     locationName: (Array.isArray(b.locationName) ? b.locationName : []).slice(0, 2).map((s) => str(s, 120)),
@@ -162,12 +164,25 @@ route('GET', '/api/practice', (req, res) => {
   send(res, 200, all('SELECT * FROM scenarios WHERE practice = 1 AND archived = 0 ORDER BY category, title').map(publicScenario));
 });
 
-route('POST', '/api/practice/(\\d+)', async (req, res, { m }) => {
-  const u = needUser(req);
+// A scenario this person may practise: general practice, an open practice set for their class, or any if admin.
+function practiceRow(u, id) {
   const row = one(`SELECT s.* FROM scenarios s WHERE s.id = ? AND s.archived = 0 AND (s.practice = 1 OR ? = 'admin' OR EXISTS (
       SELECT 1 FROM test_scenarios ts JOIN tests t ON t.id = ts.test_id
-      WHERE ts.scenario_id = s.id AND t.mode = 'practice' AND t.status = 'open' AND t.class_id = ?))`, num(m[1]), u.role, u.class_id);
+      WHERE ts.scenario_id = s.id AND t.mode = 'practice' AND t.status = 'open' AND t.class_id = ?))`, id, u.role, u.class_id);
   if (!row) fail(404, 'That scenario is not in practice.');
+  return row;
+}
+
+// Practice only: is this line right for this step? Tests have no such check: the call goes on and is graded at the end.
+route('POST', '/api/practice/(\\d+)/step', async (req, res, { m }) => {
+  const row = practiceRow(needUser(req), num(m[1]));
+  const b = await readJson(req);
+  send(res, 200, { right: isRightPick(scenarioData(row), num(b.step), num(b.pick)) });
+});
+
+route('POST', '/api/practice/(\\d+)', async (req, res, { m }) => {
+  const u = needUser(req);
+  const row = practiceRow(u, num(m[1]));
   const b = await readJson(req);
   const sub = cleanSubmission(b);
   const result = gradeScenario(scenarioData(row), sub, PRACTICE_METERS);
@@ -625,5 +640,5 @@ export const server = http.createServer(handle);
 export function close() { db.close(); }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  server.listen(PORT, () => console.log(`Pin Academy on http://localhost:${PORT}`));
+  server.listen(PORT, () => console.log(`GoGo Academy on http://localhost:${PORT}`));
 }

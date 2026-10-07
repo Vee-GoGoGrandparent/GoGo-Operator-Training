@@ -1,6 +1,37 @@
 // Worked examples from real training cases Vee uses. Public places only; customer details are made up.
 // Admins add them from the Scenarios page ("Add / refresh the examples"). Coordinates are Vee's, from the dashboard.
 // The caller only says what they want; the trainee gets the rest by asking, the way a real call goes.
+
+export const CONFIRM_NAME_LINE = { q: "Confirm the customer's name", say: 'Perfect, I was able to pull up your account. Am I speaking with Marge Simpson?',
+  a: 'Yes, this is Marge.', needed: true };
+
+// The call in steps (Vee, 2026-10-07): each step shows the right line plus two that sound right but are not next.
+// A first draft from how Vee runs this call; admins change it in the scenario editor. Lines are named by their button.
+export const MENCHIES_STEPS = [
+  { right: ["Confirm the customer's name"], wrong: ['Ask them to repeat the address', 'Mention the saved location'] },
+  { right: ['Ask them to repeat the address'], wrong: ['Mention the saved location', 'Ask them to spell the street'] },
+  { right: ['Read the address back'], wrong: ['Ask them to spell the street', 'Send the driver to the address'] },
+  { right: ['Ask for the name of the business'], wrong: ['Ask them to spell the street', 'Ask for notes for the driver'] },
+  { right: ['Tell them you are checking the map'], wrong: ['Send the driver to the address', 'Ask where they are going'] },
+  { right: ['Ask if they go there often'], wrong: ['Mention the saved location', 'Ask for notes for the driver'] },
+  { right: ['Ask what they are wearing'], wrong: ['Ask for notes for the driver', 'Provide estimate'] },
+  { right: ['Ask where they are going'], wrong: ['Provide estimate', 'Provide driver info'] },
+  { right: ['Provide estimate'], wrong: ['Provide driver info', 'Close the call'] },
+  { right: ['Provide driver info'], wrong: ['Ask if there is anything else', 'Close the call'] },
+  { right: ['Ask if there is anything else'], wrong: ['Close the call', 'Ask for notes for the driver'] },
+  { right: ['Close the call'], wrong: ['Ask for notes for the driver', 'Send the driver to the address'] },
+];
+
+// Turn named steps into line numbers. A step whose right line is not in the list is skipped; missing wrong lines are dropped.
+export function stepsFromNames(questions, named) {
+  const at = (name) => questions.findIndex((q) => q.q.trim().toLowerCase() === name.toLowerCase());
+  return named.map((st) => {
+    const right = st.right.map(at).filter((i) => i >= 0);
+    const wrong = st.wrong.map(at).filter((i) => i >= 0 && !right.includes(i));
+    return { choices: [...right, ...wrong], right };
+  }).filter((st) => st.right.length);
+}
+
 export const EXAMPLE_SCENARIOS = [
   {
     title: "Menchie's on Petrovitsky Road",
@@ -36,7 +67,8 @@ export const EXAMPLE_SCENARIOS = [
       ride: { customerName: 'Marge Simpson' },
       // In the order Vee runs the call. Must-asks: the address, reading it back, the business, what they're wearing.
       questions: [
-        { q: 'Ask them to repeat the address', say: 'Perfect, I was able to pull up your account. Can you repeat the address for me?',
+        CONFIRM_NAME_LINE,
+        { q: 'Ask them to repeat the address', say: 'Thank you, Marge. Can you repeat the address for me?',
           a: '14060 Southeast Petrovitsky Road, in Renton.', needed: true },
         { q: 'Read the address back', say: "Okay, that's 14060 Southeast Petrovitsky Road in Renton, Washington. Is that correct?",
           a: "Yes, that's right.", needed: true },
@@ -68,3 +100,4 @@ export const EXAMPLE_SCENARIOS = [
     },
   },
 ];
+EXAMPLE_SCENARIOS[0].data.steps = stepsFromNames(EXAMPLE_SCENARIOS[0].data.questions, MENCHIES_STEPS);

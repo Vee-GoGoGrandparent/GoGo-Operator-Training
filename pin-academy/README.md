@@ -1,4 +1,4 @@
-# GoGo Pin Academy
+# GoGo Academy
 
 Pin placement practice and class pin tests for GoGo orientation. Built from Oscar's pin trainer idea.
 
@@ -8,6 +8,10 @@ Pin placement practice and class pin tests for GoGo orientation. Built from Osca
   limit) and opens it. One go per trainee, timer enforced by the server, no hints until hand-in.
 - **Trainer screens:** addresses (set the right pin and the reason), build tests, results by class with a CSV,
   which addresses the class gets wrong, people and classes.
+- **The call in steps:** an admin sets the call's steps in the scenario editor. Each step shows a few lines (best: the
+  right one plus two that sound right), and one or two can be right. Practice: a wrong pick says "Not quite" and they
+  pick again (still a miss). Test: the wrong line is said, the call goes on, and it is graded at the end. A call
+  with no steps shows every line at once, as before.
 - **Sign in with Slack.** No passwords. Trainers = `ADMIN_SLACK_IDS` plus anyone a trainer promotes in the app.
 
 Scoring always happens on the server; answers are never sent to the browser before a trainee answers.

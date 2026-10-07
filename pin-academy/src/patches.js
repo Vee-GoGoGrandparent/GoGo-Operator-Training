@@ -2,6 +2,7 @@
 // what is missing: anything an admin wrote or removed in the scenario builder stays exactly as they left it.
 import { db, one, run, tx } from './db.js';
 import { cleanScenario } from './grading.js';
+import { CONFIRM_NAME_LINE, MENCHIES_STEPS, stepsFromNames } from './examples.js';
 
 db.exec(`CREATE TABLE IF NOT EXISTS patches (name TEXT PRIMARY KEY, ran_at TEXT NOT NULL DEFAULT (datetime('now')))`);
 
@@ -76,6 +77,24 @@ const PATCHES = [
       }
       if (!has(/anything else/i)) d.questions.push({"q":"Ask if there is anything else","say":"Is there anything else I can help you with today?","a":"No, that's all. Thank you!","needed":true});
       if (!has(/thank you so much for calling/i)) d.questions.push({"q":"Close the call","say":"Perfect! Thank you so much for calling GoGo, and we hope you have a beautiful and wonderful day.","a":"You too, bye!","needed":true});
+      run('UPDATE scenarios SET data = ?, version = version + 1 WHERE id = ?', JSON.stringify(cleanScenario(d)), row.id);
+      return true;
+    },
+  },
+  {
+    // Vee, 2026-10-07: the call in steps, three lines at a time. Adds "Confirm the customer's name" first and the
+    // draft steps. Leaves a call that already has steps alone. The repeat-address line is reworded only if it is
+    // still the original wording (the name is now confirmed before it).
+    name: 'menchies-call-steps-2026-10-07',
+    run() {
+      const row = one('SELECT * FROM scenarios WHERE title = ?', "Menchie's on Petrovitsky Road");
+      if (!row) return false;
+      const d = JSON.parse(row.data);
+      if (d.steps?.length) return true;
+      if (!d.questions.some((q) => /confirm the customer|speaking with/i.test(`${q.q} ${q.say}`))) d.questions.unshift({ ...CONFIRM_NAME_LINE });
+      const rep = d.questions.find((q) => q.say === 'Perfect, I was able to pull up your account. Can you repeat the address for me?');
+      if (rep) rep.say = 'Thank you, Marge. Can you repeat the address for me?';
+      d.steps = stepsFromNames(d.questions, MENCHIES_STEPS);
       run('UPDATE scenarios SET data = ?, version = version + 1 WHERE id = ?', JSON.stringify(cleanScenario(d)), row.id);
       return true;
     },

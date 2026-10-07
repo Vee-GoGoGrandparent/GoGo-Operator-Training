@@ -57,10 +57,15 @@ try {
   const men = list.find((s) => s.title.startsWith("Menchie's"));
   assert.ok(men, 'example missing');
   check('example scenario added once, not twice');
+  // The Menchie's call comes in steps: the right line at each step.
+  assert.equal(men.data.steps.length, 12);
+  assert.equal(men.data.questions[men.data.steps[0].right[0]].q, "Confirm the customer's name");
+  const RIGHT = men.data.steps.map((st) => [st.right[0]]);
 
   const pub = (await ana('/api/practice')).data;
   const json = JSON.stringify(pub);
-  for (const secret of ['answer', 'needed', 'model', 'mustMention', 'why', String(MENCHIES.lng)]) assert.ok(!json.includes(secret), `practice list leaks ${secret}`);
+  for (const secret of ['answer', 'needed', 'model', 'mustMention', 'why', '"right"', String(MENCHIES.lng)]) assert.ok(!json.includes(secret), `practice list leaks ${secret}`);
+  assert.equal(pub[0].steps.length, 12); assert.equal(pub[0].steps[0].choices.length, 3);
   assert.deepEqual(pub[0].stops[0].start, ADDRESS_ONLY, 'map should open where the address alone puts it');
   assert.ok(pub[0].questions[0].say.includes('pull up your account') && pub[0].questions.some((q) => q.q === 'Read the address back'), 'operator lines missing');
   check('practice list hides the right pin, must-ask flags, model note and why');
@@ -69,16 +74,43 @@ try {
   const bad = (await ana(`/api/practice/${men.id}`, { pins: [ADDRESS_ONLY], asked: [], note: "🚪 Menchie's ☎️ Call Sheryl upon arrival" })).data;
   assert.equal(bad.passed, false);
   assert.ok(bad.stops[0].distance > 35 && bad.stops[0].distance < 50, `distance ${bad.stops[0].distance}`);
-  assert.equal(bad.missingQuestions.length, 9);
+  assert.equal(bad.missingQuestions.length, 12);
+  assert.ok(bad.stepMode && bad.missingQuestions[0].startsWith('Step 1: not reached'));
   assert.equal(bad.ordered.ok, false);
   assert.equal(bad.saved.ok, false);
   assert.ok(bad.note.problems.some((p) => p.includes('emoji')) && bad.note.problems.some((p) => p.includes('short')) && bad.note.missing.includes('blue'));
   check(`address-only pin is ${bad.stops[0].distance} m off; missed questions and the emoji note all caught`);
 
-  const good = (await ana(`/api/practice/${men.id}`, { pins: [MENCHIES, HOME], ordered: true, asked: [0, 1, 4, 8, 10, 13, 14, 15, 16], savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], note: GOOD_NOTE })).data;
+  const good = (await ana(`/api/practice/${men.id}`, { pins: [MENCHIES, HOME], ordered: true, steps: RIGHT, savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], note: GOOD_NOTE })).data;
   assert.equal(good.passed, true, JSON.stringify(good));
   assert.ok(good.modelNote && good.why);
   check('right business pin + right questions + clear note passes, then shows the model note and why');
+
+  // Steps in practice: the server says right or wrong for one pick, and never for a scenario they can't practise.
+  const st0 = men.data.steps[0];
+  const wrong0 = st0.choices.find((i) => !st0.right.includes(i));
+  assert.equal((await ana(`/api/practice/${men.id}/step`, { step: 0, pick: st0.right[0] })).data.right, true);
+  assert.equal((await ana(`/api/practice/${men.id}/step`, { step: 0, pick: wrong0 })).data.right, false);
+  assert.equal((await ana(`/api/practice/${men.id}/step`, { step: 99, pick: 0 })).data.right, false);
+  // A wrong pick then the right one (practice) is still a miss; a wrong pick with no retry (test) fails too.
+  const full = { pins: [MENCHIES, HOME], ordered: true, savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], note: GOOD_NOTE };
+  const retried = (await ana(`/api/practice/${men.id}`, { ...full, steps: [[wrong0, st0.right[0]], ...RIGHT.slice(1)] })).data;
+  assert.equal(retried.passed, false);
+  assert.deepEqual(retried.missingQuestions.length, 1); assert.ok(retried.missingQuestions[0].startsWith('Step 1: picked'), retried.missingQuestions[0]);
+  const onePick = (await ana(`/api/practice/${men.id}`, { ...full, steps: [[wrong0], ...RIGHT.slice(1)] })).data;
+  assert.equal(onePick.passed, false);
+  const short = (await ana(`/api/practice/${men.id}`, { ...full, steps: RIGHT.slice(0, 11) })).data;
+  assert.ok(!short.passed && short.missingQuestions[0].startsWith('Step 12: not reached'));
+  check('steps: right/wrong check per pick; a retried step is still a miss; a wrong pick or a step never reached fails');
+
+  // Saving drops lines with no text; steps must follow the lines to their new places.
+  const moved = (await admin('/api/admin/scenarios', { title: 'Steps move', category: 'Other', practice: false, data: { caller: 'x',
+    stops: [{ kind: 'pickup', label: 'Q', start: { lat: 40.2, lng: -75.2 }, answer: { lat: 40.2001, lng: -75.2 } }],
+    questions: [{ q: 'A', a: 'a' }, { q: '', a: '' }, { q: 'B', a: 'b' }, { q: 'C', a: 'c' }],
+    steps: [{ choices: [0, 2, 3], right: [2, 3] }, { choices: [0, 1], right: [1] }], note: {} } })).data.id;
+  const mv = (await admin('/api/admin/scenarios')).data.find((x) => x.id === moved).data;
+  assert.deepEqual(mv.steps, [{ choices: [0, 1, 2], right: [1, 2] }], JSON.stringify(mv.steps));
+  check('steps follow their lines when blank lines are dropped; a step whose right line is gone is dropped; two right answers kept');
 
   // Two-stop scenario with entrances, made in the admin builder.
   assert.equal((await admin('/api/admin/scenarios', { title: 'Broken', category: 'Hospital', data: { stops: [{ kind: 'pickup', label: 'X' }] } })).status, 400);
@@ -112,7 +144,7 @@ try {
   const st = (await ana(`/api/tests/${t}/start`, {})).data;
   assert.equal(st.scenarios.length, 2);
   assert.ok(!JSON.stringify(st).includes('"answer":') && !JSON.stringify(st).includes('needed') && !JSON.stringify(st).includes(String(MENCHIES.lng)), 'test start leaks answers');
-  const saved = (await ana(`/api/tests/${t}/answer`, { scenarioId: men.id, pins: [MENCHIES, HOME], ordered: true, asked: [0, 1, 4, 8, 10, 13, 14, 15, 16], savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], note: GOOD_NOTE })).data;
+  const saved = (await ana(`/api/tests/${t}/answer`, { scenarioId: men.id, pins: [MENCHIES, HOME], ordered: true, steps: RIGHT, savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], note: GOOD_NOTE })).data;
   assert.deepEqual(saved, { saved: true }, 'answer must not reveal the result during a test');
   // Hospital: right pickup door but the ER entrance picked from the list, no question asked, good drop-off.
   await ana(`/api/tests/${t}/answer`, { scenarioId: hosp, pins: [{ lat: 39.8008, lng: -89.65 }, { lat: 39.81, lng: -89.66 }], entrances: [0, null], asked: [],
@@ -155,7 +187,7 @@ try {
   // Saved location #3 was stored with the wrong pin: it must be fixed (saved over), not left alone or deleted.
   assert.ok(!JSON.stringify(pub).includes('savedFix'), 'trainees must not see which saved slot is wrong');
   assert.ok(pub[0].account.saved[0].label.includes('Petrovitsky'), 'saved #3 should be on the account');
-  const base = { pins: [MENCHIES, HOME], ordered: true, asked: [0, 1, 4, 8, 10, 13, 14, 15, 16], note: GOOD_NOTE };
+  const base = { pins: [MENCHIES, HOME], ordered: true, steps: RIGHT, note: GOOD_NOTE };
   const leftIt = (await ana(`/api/practice/${men.id}`, base)).data;
   assert.equal(leftIt.passed, false); assert.ok(leftIt.saved.did.includes('Left it'));
   const deleted = (await ana(`/api/practice/${men.id}`, { ...base, savedChanges: [{ slot: 3, action: 'delete' }] })).data;
@@ -165,7 +197,7 @@ try {
   check('saved location #3: left wrong, deleted, or re-saved with the wrong pin all fail; trap slot is hidden');
 
   // The clothing box counts toward the driver note: clothing there, note without it, still passes.
-  const split = (await ana(`/api/practice/${men.id}`, { pins: [MENCHIES, HOME], ordered: true, asked: [0, 1, 4, 8, 10, 13, 14, 15, 16], savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], wearing: 'Blue top, black jeans',
+  const split = (await ana(`/api/practice/${men.id}`, { pins: [MENCHIES, HOME], ordered: true, steps: RIGHT, savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], wearing: 'Blue top, black jeans',
     note: "Customer is waiting inside Menchie's Frozen Yogurt, please call her if you cannot find her right away." })).data;
   assert.equal(split.passed, true, JSON.stringify(split.note));
   check('clothing in the What Are You Wearing Today? box counts toward the driver note');
@@ -180,6 +212,7 @@ try {
   assert.equal((await cara(`/api/tests/${set}/join`, {})).status, 404, 'draft link should not work');
   await admin(`/api/admin/tests/${set}/status`, { status: 'open' });
   assert.equal((await cara(`/api/practice/${hidden}`, { pins: [] })).status, 404, 'set-only scenario open before joining');
+  assert.equal((await cara(`/api/practice/${hidden}/step`, { step: 0, pick: 0 })).status, 404, 'step check open before joining');
   const j = (await cara(`/api/tests/${set}/join`, {})).data;
   assert.equal(j.mode, 'practice'); assert.equal(j.user.className, 'December 2026');
   assert.equal((await ana(`/api/tests/${set}/join`, {})).status, 409, 'someone in another class must be refused');
@@ -252,7 +285,7 @@ try {
   assert.equal((await admin(`/api/admin/classes/${jan}/delete`, {})).status, 409, 'class with a trainee deleted');
   check('delete a test (gone from list and link); a class with no trainees deletes with its practice/tests; with trainees it is refused');
 
-  assert.ok((await (await fetch(BASE + '/')).text()).includes('GoGo Pin Academy'));
+  assert.ok((await (await fetch(BASE + '/')).text()).includes('GoGo Academy'));
   check('page loads');
   console.log(`\nAll ${passed} checks passed.`);
 } catch (e) {

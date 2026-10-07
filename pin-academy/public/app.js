@@ -1,4 +1,4 @@
-// GoGo Pin Academy front end. Plain JS. All user text goes in with textContent, never innerHTML.
+// GoGo Academy front end. Plain JS. All user text goes in with textContent, never innerHTML.
 const $view = document.getElementById('view');
 const $tabs = document.getElementById('tabs');
 const $who = document.getElementById('who');
@@ -232,8 +232,8 @@ async function boot() {
 function drawLogin(me) {
   drawShell();
   const box = h('div', { class: 'card login' },
-    h('img', { src: '/pin.svg', width: 56, height: 56, alt: '' }),
-    h('h1', {}, 'GoGo Pin Academy'),
+    h('img', { src: '/brand/pin-heart.png', height: 64, alt: '' }),
+    h('h1', {}, 'GoGo Academy'),
     h('p', { class: 'lead' }, 'Practise real calls on a copy of Ride Ordering: find the right place, put the pin on the right spot, and write a note the driver can use.'),
     h('div', { class: 'chips' }, h('span', {}, 'Street View'), h('span', {}, 'Satellite'), h('span', {}, 'Pin tests'), h('span', {}, 'Your progress')),
     me.slackReady
@@ -330,7 +330,7 @@ const SIDEBAR = [['Dashboard Overview'], ['Live Calls'], ['Rides', ['Ride Orderi
   ['Ride Safety & Support'], ['Client Checks'], ['Payments & Credits']];
 const notInPractice = (what) => () => toast(`${what} is not part of this practice.`);
 
-function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit } = {}) {
+function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit, checkStep = null } = {}) {
   const t0 = Date.now();
   const asked = new Set();
   const first = (ME?.name || '').split(' ')[0] || 'your name';
@@ -346,12 +346,51 @@ function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit 
     h('div', { class: 'line you' }, h('b', {}, 'You: '), `Thank you for calling GoGo, my name is ${first}. How may I help you?`),
     h('div', { class: 'line caller' }, h('b', {}, 'Caller: '), s.caller),
     h('div', { class: 'line you' }, h('b', {}, 'You: '), "Perfect, I'll be more than happy to help. Give me just a moment while I pull up your account."));
+  const sayLine = (q) => {
+    transcript.append(h('div', { class: 'line you' }, h('b', {}, 'You: '), q.say || q.q), h('div', { class: 'line caller' }, h('b', {}, 'Caller: '), q.a));
+    transcript.scrollTop = transcript.scrollHeight;
+  };
   const qButtons = s.questions.map((q, i) => h('button', { class: 'qbtn', onclick: () => {
     if (asked.has(i)) return;
     asked.add(i); qButtons[i].classList.add('on');
-    transcript.append(h('div', { class: 'line you' }, h('b', {}, 'You: '), q.say || q.q), h('div', { class: 'line caller' }, h('b', {}, 'Caller: '), q.a));
-    transcript.scrollTop = transcript.scrollHeight;
+    sayLine(q);
   } }, q.q));
+
+  // The call in steps: a few lines at a time. In practice a wrong pick says "Not quite" and they pick again (still a
+  // miss on the result). In a test there is no checkStep: whatever they pick is said, and the call moves on.
+  const steps = s.steps || [];
+  const picks = steps.map(() => []);
+  const said = new Set();
+  let at = 0, busy = false, hint = '';
+  const stepHost = h('div');
+  function drawStep() {
+    if (at >= steps.length) {
+      return stepHost.replaceChildren(h('div', { class: 'ro-call-label' }, `That's the end of the call. Check the pins and the driver note, then click "${submitLabel}".`));
+    }
+    const tried = picks[at];
+    // A line already said earlier in the call (a test's wrong pick) stays greyed out; if nothing new is left, move on.
+    if (steps[at].choices.every((i) => said.has(i) || tried.includes(i))) { at++; return drawStep(); }
+    stepHost.replaceChildren(h('div', { class: 'ro-call-label' }, `Step ${at + 1} of ${steps.length}: what do you say next?`),
+      h('div', { class: 'qbtns' }, steps[at].choices.map((i) => h('button', {
+        class: `qbtn ${tried.includes(i) ? 'wrong' : said.has(i) ? 'said' : ''}`, type: 'button', disabled: tried.includes(i) || said.has(i),
+        title: said.has(i) ? 'Already said' : '', onclick: () => pickLine(i) }, s.questions[i].q))),
+      ...(hint ? [h('div', { class: 'step-hint' }, hint)] : []));
+  }
+  const pickLine = safe(async (i) => {
+    if (busy) return;
+    busy = true;
+    try {
+      const right = checkStep ? await checkStep(at, i) : true;
+      picks[at].push(i);
+      if (!right) { hint = 'Not quite, that is not what comes next. Try again. (This counts as a miss.)'; return drawStep(); }
+      hint = '';
+      sayLine(s.questions[i]);
+      said.add(i);
+      at++;
+      drawStep();
+    } finally { busy = false; }
+  });
+  if (steps.length) drawStep();
   const result = h('div');
 
   // the address blocks
@@ -537,7 +576,7 @@ function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit 
     }, 4000);
   }
   const getSubmission = () => ({
-    pins: s.stops.map((x) => blocks[x.kind].pin), entrances: s.stops.map((x) => blocks[x.kind].entrance), asked: [...asked],
+    pins: s.stops.map((x) => blocks[x.kind].pin), entrances: s.stops.map((x) => blocks[x.kind].entrance), asked: [...asked], steps: picks,
     note: note.value, wearing: wearing.value, announce: announce.value, savedChanges, ordered,
     specific: s.stops.map((x) => blocks[x.kind].specific.value), locationName: s.stops.map((x) => blocks[x.kind].locName.value),
     seconds: Math.round((Date.now() - t0) / 1000),
@@ -576,7 +615,8 @@ function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit 
           h('div', { class: 'ro-tabs' }, h('span', { class: 'on' }, 'Order a Ride Now'), h('span', {}, 'Schedule a Ride in the Future')), form),
         h('aside', { class: 'ro-right' },
           h('div', { class: 'ro-call' }, h('div', { class: 'ro-call-title' }, '📞 The call', h('span', { class: 'tag' }, s.category)), transcript,
-            s.questions.length ? [h('div', { class: 'ro-call-label' }, 'What do you say next? Pick in the order you would on the call'), h('div', { class: 'qbtns' }, qButtons)] : null,
+            steps.length ? stepHost
+              : s.questions.length ? [h('div', { class: 'ro-call-label' }, 'What do you say next? Pick in the order you would on the call'), h('div', { class: 'qbtns' }, qButtons)] : null,
             h('div', { class: 'ro-call-end' }, submitBtn)),
           result))));
   return {
@@ -598,8 +638,11 @@ function resultCard(r) {
       r.stops.map((s) => h('tr', {}, h('td', {}, ok(s.passed)), h('td', {}, h('b', {}, s.kind === 'dropoff' ? 'Drop-off pin' : 'Pickup pin')),
         h('td', {}, s.distance == null ? 'No pin placed' : `${m(s.distance)} from the right spot`,
           s.entrance && s.entrance.correct ? h('div', { class: 'small muted' }, `Right entrance: ${s.entrance.correct}${s.entrance.chose ? ` · you picked: ${s.entrance.chose}` : ''}`) : null))),
-      h('tr', {}, h('td', {}, ok(!r.missingQuestions.length)), h('td', {}, h('b', {}, 'Questions')),
-        h('td', {}, r.missingQuestions.length ? `You didn't: ${r.missingQuestions.join(' · ')}` : 'You asked what you needed to.')),
+      r.stepMode
+        ? h('tr', {}, h('td', {}, ok(!r.missingQuestions.length)), h('td', {}, h('b', {}, 'The call')),
+          h('td', {}, r.missingQuestions.length ? r.missingQuestions.map((x) => h('div', {}, x)) : 'Every step in the right order.'))
+        : h('tr', {}, h('td', {}, ok(!r.missingQuestions.length)), h('td', {}, h('b', {}, 'Questions')),
+          h('td', {}, r.missingQuestions.length ? `You didn't: ${r.missingQuestions.join(' · ')}` : 'You asked what you needed to.')),
       h('tr', {}, h('td', {}, ok(r.note.ok)), h('td', {}, h('b', {}, 'Driver note')),
         h('td', {}, r.note.ok ? 'Clear and useful for the driver.' : r.note.problems.join(' '))),
       r.ordered ? h('tr', {}, h('td', {}, ok(r.ordered.ok)), h('td', {}, h('b', {}, 'Ride ordered')),
@@ -661,7 +704,7 @@ async function practiceSet(id) {
 function practiceOne(items, i, backTo = 'practice') {
   const s = items[i];
   const next = h('div', { class: 'row' });
-  const form = scenarioForm(s, { onSubmit: async (sub) => {
+  const form = scenarioForm(s, { checkStep: async (step, pick) => (await api(`/api/practice/${s.id}/step`, { step, pick })).right, onSubmit: async (sub) => {
     const r = await api(`/api/practice/${s.id}`, sub);
     form.showResult(r);
     next.replaceChildren(h('button', { class: 'btn ghost', onclick: () => practiceOne(items, i, backTo) }, 'Try again'),
@@ -777,12 +820,13 @@ function editScenario(existing) {
     questions: SUGGESTED_QUESTIONS.map((q) => ({ q, say: '', a: '', needed: false })), note: { mustMention: [], model: '' },
   };
   d.account = d.account || { home: null, saved: [] };
+  d.steps = d.steps || [];
   const title = h('input', { type: 'text', value: existing?.title || '', placeholder: "e.g. Menchie's on Petrovitsky Road" });
   const cat = h('select', {}, CATEGORIES.map((c) => h('option', { value: c, selected: c === (existing?.category || 'Restaurant or shop') }, c)));
   const practice = h('input', { type: 'checkbox', checked: existing ? existing.practice : true });
   const caller = h('textarea', { value: d.caller, placeholder: 'What the caller says first, e.g. "Hi, I need a ride."' });
   const why = h('textarea', { value: d.why, placeholder: 'Shown after they answer: what goes wrong if you only use the address, and how to get it right.' });
-  const stopsHost = h('div'), qHost = h('div'), acctHost = h('div');
+  const stopsHost = h('div'), qHost = h('div'), acctHost = h('div'), stepsHost = h('div');
   const must = h('input', { type: 'text', value: d.note.mustMention.join(', '), placeholder: 'e.g. Menchie, blue, jeans' });
   const model = h('textarea', { value: d.note.model, placeholder: "e.g. Customer is waiting at Menchie's Frozen Yogurt. Please call her if you can't find her. She is wearing a blue top and black jeans." });
 
@@ -855,13 +899,40 @@ function editScenario(existing) {
   }
   function drawQuestions() {
     qHost.replaceChildren(...d.questions.map((q, i) => {
-      const qq = h('input', { type: 'text', value: q.q, placeholder: 'Button, e.g. Read the address back', oninput: () => (q.q = qq.value) });
+      const qq = h('input', { type: 'text', value: q.q, placeholder: 'Button, e.g. Read the address back', oninput: () => { q.q = qq.value; drawSteps(); } });
       const say = h('input', { type: 'text', value: q.say || '', placeholder: 'What you say (optional), e.g. Okay, that is 14060...', oninput: () => (q.say = say.value) });
       const aa = h('input', { type: 'text', value: q.a, placeholder: 'What the caller answers', oninput: () => (q.a = aa.value) });
       const need = h('input', { type: 'checkbox', checked: q.needed, onchange: () => (q.needed = need.checked) });
       return h('div', { class: 'qrow' }, qq, say, aa, h('label', { class: 'check', style: 'margin:0' }, need, 'Must ask'),
-        h('button', { class: 'btn ghost small', onclick: () => { d.questions.splice(i, 1); drawQuestions(); } }, '✕'));
+        h('button', { class: 'btn ghost small', onclick: () => { d.questions.splice(i, 1); d.steps = shiftSteps(d.steps, (x) => (x === i ? -1 : x > i ? x - 1 : x)); drawQuestions(); } }, '✕'));
     }), h('button', { class: 'btn ghost small', onclick: () => { d.questions.push({ q: '', say: '', a: '', needed: false }); drawQuestions(); } }, '+ Add a line'));
+    drawSteps();
+  }
+  // Steps point at lines by their place in the list; when lines move, point them at the new places (-1 = gone).
+  const shiftSteps = (steps, to) => steps.map((st) => ({ choices: st.choices.map(to).filter((x) => x >= 0), right: st.right.map(to).filter((x) => x >= 0) }));
+  // The call in steps. Each line is a chip: click once = shown as a choice, twice = a right answer (green), three times = off.
+  // Lines that were right at an earlier step don't come back later.
+  function drawSteps() {
+    stepsHost.replaceChildren(...d.steps.map((st, n) => {
+      const earlier = new Set(d.steps.slice(0, n).flatMap((x) => x.right));
+      const chips = d.questions.map((q, i) => [q, i]).filter(([q, i]) => q.q && !earlier.has(i)).map(([q, i]) => {
+        const state = st.right.includes(i) ? 'right' : st.choices.includes(i) ? 'shown' : '';
+        return h('button', { class: `stepchip ${state}`, type: 'button', title: 'Click: choice → right answer → off', onclick: () => {
+          if (state === '') st.choices.push(i);
+          else if (state === 'shown') st.right.push(i);
+          else { st.right = st.right.filter((x) => x !== i); st.choices = st.choices.filter((x) => x !== i); }
+          drawSteps();
+        } }, state === 'right' ? `✓ ${q.q}` : q.q);
+      });
+      const move = (to) => { const [x] = d.steps.splice(n, 1); d.steps.splice(to, 0, x); drawSteps(); };
+      return h('div', { class: 'step-edit' },
+        h('div', { class: 'row' }, h('b', {}, `Step ${n + 1}`),
+          h('span', { class: `small grow ${st.right.length ? 'muted' : 'warn'}` }, `${st.choices.length} shown · ${st.right.length} right${st.right.length ? '' : ' (pick at least one)'}`),
+          n > 0 ? h('button', { class: 'btn ghost small', title: 'Move up', onclick: () => move(n - 1) }, '↑') : null,
+          n < d.steps.length - 1 ? h('button', { class: 'btn ghost small', title: 'Move down', onclick: () => move(n + 1) }, '↓') : null,
+          h('button', { class: 'btn ghost small', onclick: () => { d.steps.splice(n, 1); drawSteps(); } }, '✕')),
+        h('div', { class: 'qbtns' }, chips));
+    }), h('button', { class: 'btn ghost small', onclick: () => { d.steps.push({ choices: [], right: [] }); drawSteps(); } }, '+ Add a step'));
   }
 
   mount(h('button', { class: 'btn ghost small', onclick: () => go('a-scenarios') }, '← Scenarios'),
@@ -871,14 +942,24 @@ function editScenario(existing) {
       h('label', { class: 'check' }, practice, 'Show in general practice (untick to use it only in practice sets and tests)')),
     stopsHost,
     h('div', { class: 'card' }, h('h2', {}, 'The customer’s account'), acctHost),
-    h('div', { class: 'card' }, h('h2', {}, 'What the operator can say'), h('p', { class: 'small muted' }, 'Each line: a short button, the full line they say, and the caller’s answer. Include read-backs and a weak option or two. Tick "Must ask" for the ones needed to get it right. Lines with no answer are dropped.'), qHost),
+    h('div', { class: 'card' }, h('h2', {}, 'What the operator can say'), h('p', { class: 'small muted' }, 'Each line: a short button, the full line they say, and the caller’s answer. Include read-backs and a weak option or two. Tick "Must ask" for the ones needed to get it right (only used when the call has no steps). Lines with no answer are dropped.'), qHost),
+    h('div', { class: 'card' }, h('h2', {}, 'The call, step by step'),
+      h('p', { class: 'small muted' }, 'Trainees see one step at a time. For each step, click a line once to show it as a choice, twice to make it a right answer (green ✓), a third time to take it off. Three choices works best: the right one and two that sound right but are not next. A step can have two right answers. Lines that were right at an earlier step do not show again. Practice: a wrong pick says "Not quite" and they try again (it still counts as a miss). Test: the call goes on and it is graded at the end. With no steps, trainees see every line at once, like before.'),
+      stepsHost),
     h('div', { class: 'card' }, h('h2', {}, 'Driver note'),
       h('label', {}, 'The note must mention (comma separated). The What Are You Wearing Today? box counts too.'), must,
       h('label', {}, 'A good note (shown after they answer)'), model,
       h('label', {}, 'Why (shown after they answer)'), why),
     h('button', { class: 'btn', onclick: safe(async () => {
-      const data = { ...d, caller: caller.value, why: why.value, questions: d.questions.filter((q) => q.q && q.a),
+      const empty = d.steps.findIndex((st) => !st.right.length);
+      if (empty >= 0) return toast(`Step ${empty + 1} has no right answer. Click a line twice to mark it right, or remove the step.`, true);
+      // Lines with no answer are dropped, so point the steps at where the kept lines end up.
+      const kept = d.questions.map((q, i) => [q, i]).filter(([q]) => q.q && q.a);
+      const newAt = new Map(kept.map(([, i], n) => [i, n]));
+      const data = { ...d, caller: caller.value, why: why.value, questions: kept.map(([q]) => q),
+        steps: shiftSteps(d.steps, (x) => (newAt.has(x) ? newAt.get(x) : -1)),
         note: { mustMention: must.value.split(',').map((x) => x.trim()).filter(Boolean), model: model.value } };
+      if (data.steps.some((st) => !st.right.length)) return toast('A step’s right answer is a line with no caller answer. Fill in the answer first.', true);
       if (data.stops.some((s) => !s.answer)) return toast('Search each stop and place its pin first.', true);
       await api('/api/admin/scenarios', { id: existing?.id, version: existing?.version, title: title.value, category: cat.value, practice: practice.checked, data });
       toast('Saved'); go('a-scenarios');
@@ -982,7 +1063,7 @@ VIEWS['a-results'] = async () => {
     const r = await api(`/api/admin/results/${id}`);
     const done = r.rows.filter((x) => x.state === 'done');
     const what = (s) => [...s.stops.filter((x) => !x.passed).map((x) => `${x.kind === 'dropoff' ? 'drop-off' : 'pickup'} pin ${x.distance == null ? 'missing' : m(x.distance) + ' off'}`),
-      ...(s.missingQuestions.length ? [`didn't: ${s.missingQuestions.join(' / ')}`] : []), ...(s.noteProblems.length ? ['note: ' + s.noteProblems.join(' ')] : [])];
+      ...(s.missingQuestions.length ? [/^Step \d/.test(s.missingQuestions[0]) ? s.missingQuestions.join(' / ') : `didn't: ${s.missingQuestions.join(' / ')}`] : []), ...(s.noteProblems.length ? ['note: ' + s.noteProblems.join(' ')] : [])];
     host.replaceChildren(
       h('div', { class: 'grid2' },
         h('div', { class: 'card stat s1' }, h('div', { class: 'small' }, 'Handed in'), h('div', { class: 'big' }, `${done.length} / ${r.rows.length}`)),
