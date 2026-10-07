@@ -60,6 +60,7 @@ function cleanSubmission(b) {
     asked: (Array.isArray(b.asked) ? b.asked : []).slice(0, 10).map(Number).filter(Number.isInteger),
     note: str(b.note, 800),
     specific: (Array.isArray(b.specific) ? b.specific : []).slice(0, 2).map((s) => str(s, 120)),
+    locationName: (Array.isArray(b.locationName) ? b.locationName : []).slice(0, 2).map((s) => str(s, 120)),
   };
 }
 
@@ -274,12 +275,14 @@ route('POST', '/api/admin/scenarios/(\\d+)/archive', (req, res, { m }) => {
   send(res, 200, { ok: true });
 });
 
-// Adds the worked examples (from real training cases, no customer details) if they are not there yet.
+// Adds the worked examples (from real training cases, no customer details), or refreshes them if already there.
 route('POST', '/api/admin/scenarios/examples', (req, res) => {
   const u = needAdmin(req);
   let added = 0;
   for (const ex of EXAMPLE_SCENARIOS) {
-    if (one('SELECT id FROM scenarios WHERE title = ?', ex.title)) continue;
+    const have = one('SELECT id FROM scenarios WHERE title = ?', ex.title);
+    // An example already here is refreshed to the latest version (so improvements reach the live site).
+    if (have) { run('UPDATE scenarios SET category = ?, data = ? WHERE id = ?', ex.category, JSON.stringify(cleanScenario(ex.data)), have.id); continue; }
     run('INSERT INTO scenarios (title, category, data, practice, created_by) VALUES (?, ?, ?, 1, ?)', ex.title, ex.category, JSON.stringify(cleanScenario(ex.data)), u.slack_id);
     added++;
   }

@@ -67,11 +67,11 @@ try {
   const bad = (await ana(`/api/practice/${men.id}`, { pins: [ADDRESS_ONLY], asked: [], note: "🚪 Menchie's ☎️ Call Sheryl upon arrival" })).data;
   assert.equal(bad.passed, false);
   assert.ok(bad.stops[0].distance > 35 && bad.stops[0].distance < 50, `distance ${bad.stops[0].distance}`);
-  assert.equal(bad.missingQuestions.length, 2);
+  assert.equal(bad.missingQuestions.length, 3);
   assert.ok(bad.note.problems.some((p) => p.includes('emoji')) && bad.note.problems.some((p) => p.includes('short')) && bad.note.missing.includes('blue'));
   check(`address-only pin is ${bad.stops[0].distance} m off; missed questions and the emoji note all caught`);
 
-  const good = (await ana(`/api/practice/${men.id}`, { pins: [MENCHIES], asked: [0, 1], note: GOOD_NOTE })).data;
+  const good = (await ana(`/api/practice/${men.id}`, { pins: [MENCHIES], asked: [0, 2, 5], note: GOOD_NOTE })).data;
   assert.equal(good.passed, true, JSON.stringify(good));
   assert.ok(good.modelNote && good.why);
   check('right business pin + right questions + clear note passes, then shows the model note and why');
@@ -101,7 +101,7 @@ try {
   const st = (await ana(`/api/tests/${t}/start`, {})).data;
   assert.equal(st.scenarios.length, 2);
   assert.ok(!JSON.stringify(st).includes('"answer":') && !JSON.stringify(st).includes('needed') && !JSON.stringify(st).includes(String(MENCHIES.lng)), 'test start leaks answers');
-  const saved = (await ana(`/api/tests/${t}/answer`, { scenarioId: men.id, pins: [MENCHIES], asked: [0, 1], note: GOOD_NOTE })).data;
+  const saved = (await ana(`/api/tests/${t}/answer`, { scenarioId: men.id, pins: [MENCHIES], asked: [0, 2, 5], note: GOOD_NOTE })).data;
   assert.deepEqual(saved, { saved: true }, 'answer must not reveal the result during a test');
   // Hospital: right pickup door but the ER entrance picked from the list, no question asked, good drop-off.
   await ana(`/api/tests/${t}/answer`, { scenarioId: hosp, pins: [{ lat: 39.8008, lng: -89.65 }, { lat: 39.81, lng: -89.66 }], entrances: [0, null], asked: [],

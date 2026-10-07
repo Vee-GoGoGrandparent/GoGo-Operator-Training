@@ -8,7 +8,8 @@ const CATEGORIES = ['Hospital', 'Medical office', 'Airport', 'Restaurant or shop
 // One colour per type of place, so the practice page reads at a glance.
 const catColour = (cat) => `--c: var(--c${(Math.max(0, CATEGORIES.indexOf(cat)) % 6) + 1})`;
 const STOP_NAME = { pickup: 'Start Address (pickup)', dropoff: 'End Address (drop-off)' };
-const PIN_COLOUR = { pickup: ['#2e9b4f', '#1d6b35'], dropoff: ['#d6336c', '#9c1f4c'] };
+// Pickup = Google-style pink so it stands out on satellite (Vee); drop-off = purple.
+const PIN_COLOUR = { pickup: ['#ea2f6c', '#a3164a'], dropoff: ['#6b5bd2', '#463a9e'] };
 const SUGGESTED_QUESTIONS = [
   'Which business or building are you at?', 'Which entrance or side of the building will you be at?',
   'What are you wearing, so the driver can spot you?', 'Have you had any trouble being picked up there before?',
@@ -63,19 +64,52 @@ function loadMaps() {
 const ll = (p) => (p ? { lat: typeof p.lat === 'function' ? p.lat() : p.lat, lng: typeof p.lng === 'function' ? p.lng() : p.lng } : null);
 const noMap = () => h('div', { class: 'pm nomap' }, 'The map is not connected yet. It switches on once the Google Maps key is added in Railway.');
 
-// The dashboard's address search box (Google's own suggestions). Calls onPick({ lat, lng, name, address }).
+// Turns a plain text box into the dashboard's address box: Google's suggestions drop down underneath as you type
+// (an address, or a business name like "Men..."). Calls onPick({ lat, lng, name, address, street, city, state, zip, placeId }).
+async function addressSearch(input, onPick) {
+  const wrap = h('div', { class: 'ac-wrap' });
+  input.replaceWith(wrap); wrap.append(input);
+  if (!(await loadMaps())) { input.placeholder = 'Search is off until the map is connected'; return; }
+  const { AutocompleteSuggestion, AutocompleteSessionToken } = await google.maps.importLibrary('places');
+  let token = new AutocompleteSessionToken(), timer = null, seq = 0;
+  const list = h('div', { class: 'ac-list' });
+  wrap.append(list);
+  const close = () => list.replaceChildren();
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (q.length < 3) return close();
+    timer = setTimeout(async () => {
+      const mine = ++seq;
+      try {
+        const { suggestions } = await AutocompleteSuggestion.fetchAutocompleteSuggestions({ input: q, sessionToken: token, includedRegionCodes: ['us'] });
+        if (mine !== seq) return;
+        list.replaceChildren(...suggestions.filter((s) => s.placePrediction).map((s) => {
+          const p = s.placePrediction;
+          return h('div', { class: 'ac-item', onmousedown: (e) => { e.preventDefault(); pick(p); } },
+            h('span', { class: 'ac-pin' }), h('b', {}, p.mainText?.text || p.text.text), ' ', h('span', { class: 'muted' }, p.secondaryText?.text || ''));
+        }), suggestions.length ? h('div', { class: 'ac-foot' }, 'powered by Google') : null);
+      } catch { close(); }
+    }, 220);
+  });
+  input.addEventListener('blur', () => setTimeout(close, 150));
+  async function pick(prediction) {
+    close();
+    const place = prediction.toPlace();
+    await place.fetchFields({ fields: ['displayName', 'formattedAddress', 'location', 'addressComponents', 'id'] });
+    token = new AutocompleteSessionToken();
+    const part = (type, short) => { const c = (place.addressComponents || []).find((x) => x.types.includes(type)); return c ? (short ? c.shortText : c.longText) : ''; };
+    const street = [part('street_number'), part('route')].filter(Boolean).join(' ');
+    input.value = street || place.displayName || '';
+    onPick({ ...ll(place.location), name: place.displayName || '', address: place.formattedAddress || '', street,
+      city: part('locality') || part('sublocality') || part('postal_town'), state: part('administrative_area_level_1', true), zip: part('postal_code'), placeId: place.id || '' });
+  }
+}
+// Admin pages use the same search, in a fresh box.
 async function placeSearch(host, onPick) {
-  if (!(await loadMaps())) return;
-  const { PlaceAutocompleteElement } = await google.maps.importLibrary('places');
-  const ac = new PlaceAutocompleteElement({ includedRegionCodes: ['us'] });
-  ac.style.width = '100%';
-  host.append(ac);
-  const picked = async (place) => {
-    await place.fetchFields({ fields: ['displayName', 'formattedAddress', 'location'] });
-    onPick({ ...ll(place.location), name: place.displayName || '', address: place.formattedAddress || '' });
-  };
-  ac.addEventListener('gmp-select', (e) => picked(e.placePrediction.toPlace()));
-  ac.addEventListener('gmp-placeselect', (e) => picked(e.place)); // older event name, same thing
+  const input = h('input', { type: 'text', placeholder: 'Type an address or a business name' });
+  host.append(input);
+  addressSearch(input, onPick);
 }
 
 // Laid out like the GoGo dashboard's Location Map: Street View on top, satellite map below, legend underneath.
@@ -98,10 +132,15 @@ async function pinMap(host, { start, kind = 'pickup', draggable = true, onMove, 
       h('span', { class: 'grow' }), h('div', { class: 'seg' }, segMap, segSat), h('label', { class: 'check', style: 'margin:0' }, labels, 'Labels'))));
 
   const pano = new StreetViewPanorama(panoDiv, { addressControl: false, fullscreenControl: true, motionTracking: false, visible: true });
-  const map = new Map(mapDiv, { center: start, zoom: 19, mapId: CONFIG.mapId, mapTypeId: 'hybrid', streetView: pano,
-    gestureHandling: 'greedy', mapTypeControl: false, clickableIcons: false, tilt: 0 });
+  // The bottom map keeps its own little yellow man, like the dashboard: drop him on the map to walk around there.
+  // Wherever you walk at the bottom, the top view follows.
+  const map = new Map(mapDiv, { center: start, zoom: 19, mapId: CONFIG.mapId, mapTypeId: 'hybrid',
+    gestureHandling: 'greedy', mapTypeControl: false, clickableIcons: false, tilt: 0, streetViewControl: true });
+  const bottomSv = map.getStreetView();
+  bottomSv.addListener('position_changed', () => { if (bottomSv.getVisible() && bottomSv.getPosition()) pano.setPosition(bottomSv.getPosition()); });
+  bottomSv.addListener('pov_changed', () => { if (bottomSv.getVisible()) pano.setPov(bottomSv.getPov()); });
   const original = new AdvancedMarkerElement({ map, position: start, content: new PinElement({ background: '#9a9aa8', borderColor: '#6e6e7c', glyphColor: '#fff', scale: 0.85 }).element, title: 'Original', zIndex: 1 });
-  const marker = new AdvancedMarkerElement({ map, position: start, gmpDraggable: draggable, content: new PinElement({ background: col, borderColor: edge, glyphColor: '#fff' }).element, title: kind, zIndex: 3 });
+  const marker = new AdvancedMarkerElement({ map, position: start, gmpDraggable: draggable, content: new PinElement({ background: col, borderColor: edge, glyphColor: '#fff', scale: 1.35 }).element, title: kind, zIndex: 3 });
   const svService = new StreetViewService();
   let extras = [], entranceMarkers = [];
 
@@ -245,39 +284,72 @@ async function render(id) {
 function scenarioForm(s) {
   const t0 = Date.now();
   const asked = new Set();
-  const transcript = h('div', { class: 'transcript' }, h('div', { class: 'line caller' }, h('b', {}, 'Caller: '), s.caller));
+  const first = (ME?.name || '').split(' ')[0] || 'your name';
+  // Plays like a real call: the operator greets, the caller asks for a ride, the operator pulls up the account.
+  // Everything else (address, business, spelling, notes, what they are wearing) comes from the questions asked.
+  const transcript = h('div', { class: 'transcript' },
+    h('div', { class: 'line you' }, h('b', {}, 'You: '), `Thank you for calling GoGo, my name is ${first}. How may I help you?`),
+    h('div', { class: 'line caller' }, h('b', {}, 'Caller: '), s.caller),
+    h('div', { class: 'line you' }, h('b', {}, 'You: '), 'Perfect, I\'ll be more than happy to help. Give me just a moment while I pull up your account.'));
   const qButtons = s.questions.map((q, i) => h('button', { class: 'qbtn', onclick: () => {
     if (asked.has(i)) return;
     asked.add(i); qButtons[i].classList.add('on');
     transcript.append(h('div', { class: 'line you' }, h('b', {}, 'You: '), q.q), h('div', { class: 'line caller' }, h('b', {}, 'Caller: '), q.a));
   } }, q.q));
 
+  const copyBtn = (get) => h('button', { class: 'copy', type: 'button', title: 'Copy', onclick: () => { navigator.clipboard?.writeText(get()); toast('Copied'); } }, '⧉');
+  const row = (label, ...field) => h('div', { class: 'df-row' }, h('label', {}, label), h('div', { class: 'df-field' }, ...field));
+
+  // Laid out like the dashboard's Start / End Address block, field for field.
   const stops = s.stops.map((stop) => {
-    const st = { pin: null, entrance: null, picked: '', pm: null };
-    const specific = h('input', { type: 'text', placeholder: 'e.g. front door facing the parking lot' });
+    const st = { pin: null, entrance: null, pm: null };
+    const [col] = PIN_COLOUR[stop.kind] || PIN_COLOUR.pickup;
+    const street = h('input', { type: 'text', placeholder: 'Enter an address or location name' });
+    const apt = h('input', { type: 'text', placeholder: 'Apt number', class: 'short' });
+    const city = h('input', { type: 'text' });
+    const state = h('input', { type: 'text', class: 'short' });
+    const zip = h('input', { type: 'text', class: 'short' });
+    const lat = h('input', { type: 'text', class: 'short', placeholder: 'Latitude' });
+    const lng = h('input', { type: 'text', class: 'short', placeholder: 'Longitude' });
+    const locName = h('input', { type: 'text' });
+    const placeId = h('span', { class: 'small muted' });
+    const specific = h('input', { type: 'text' });
+    const showLL = (p) => { if (p) { lat.value = p.lat.toFixed(7); lng.value = p.lng.toFixed(7); } };
+    // Typing coordinates moves the pin, like the dashboard.
+    const typedLL = () => { const p = { lat: Number(lat.value), lng: Number(lng.value) };
+      if (Number.isFinite(p.lat) && Number.isFinite(p.lng) && Math.abs(p.lat) <= 90 && Math.abs(p.lng) <= 180 && st.pm) st.pm.setPin(p); };
+    lat.addEventListener('change', typedLL); lng.addEventListener('change', typedLL);
     const venue = h('select', { onchange: () => {
       const i = venue.value === '' ? null : Number(venue.value);
       st.entrance = i;
       if (i != null) { const e = stop.entrances[i]; specific.value = e.name; st.pm && st.pm.setPin({ lat: e.lat, lng: e.lng }); }
     } }, h('option', { value: '' }, 'Original Address'), stop.entrances.map((e, i) => h('option', { value: i }, `${i + 1}. ${e.name}`)));
-    const picked = h('div', { class: 'small muted' }, 'Nothing searched yet.');
-    const searchHost = h('div', { class: 'search' });
     const mapHost = h('div');
-    const card = h('div', { class: `card stop ${stop.kind}` },
-      h('h2', {}, STOP_NAME[stop.kind] || stop.kind),
-      h('label', {}, 'Street Address1* (search the way you would on the dashboard)'), searchHost, picked,
-      stop.entrances.length ? h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Venue Entrance or Side'), venue), h('div', {}, h('label', {}, 'Specific Entrance or Side'), specific))
-        : h('div', {}, h('label', {}, 'Specific Entrance or Side'), specific),
+    const savedNone = h('select', { disabled: true, title: 'Saved locations are not used in this practice' }, h('option', {}, 'None Selected'));
+    const card = h('div', { class: `card stop dash ${stop.kind}` },
+      h('h2', { class: 'df-title' }, stop.kind === 'dropoff' ? 'End Address*' : 'Start Address*'),
+      h('div', { class: 'df-saved' }, h('span', { class: 'df-pin', style: `--pc:${col}` }),
+        h('div', {}, h('div', { class: 'row' }, h('span', { class: 'round' }, '⌂'), h('span', { class: 'round' }, 'L'), h('div', { class: 'grow' }, savedNone)),
+          ['3: None', '4: None', '5: None'].map((t) => h('div', { class: 'slot' }, t)))),
+      row('Street Address1*', street, copyBtn(() => street.value)),
+      row('Apt #', apt),
+      row('City*', city),
+      h('div', { class: 'df-row' }, h('label', {}, 'State*'), h('div', { class: 'df-field' }, state, h('label', { class: 'inline' }, 'Zip*'), zip)),
+      h('div', { class: 'df-row' }, h('label', {}, 'Lat*'), h('div', { class: 'df-field' }, lat, h('label', { class: 'inline' }, 'Lng*'), lng, copyBtn(() => `${lat.value}, ${lng.value}`))),
+      row('Location Name*', locName),
+      row('Google Place ID', placeId),
+      row('Venue Entrance or Side', venue),
+      row('Specific Entrance or Side', specific),
       h('p'), mapHost);
-    st.specific = specific;
-    placeSearch(searchHost, (p) => {
-      picked.textContent = `Picked: ${p.name}${p.address ? ' · ' + p.address : ''}`;
-      st.picked = p.name;
+    Object.assign(st, { specific, locName });
+    addressSearch(street, (p) => {
+      city.value = p.city; state.value = p.state; zip.value = p.zip; locName.value = p.name; placeId.textContent = p.placeId;
       if (st.pm) { st.pm.setOriginal(p); st.pm.setPin(p); }
+      showLL(p);
     });
-    pinMap(mapHost, { start: stop.start, kind: stop.kind, entrances: stop.entrances, onMove: (p) => (st.pin = p),
+    pinMap(mapHost, { start: stop.start, kind: stop.kind, entrances: stop.entrances, onMove: (p) => { st.pin = p; showLL(p); },
       onEntrance: (i) => { venue.value = String(i); st.entrance = i; specific.value = stop.entrances[i].name; } })
-      .then((pm) => { st.pm = pm; if (pm) st.pin = pm.getPin(); });
+      .then((pm) => { st.pm = pm; if (pm) { st.pin = pm.getPin(); showLL(st.pin); } });
     return { stop, st, card };
   });
 
@@ -294,7 +366,7 @@ function scenarioForm(s) {
     el,
     getSubmission: () => ({
       pins: stops.map((x) => x.st.pin), entrances: stops.map((x) => x.st.entrance), asked: [...asked],
-      note: note.value, specific: stops.map((x) => x.st.specific.value), seconds: Math.round((Date.now() - t0) / 1000),
+      note: note.value, specific: stops.map((x) => x.st.specific.value), locationName: stops.map((x) => x.st.locName.value), seconds: Math.round((Date.now() - t0) / 1000),
     }),
     showResult(r) {
       stops.forEach((x, i) => { const g = r.stops[i]; if (x.st.pm) { x.st.pm.lock(); x.st.pm.showAnswer(g.answer, x.st.pin); } });
@@ -440,7 +512,7 @@ VIEWS.progress = async () => {
 VIEWS['a-scenarios'] = async () => {
   const list = await api('/api/admin/scenarios');
   mount(h('div', { class: 'row' }, h('h1', { class: 'grow' }, 'Scenarios'),
-      h('button', { class: 'btn ghost', onclick: safe(async () => { const r = await api('/api/admin/scenarios/examples', {}); toast(r.added ? `Added ${r.added} example(s)` : 'Examples are already here'); go('a-scenarios'); }) }, 'Add the example scenarios'),
+      h('button', { class: 'btn ghost', onclick: safe(async () => { const r = await api('/api/admin/scenarios/examples', {}); toast(r.added ? `Added ${r.added} example(s)` : 'Examples refreshed to the latest version'); go('a-scenarios'); }) }, 'Add / refresh the examples'),
       h('button', { class: 'btn orange', onclick: () => editScenario() }, '+ New scenario')),
     h('p', { class: 'lead' }, 'A scenario is a short pretend call: what the caller says, the place(s), the right pin and entrance, the questions worth asking, and what the driver note must say. Use public places only, and made-up customer details.'),
     h('div', { class: 'card' }, !list.length ? h('p', { class: 'muted' }, 'No scenarios yet. Start with the examples, or make your own from real cases.') :
