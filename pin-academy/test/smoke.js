@@ -58,9 +58,11 @@ try {
   assert.ok(men, 'example missing');
   check('example scenario added once, not twice');
   // The Menchie's call comes in steps: the right line at each step.
-  assert.equal(men.data.steps.length, 12);
+  assert.equal(men.data.steps.length, 16);
   assert.equal(men.data.questions[men.data.steps[0].right[0]].q, "Confirm the customer's name");
   const RIGHT = men.data.steps.map((st) => [st.right[0]]);
+  const M_NOTE = men.data.note.options.findIndex((o) => o.right), M_EMOJI = men.data.note.options.findIndex((o) => /🚪/u.test(o.text));
+  assert.ok(M_NOTE >= 0 && M_EMOJI >= 0 && men.data.note.options.length === 3, 'Menchie note choices missing');
   // Pin skills replace "Type of place": the list is sent to the page; an old type or unknown value is stored as a skill.
   const skills = (await ana('/api/me')).data.pinSkills;
   assert.equal(skills.length, 9); assert.equal(skills[0].name, 'Place or business name'); assert.ok(skills[1].tip.includes('End Location'));
@@ -75,23 +77,28 @@ try {
   const pubM = pub.find((s) => s.title.startsWith("Menchie's"));
   const json = JSON.stringify(pub);
   for (const secret of ['answer', 'needed', 'model', 'mustMention', 'why', '"right"', String(MENCHIES.lng)]) assert.ok(!json.includes(secret), `practice list leaks ${secret}`);
-  assert.equal(pubM.steps.length, 12); assert.equal(pubM.steps[0].choices.length, 3);
+  assert.equal(pubM.steps.length, 16); assert.equal(pubM.steps[0].choices.length, 3);
   assert.deepEqual(pubM.stops[0].start, ADDRESS_ONLY, 'map should open where the address alone puts it');
   assert.ok(pubM.questions[0].say.includes('pull up your account') && pubM.questions.some((q) => q.q === 'Read the address back'), 'operator lines missing');
   check('practice list hides the right pin, must-ask flags, model note and why');
 
   // Address only, no questions, emoji fragment note: everything wrong.
-  const bad = (await ana(`/api/practice/${men.id}`, { pins: [ADDRESS_ONLY], asked: [], note: "🚪 Menchie's ☎️ Call Sheryl upon arrival" })).data;
+  const bad = (await ana(`/api/practice/${men.id}`, { pins: [ADDRESS_ONLY], asked: [], noteChoice: M_EMOJI })).data;
   assert.equal(bad.passed, false);
   assert.ok(bad.stops[0].distance > 35 && bad.stops[0].distance < 50, `distance ${bad.stops[0].distance}`);
-  assert.equal(bad.missingQuestions.length, 12);
+  assert.equal(bad.missingQuestions.length, 16);
   assert.ok(bad.stepMode && bad.missingQuestions[0].startsWith('Step 1: not reached'));
   assert.equal(bad.ordered.ok, false);
   assert.equal(bad.saved.ok, false);
-  assert.ok(bad.note.problems.some((p) => p.includes('emoji')) && bad.note.problems.some((p) => p.includes('short')) && bad.note.missing.includes('blue'));
+  assert.ok(!bad.note.ok && bad.note.problems[0].includes('leaves out'), 'picking the emoji note must fail');
+  // Typed notes (tests): emoji, too short and missing words are all caught; the clothing box counts toward the note.
+  const { checkNote } = await import('../src/grading.js');
+  const typed = checkNote("🚪 Menchie's ☎️ Call Sheryl upon arrival", ['Menchie', 'blue', 'jeans']);
+  assert.ok(typed.problems.some((p) => p.includes('emoji')) && typed.problems.some((p) => p.includes('short')) && typed.missing.includes('blue'));
+  assert.equal(checkNote("Customer is waiting inside Menchie's Frozen Yogurt, please call her if you cannot find her right away.", ['Menchie', 'blue', 'jeans'], 'Blue top, black jeans').ok, true);
   check(`address-only pin is ${bad.stops[0].distance} m off; missed questions and the emoji note all caught`);
 
-  const good = (await ana(`/api/practice/${men.id}`, { pins: [MENCHIES, HOME], ordered: true, steps: RIGHT, savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], note: GOOD_NOTE })).data;
+  const good = (await ana(`/api/practice/${men.id}`, { pins: [MENCHIES, HOME], ordered: true, steps: RIGHT, savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], noteChoice: M_NOTE })).data;
   assert.equal(good.passed, true, JSON.stringify(good));
   assert.ok(good.modelNote && good.why);
   check('right business pin + right questions + clear note passes, then shows the model note and why');
@@ -103,7 +110,7 @@ try {
   assert.equal((await ana(`/api/practice/${men.id}/step`, { step: 0, pick: wrong0 })).data.right, false);
   assert.equal((await ana(`/api/practice/${men.id}/step`, { step: 99, pick: 0 })).data.right, false);
   // A wrong pick then the right one (practice) is still a miss; a wrong pick with no retry (test) fails too.
-  const full = { pins: [MENCHIES, HOME], ordered: true, savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], note: GOOD_NOTE };
+  const full = { pins: [MENCHIES, HOME], ordered: true, savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], noteChoice: M_NOTE };
   const retried = (await ana(`/api/practice/${men.id}`, { ...full, steps: [[wrong0, st0.right[0]], ...RIGHT.slice(1)] })).data;
   assert.equal(retried.passed, false);
   assert.deepEqual(retried.missingQuestions.length, 1); assert.ok(retried.missingQuestions[0].startsWith('Step 1: picked'), retried.missingQuestions[0]);
@@ -139,18 +146,20 @@ try {
   assert.deepEqual(tor.data.steps[last].right.map(tq), ['Close with an anniversary wish']);
   const T_OK = tor.data.steps.map((st) => [st.right[0]]);
   const tNote = 'Two passengers. The female rider uses a walker, please assist her. Please drop them off at Torikaya on Houston Street.';
-  const noWalker = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_RIGHT], ordered: true, steps: T_OK, note: 'Please drop the customer and his wife off at Torikaya on Houston Street.' })).data;
-  assert.ok(!noWalker.passed && noWalker.note.missing.includes('walker'), 'a note without the walker must fail');
-  const tGood = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_RIGHT], ordered: true, steps: T_OK, note: tNote })).data;
+  const T_NOTE = tor.data.note.options.findIndex((o) => o.right), T_NOWALKER = tor.data.note.options.findIndex((o) => !o.right && !/walker/i.test(o.text));
+  const noWalker = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_RIGHT], ordered: true, steps: T_OK, noteChoice: T_NOWALKER })).data;
+  assert.ok(!noWalker.passed && !noWalker.note.ok, 'picking the note without the walker must fail');
+  assert.ok(!(await import('../src/grading.js')).checkNote('Please drop the customer and his wife off at Torikaya on Houston Street.', tor.data.note.mustMention).ok, 'a typed note without the walker must fail');
+  const tGood = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_RIGHT], ordered: true, steps: T_OK, noteChoice: T_NOTE })).data;
   assert.equal(tGood.passed, true, JSON.stringify(tGood));
-  const tPlain = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_RIGHT], ordered: true, note: tNote,
+  const tPlain = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_RIGHT], ordered: true, noteChoice: T_NOTE,
     steps: [...T_OK.slice(0, last), [tor.data.steps[last].choices.find((i) => tq(i) === 'Close the call')]] })).data;
   assert.equal(tPlain.passed, false, 'a plain close must be wrong on this call');
   const cold = tor.data.steps[cs].choices.find((i) => tq(i) === 'Tell them you are checking the map');
-  const tCold = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_RIGHT], ordered: true, note: tNote, steps: [...T_OK.slice(0, cs), [cold], ...T_OK.slice(cs + 1)] })).data;
+  const tCold = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_RIGHT], ordered: true, noteChoice: T_NOTE, steps: [...T_OK.slice(0, cs), [cold], ...T_OK.slice(cs + 1)] })).data;
   assert.equal(tCold.passed, false); assert.ok(tCold.missingQuestions[0].startsWith(`Step ${cs + 1}: picked "Tell them you are checking the map"`), tCold.missingQuestions[0]);
   assert.ok(tor.data.questions.find((q) => q.q === 'Provide driver info').say.includes('call back immediately so we can look into the status of your ride'));
-  const tAddr = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_ADDR], ordered: true, steps: T_OK, note: tNote })).data;
+  const tAddr = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_ADDR], ordered: true, steps: T_OK, noteChoice: T_NOTE })).data;
   assert.equal(tAddr.passed, false); assert.ok(tAddr.stops[1].distance > 65 && tAddr.stops[1].distance < 80, `distance ${tAddr.stops[1].distance}`);
   check(`Torikaya: right pins + steps pass; a plain close fails; skipping the congratulations fails; address-only drop-off is ${tAddr.stops[1].distance} m off and fails`);
 
@@ -229,7 +238,7 @@ try {
   // Saved location #3 was stored with the wrong pin: it must be fixed (saved over), not left alone or deleted.
   assert.ok(!JSON.stringify(pub).includes('savedFix'), 'trainees must not see which saved slot is wrong');
   assert.ok(pubM.account.saved[0].label.includes('Petrovitsky'), 'saved #3 should be on the account');
-  const base = { pins: [MENCHIES, HOME], ordered: true, steps: RIGHT, note: GOOD_NOTE };
+  const base = { pins: [MENCHIES, HOME], ordered: true, steps: RIGHT, noteChoice: M_NOTE };
   const leftIt = (await ana(`/api/practice/${men.id}`, base)).data;
   assert.equal(leftIt.passed, false); assert.ok(leftIt.saved.did.includes('Left it'));
   const deleted = (await ana(`/api/practice/${men.id}`, { ...base, savedChanges: [{ slot: 3, action: 'delete' }] })).data;
@@ -239,10 +248,11 @@ try {
   check('saved location #3: left wrong, deleted, or re-saved with the wrong pin all fail; trap slot is hidden');
 
   // The clothing box counts toward the driver note: clothing there, note without it, still passes.
-  const split = (await ana(`/api/practice/${men.id}`, { pins: [MENCHIES, HOME], ordered: true, steps: RIGHT, savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], wearing: 'Blue top, black jeans',
-    note: "Customer is waiting inside Menchie's Frozen Yogurt, please call her if you cannot find her right away." })).data;
-  assert.equal(split.passed, true, JSON.stringify(split.note));
-  check('clothing in the What Are You Wearing Today? box counts toward the driver note');
+  const typedInPractice = (await ana(`/api/practice/${men.id}`, { ...base, savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], noteChoice: null, note: GOOD_NOTE })).data;
+  assert.equal(typedInPractice.passed, false, 'practice with note choices must be graded on the pick, not typed text');
+  const testGrade = (await import('../src/grading.js')).gradeScenario(men.data, { ...base, savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], noteChoice: M_NOTE, note: '' }, 15);
+  assert.equal(testGrade.note.ok, false, 'a test must grade the typed note even when choices exist');
+  check('practice grades the picked note; a test always grades the typed note (choices never apply there)');
 
   // Class links: a practice set for a class; someone with no class joins it from the link; another class is refused.
   const dec = (await admin('/api/admin/classes', { name: 'December 2026' })).data.id;

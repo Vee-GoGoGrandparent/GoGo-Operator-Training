@@ -20,8 +20,17 @@ export function checkNote(text, mustMention = [], wearing = '') {
   return { text: t, wearing: w, missing, problems, ok: problems.length === 0 };
 }
 
+// In practice, a call can offer 2-3 driver notes to pick from (one right) instead of writing one. Tests always type.
+function pickedNote(options, choice) {
+  const o = Number.isInteger(choice) ? options[choice] : null;
+  if (!o) return { text: '', wearing: '', missing: [], problems: ['Pick the note that tells the driver what they need.'], ok: false, picked: true };
+  return { text: o.text, wearing: '', missing: [], ok: !!o.right, picked: true,
+    problems: o.right ? [] : ['That note leaves out something the driver needs. Compare it with the good note below.'] };
+}
+
 // s = scenario data, sub = what the trainee sent, passMeters = how close counts as right.
-export function gradeScenario(s, sub, passMeters) {
+// practice = true when graded from practice (note choices apply there only).
+export function gradeScenario(s, sub, passMeters, { practice = false } = {}) {
   const pins = Array.isArray(sub?.pins) ? sub.pins : [];
   const entrances = Array.isArray(sub?.entrances) ? sub.entrances : [];
   const stops = s.stops.map((stop, i) => {
@@ -44,7 +53,8 @@ export function gradeScenario(s, sub, passMeters) {
   const asked = new Set((Array.isArray(sub?.asked) ? sub.asked : []).map(Number));
   const missingQuestions = steps ? steps.filter((x) => !x.ok).map((x) => x.text)
     : s.questions.map((q, i) => ({ ...q, i })).filter((q) => q.needed && !asked.has(q.i)).map((q) => q.q);
-  const note = checkNote(sub?.note, s.note?.mustMention || [], sub?.wearing);
+  const noteOptions = s.note?.options || [];
+  const note = practice && noteOptions.length ? pickedNote(noteOptions, sub?.noteChoice) : checkNote(sub?.note, s.note?.mustMention || [], sub?.wearing);
   const saved = gradeSavedFix(s, sub, passMeters);
   const ordered = s.mustOrder === false ? null : { ok: !!sub?.ordered };
   return {
@@ -112,6 +122,8 @@ export function publicScenario(row) {
     questions: s.questions.map((q) => ({ q: q.q, say: q.say || '', a: q.a })),
     // Only which lines show at each step, mixed up, so the right one is not always in the same place.
     steps: (s.steps || []).map((st) => ({ choices: shuffle(st.choices) })),
+    // Driver note choices for practice: the text only, mixed up; which one is right stays on the server.
+    noteOptions: shuffle((s.note?.options || []).map((o, i) => ({ i, text: o.text }))),
   };
 }
 const shuffle = (a) => { const b = [...a]; for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
@@ -131,6 +143,12 @@ function cleanRide(r = {}) {
 const ll = (p) => (p && validLatLng(Number(p.lat), Number(p.lng)) ? { lat: Number(p.lat), lng: Number(p.lng) } : null);
 // A place saved on the pretend customer's account (home, or a saved location that may or may not be right).
 const savedPlace = (p) => (p && ll(p) ? { label: str(p.label, 60) || 'Saved', address: str(p.address, 200), ...ll(p) } : null);
+
+// Driver note choices: 2-4 notes, at least one right. Anything less is not a choice, so it is dropped.
+function cleanNoteOptions(a) {
+  const o = (Array.isArray(a) ? a : []).slice(0, 4).map((x) => ({ text: str(x?.text, 400), right: !!x?.right })).filter((x) => x.text);
+  return o.length >= 2 && o.some((x) => x.right) ? o : [];
+}
 
 // Clean up what an admin sends before it is stored.
 export function cleanScenario(b) {
@@ -158,6 +176,7 @@ export function cleanScenario(b) {
     stops,
     questions: lines.map(({ i, ...q }) => q),
     steps: cleanSteps(b.steps, newIndex),
-    note: { mustMention: (Array.isArray(b.note?.mustMention) ? b.note.mustMention : []).map((k) => str(k, 40)).filter(Boolean).slice(0, 8), model: str(b.note?.model, 600) },
+    note: { mustMention: (Array.isArray(b.note?.mustMention) ? b.note.mustMention : []).map((k) => str(k, 40)).filter(Boolean).slice(0, 8), model: str(b.note?.model, 600),
+      options: cleanNoteOptions(b.note?.options) },
   };
 }

@@ -12,6 +12,8 @@ Pin placement practice and class pin tests for GoGo orientation. Built from Osca
   right one plus two that sound right), and one or two can be right. Practice: a wrong pick says "Not quite" and they
   pick again (still a miss). Test: the wrong line is said, the call goes on, and it is graded at the end. A call
   with no steps shows every line at once, as before.
+- **Driver note choices:** a call can carry 2-3 notes (one right). In practice the trainee picks one; in a test they
+  always write the note themselves.
 - **Pin skills:** every call teaches one situation (place or business name, past rides, multiple entrances,
   hospitals and clinics, airports, apartments and complexes, drop-off checks, confirm the address). Practice is
   grouped by skill with a one-line tip; Scenarios shows how many calls each skill has (3 = 2 practice + 1 test).

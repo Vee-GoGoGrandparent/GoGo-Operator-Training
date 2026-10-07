@@ -4,9 +4,14 @@ import fs from 'node:fs';
 import { db, one, all, run, tx } from './db.js';
 import { pinSkill } from './skills.js';
 import { cleanScenario } from './grading.js';
-import { CONFIRM_NAME_LINE, MENCHIES_STEPS, stepsFromNames, EXAMPLE_SCENARIOS } from './examples.js';
+import { CONFIRM_NAME_LINE, MENCHIES_STEPS, stepsFromNames, EXAMPLE_SCENARIOS, MENCHIES_NEW_LINES, MENCHIES_ANSWERS,
+  MENCHIES_NOTE_OPTIONS, TORIKAYA_NOTE_OPTIONS } from './examples.js';
 
 db.exec(`CREATE TABLE IF NOT EXISTS patches (name TEXT PRIMARY KEY, ran_at TEXT NOT NULL DEFAULT (datetime('now')))`);
+// A copy of a scenario taken before a patch REPLACES something an admin set up (only with Vee's OK), so it can be put back.
+db.exec(`CREATE TABLE IF NOT EXISTS scenario_backups (id INTEGER PRIMARY KEY, scenario_id INTEGER NOT NULL, title TEXT, data TEXT NOT NULL,
+  reason TEXT, saved_at TEXT NOT NULL DEFAULT (datetime('now')))`);
+const backup = (row, reason) => run('INSERT INTO scenario_backups (scenario_id, title, data, reason) VALUES (?, ?, ?, ?)', row.id, row.title, row.data, reason);
 
 const MENCHIES_HOME = { label: 'Home', address: '17130 127th Avenue Southeast, Renton, WA 98058', lat: 47.44892956, lng: -122.1726835 };
 
@@ -146,6 +151,40 @@ const PATCHES = [
         return true;
       }
       run('UPDATE scenarios SET data = ?, version = version + 1 WHERE id = ?', v2, row.id);
+      return true;
+    },
+  },
+  {
+    // Vee, 2026-10-07 afternoon: Menchie's new call order. She chose "replace, keep a backup": her version is copied to
+    // scenario_backups first, then the steps are REPLACED. Lines she wrote stay in the list (only answers she asked
+    // for change), the two new lines are added if missing, and practice gets the note choices if it has none.
+    name: 'menchies-flow-v2-2026-10-07',
+    run() {
+      const row = one('SELECT * FROM scenarios WHERE title = ?', "Menchie's on Petrovitsky Road");
+      if (!row) return false;
+      backup(row, "Before Menchie's new call order (Vee, 2026-10-07)");
+      const d = JSON.parse(row.data);
+      const find = (label) => d.questions.find((q) => q.q.trim().toLowerCase() === label.toLowerCase());
+      for (const [label, answer] of Object.entries(MENCHIES_ANSWERS)) { const q = find(label); if (q) { q.a = answer; q.needed = true; } }
+      for (const line of MENCHIES_NEW_LINES) if (!find(line.q)) d.questions.push({ ...line });
+      if (!find('Ask for notes for the driver')) d.questions.push({ q: 'Ask for notes for the driver', say: 'Do you have any notes for the driver?', a: "Just tell them I'm at Menchie's.", needed: true });
+      d.note = d.note || { mustMention: [], model: '' };
+      if (!d.note.options?.length) d.note.options = MENCHIES_NOTE_OPTIONS.map((o) => ({ ...o }));
+      d.steps = stepsFromNames(d.questions, MENCHIES_STEPS);
+      run('UPDATE scenarios SET data = ?, version = version + 1 WHERE id = ?', JSON.stringify(cleanScenario(d)), row.id);
+      return true;
+    },
+  },
+  {
+    // Vee, 2026-10-07: practice note choices for Torikaya. Add-only: a call that already has choices keeps them.
+    name: 'torikaya-note-options-2026-10-07',
+    run() {
+      const row = one('SELECT * FROM scenarios WHERE title = ?', 'Anniversary dinner on Houston Street');
+      if (!row) return true;
+      const d = JSON.parse(row.data);
+      if (d.note?.options?.length) return true;
+      d.note = { ...(d.note || { mustMention: [], model: '' }), options: TORIKAYA_NOTE_OPTIONS.map((o) => ({ ...o })) };
+      run('UPDATE scenarios SET data = ?, version = version + 1 WHERE id = ?', JSON.stringify(cleanScenario(d)), row.id);
       return true;
     },
   },

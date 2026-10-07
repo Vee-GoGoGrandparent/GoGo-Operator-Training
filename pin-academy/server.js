@@ -71,6 +71,7 @@ function cleanSubmission(b) {
     locationName: (Array.isArray(b.locationName) ? b.locationName : []).slice(0, 2).map((s) => str(s, 120)),
     wearing: str(b.wearing, 200),
     ordered: b.ordered === true,
+    noteChoice: Number.isInteger(b.noteChoice) ? b.noteChoice : null,
     savedChanges: (Array.isArray(b.savedChanges) ? b.savedChanges : []).slice(0, 12).map((c) => ({
       slot: c && (c.slot === 'home' ? 'home' : Number(c.slot)), action: c?.action === 'delete' ? 'delete' : 'save',
       lat: num(c?.lat), lng: num(c?.lng), label: str(c?.label, 120) })),
@@ -186,7 +187,7 @@ route('POST', '/api/practice/(\\d+)', async (req, res, { m }) => {
   const row = practiceRow(u, num(m[1]));
   const b = await readJson(req);
   const sub = cleanSubmission(b);
-  const result = gradeScenario(scenarioData(row), sub, PRACTICE_METERS);
+  const result = gradeScenario(scenarioData(row), sub, PRACTICE_METERS, { practice: true });
   tx(() => {
     const att = run(`INSERT INTO attempts (slack_id, submitted_at) VALUES (?, datetime('now'))`, u.slack_id);
     run('INSERT INTO scenario_answers (attempt_id, scenario_id, submitted, result, passed, seconds) VALUES (?, ?, ?, ?, ?, ?)',

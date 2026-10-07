@@ -6,21 +6,50 @@ export const CONFIRM_NAME_LINE = { q: "Confirm the customer's name", say: 'Perfe
   a: 'Yes, this is Marge.', needed: true };
 
 // The call in steps (Vee, 2026-10-07): each step shows the right line plus two that sound right but are not next.
-// A first draft from how Vee runs this call; admins change it in the scenario editor. Lines are named by their button.
+// Vee's order (afternoon): mention the saved location ("dropped off here earlier"), the business, the map, go there
+// often ("every Sunday"), save it as preferred location #3, where to (home), confirm the home address, clothing, notes.
+// Admins change it in the scenario editor. Lines are named by their button.
 export const MENCHIES_STEPS = [
   { right: ["Confirm the customer's name"], wrong: ['Ask them to repeat the address', 'Mention the saved location'] },
   { right: ['Ask them to repeat the address'], wrong: ['Mention the saved location', 'Ask them to spell the street'] },
   { right: ['Read the address back'], wrong: ['Ask them to spell the street', 'Send the driver to the address'] },
+  { right: ['Mention the saved location'], wrong: ['Send the driver to the address', 'Ask what they are wearing'] },
   { right: ['Ask for the name of the business'], wrong: ['Ask them to spell the street', 'Ask for notes for the driver'] },
   { right: ['Tell them you are checking the map'], wrong: ['Send the driver to the address', 'Ask where they are going'] },
-  { right: ['Ask if they go there often'], wrong: ['Mention the saved location', 'Ask for notes for the driver'] },
+  { right: ['Ask if they go there often'], wrong: ['Ask for notes for the driver', 'Ask where they are going'] },
+  { right: ['Save it as their preferred location'], wrong: ['Send the driver to the address', 'Provide estimate'] },
+  { right: ['Ask where they are going'], wrong: ['Provide estimate', 'Ask what they are wearing'] },
+  { right: ['Confirm the home address'], wrong: ['Ask what they are wearing', 'Provide estimate'] },
   { right: ['Ask what they are wearing'], wrong: ['Ask for notes for the driver', 'Provide estimate'] },
-  { right: ['Ask where they are going'], wrong: ['Provide estimate', 'Provide driver info'] },
-  { right: ['Provide estimate'], wrong: ['Provide driver info', 'Close the call'] },
+  { right: ['Ask for notes for the driver'], wrong: ['Provide estimate', 'Send the driver to the address'] },
+  { right: ['Provide estimate'], wrong: ['Provide driver info', 'Ask if there is anything else'] },
   { right: ['Provide driver info'], wrong: ['Ask if there is anything else', 'Close the call'] },
-  { right: ['Ask if there is anything else'], wrong: ['Close the call', 'Ask for notes for the driver'] },
-  { right: ['Close the call'], wrong: ['Ask for notes for the driver', 'Send the driver to the address'] },
+  { right: ['Ask if there is anything else'], wrong: ['Close the call', 'Send the driver to the address'] },
+  { right: ['Close the call'], wrong: ['Send the driver to the address', 'Ask them to spell the business'] },
 ];
+
+// The two lines Vee added to Menchie's (2026-10-07), and the driver note choices for practice.
+export const MENCHIES_NEW_LINES = [
+  { q: 'Save it as their preferred location', say: "Okay, I'm going to go ahead and save this on your account as your preferred location number three. That way it's easier for you when it's time to order rides to or from here.",
+    a: "Oh, that's great, thank you!", needed: true },
+  { q: 'Confirm the home address', say: 'Will we be taking you home to 17130 127th Avenue Southeast, Renton, Washington 98058?', a: "Yes, that's right.", needed: true },
+];
+export const MENCHIES_ANSWERS = {
+  'Mention the saved location': 'Oh yes, I was just dropped off here earlier.',
+  'Ask if they go there often': 'Yes, I go every Sunday.',
+  'Ask where they are going': 'Home.',
+};
+export const MENCHIES_NOTE_OPTIONS = [
+  { text: "Customer is waiting at Menchie's Frozen Yogurt. Please call her if you can't find her. She is wearing a blue top and black jeans.", right: true },
+  { text: "🚪 Menchie's ☎️ Call customer upon arrival", right: false },
+  { text: 'Customer is at 14060 Southeast Petrovitsky Road. Please call her when you arrive.', right: false },
+];
+export const TORIKAYA_NOTE_OPTIONS = [
+  { text: 'Two passengers. The female rider uses a walker, please assist her. Please drop them off at Torikaya, the restaurant at 1120 Houston Street.', right: true },
+  { text: 'Please drop the customers off at Torikaya, the restaurant at 1120 Houston Street.', right: false },
+  { text: 'Two passengers, one with a walker. Drop off at 1120 Houston Street.', right: false },
+];
+
 
 // Turn named steps into line numbers. A step whose right line is not in the list is skipped; missing wrong lines are dropped.
 export function stepsFromNames(questions, named) {
@@ -72,7 +101,7 @@ export const EXAMPLE_SCENARIOS = [
           a: '14060 Southeast Petrovitsky Road, in Renton.', needed: true },
         { q: 'Read the address back', say: "Okay, that's 14060 Southeast Petrovitsky Road in Renton, Washington. Is that correct?",
           a: "Yes, that's right.", needed: true },
-        {"q":"Mention the saved location","say":"Okay, looks like we have this location saved on your account.","a":"Oh yes, I've been there before.","needed":false},
+        {"q":"Mention the saved location","say":"Okay, looks like we have this location saved on your account.","a":"Oh yes, I was just dropped off here earlier.","needed":true},
         { q: 'Ask them to spell the street', say: 'Can you spell the street name for me?', a: 'P-E-T-R-O-V-I-T-S-K-Y.', needed: false },
         { q: 'Ask for the name of the business', say: 'Are you at a business at that address? What is the name of it?', a: "Yes, I'm at Menchie's.", needed: true },
         { q: 'Ask them to spell the business', say: "You said you're located at Menchie's. Can you spell the name of the business for me?",
@@ -81,10 +110,11 @@ export const EXAMPLE_SCENARIOS = [
         { q: 'Tell them you are checking the map', say: 'Give me just a moment while I look at the map. I want to make sure I put the pickup spot in the right place.',
           a: 'Okay, no problem.', needed: false },
         { q: 'Ask if they go there often', say: "Is Menchie's a place you go to often?",
-          a: 'Yes, I go every Sunday with my grandkids.', needed: true },
+          a: 'Yes, I go every Sunday.', needed: true },
         { q: 'Ask for notes for the driver', say: 'Do you have any notes for the driver?', a: "Just tell them I'm at Menchie's.", needed: false },
         { q: 'Ask what they are wearing', say: "Would you mind telling me what you're wearing, so the driver can spot you easier?", a: 'A blue top and black jeans.', needed: true },
-        { q: 'Ask where they are going', say: 'And where will you be going today?', a: 'Home. Can we set up the pickup first?', needed: false },
+        { q: 'Ask where they are going', say: 'And where will we be taking you today?', a: 'Home.', needed: true },
+        ...MENCHIES_NEW_LINES,
         { q: 'Send the driver to the address', say: "Okay, I'll send the driver to that address.", a: 'Okay, thank you.', needed: false },
         { q: 'Provide estimate', say: 'Okay, looks like this trip is going to cost you between $8-$10. Is it ok if I go ahead and order this ride for you now?',
           a: 'Yes, please.', needed: true },
@@ -96,6 +126,7 @@ export const EXAMPLE_SCENARIOS = [
       note: {
         mustMention: ['Menchie', 'blue', 'jeans'],
         model: "Customer is waiting at Menchie's Frozen Yogurt. Please call her if you can't find her. She is wearing a blue top and black jeans.",
+        options: MENCHIES_NOTE_OPTIONS,
       },
     },
   },
@@ -163,6 +194,7 @@ export const EXAMPLE_SCENARIOS = [
       note: {
         mustMention: ['Torikaya', 'walker'],
         model: 'Two passengers. The female rider uses a walker, please assist her. Please drop them off at Torikaya, the restaurant at 1120 Houston Street.',
+        options: TORIKAYA_NOTE_OPTIONS,
       },
     },
   },

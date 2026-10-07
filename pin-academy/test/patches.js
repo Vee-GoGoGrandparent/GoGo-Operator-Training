@@ -23,6 +23,10 @@ try {
   d.questions = d.questions.filter((q) => !['Provide estimate', 'Provide driver info', 'Ask them to spell the street'].includes(q.q));
   // The live call from before steps: no steps, no "confirm the name" line.
   delete d.steps; d.questions = d.questions.filter((q) => q.q !== "Confirm the customer's name");
+  // ...and from before Vee's new order: no 'save as preferred' / 'confirm the home address' lines, no note choices, old answers.
+  d.questions = d.questions.filter((q) => !['Save it as their preferred location', 'Confirm the home address'].includes(q.q));
+  delete d.note.options;
+  d.questions.find((q) => q.q === 'Ask where they are going').a = 'Home. Can we set up the pickup first?';
   d.questions[0].say = 'ADMIN WORDING';
   d.questions.push({ q: 'Admin extra line', say: 'Something Vee added', a: 'Sure.', needed: false });
   run('INSERT INTO scenarios (title, category, data) VALUES (?, ?, ?)', ex.title, ex.category, JSON.stringify(cleanScenario(d)));
@@ -56,11 +60,23 @@ try {
   assert.equal(after.questions[0].q, "Confirm the customer's name", 'confirm-name line not added first');
   assert.equal(after.questions.filter((q) => q.q === "Confirm the customer's name").length, 1);
   const name = (i) => after.questions[i].q;
-  assert.equal(after.steps.length, 12);
-  assert.deepEqual(after.steps.map((st) => name(st.right[0])).slice(0, 4), ["Confirm the customer's name", 'Ask them to repeat the address', 'Read the address back', 'Ask for the name of the business']);
+  assert.equal(after.steps.length, 16);
+  assert.deepEqual(after.steps.map((st) => name(st.right[0])).slice(0, 5), ["Confirm the customer's name", 'Ask them to repeat the address', 'Read the address back', 'Mention the saved location', 'Ask for the name of the business']);
   assert.ok(!after.steps.some((st) => st.choices.some((i) => name(i) === 'Ask them to spell the street')), 'a line the admin removed shows as a choice');
   assert.ok(after.steps.every((st) => st.choices.every((i) => i >= 0 && i < after.questions.length)));
   check('steps added in order, pointing at the right lines; "confirm the name" first; removed lines never offered');
+
+  // Vee's new Menchie's order: her version backed up first; her own lines kept; answers, two new lines and note choices in.
+  const bk = one('SELECT * FROM scenario_backups WHERE title = ?', ex.title);
+  assert.ok(bk, 'no backup taken before replacing the steps');
+  assert.ok(!JSON.parse(bk.data).questions.some((q) => q.q === 'Save it as their preferred location'), 'backup should hold the version from before the new order');
+  const ans = (label) => after.questions.find((q) => q.q === label)?.a;
+  assert.deepEqual([ans('Mention the saved location'), ans('Ask if they go there often'), ans('Ask where they are going')],
+    ['Oh yes, I was just dropped off here earlier.', 'Yes, I go every Sunday.', 'Home.']);
+  assert.ok(after.questions.some((q) => q.q === 'Save it as their preferred location') && after.questions.some((q) => q.q === 'Confirm the home address'));
+  assert.ok(after.questions.some((q) => q.q === 'Admin extra line'), "the admin's own line was dropped");
+  assert.equal(after.note.options.length, 3); assert.equal(after.note.options.filter((o) => o.right).length, 1);
+  check("Menchie's new order: backup taken first; admin's own line kept; new answers, the two new lines and note choices in");
   const cat = (t) => one('SELECT category, version FROM scenarios WHERE title = ?', t);
   assert.deepEqual([cat('Old mall').category, cat('Old clinic').category, cat('Old odd').category, cat('Old new').category],
     ['Multiple entrances', 'Hospitals and clinics', 'Other', 'Airports']);

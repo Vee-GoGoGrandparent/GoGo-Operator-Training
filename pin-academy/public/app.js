@@ -333,7 +333,7 @@ const SIDEBAR = [['Dashboard Overview'], ['Live Calls'], ['Rides', ['Ride Orderi
   ['Ride Safety & Support'], ['Client Checks'], ['Payments & Credits']];
 const notInPractice = (what) => () => toast(`${what} is not part of this practice.`);
 
-function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit, checkStep = null } = {}) {
+function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit, checkStep = null, practice = false } = {}) {
   const t0 = Date.now();
   const asked = new Set();
   const first = (ME?.name || '').split(' ')[0] || 'your name';
@@ -537,6 +537,12 @@ function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit,
   const wearing = h('input', { type: 'text', placeholder: 'Describe clothing' });
   const announce = h('select', {}, ['Call me', 'Text me'].map((x) => h('option', {}, x)));
   const note = h('textarea', { placeholder: 'Anything else the driver needs to know?' });
+  // Practice only: when the call has note choices, they pick the note instead of writing it (tests always write it).
+  let noteChoice = null;
+  const noteOpts = practice && s.noteOptions?.length ? s.noteOptions : null;
+  const radioName = `noteopt-${Math.random().toString(36).slice(2)}`;
+  const noteBox = !noteOpts ? note : h('div', { class: 'note-opts' }, h('div', { class: 'small muted' }, 'Pick the note you would send the driver:'),
+    noteOpts.map((o) => h('label', { class: 'note-opt' }, h('input', { type: 'radio', name: radioName, onchange: () => { noteChoice = o.i; } }), h('span', {}, o.text))));
   const checkbox = (label, extra = {}) => h('label', { class: 'ro-check' }, h('input', { type: 'checkbox', ...extra }), label);
   const submitBtn = h('button', { class: 'btn orange end-call', type: 'button' }, submitLabel);
   // Like the dashboard: Get Estimate unfolds the estimate under the buttons, which turn into Order Ride / Cancel.
@@ -580,7 +586,7 @@ function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit,
   }
   const getSubmission = () => ({
     pins: s.stops.map((x) => blocks[x.kind].pin), entrances: s.stops.map((x) => blocks[x.kind].entrance), asked: [...asked], steps: picks,
-    note: note.value, wearing: wearing.value, announce: announce.value, savedChanges, ordered,
+    note: note.value, noteChoice, wearing: wearing.value, announce: announce.value, savedChanges, ordered,
     specific: s.stops.map((x) => blocks[x.kind].specific.value), locationName: s.stops.map((x) => blocks[x.kind].locName.value),
     seconds: Math.round((Date.now() - t0) / 1000),
   });
@@ -599,7 +605,7 @@ function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit,
     row('How Should the Driver Announce Their Arrival?*', announce),
     h('div', { class: 'ro-center' }, h('button', { class: 'pill purple', type: 'button', onclick: notInPractice('Accessibility options') }, 'Edit Accessibility Options')),
     h('div', { class: 'ro-indent' }, checkbox('The rider has groceries.'), checkbox('The rider has luggage.')),
-    h('div', { class: 'ro-preview' }, h('div', { class: 'ro-preview-title' }, '▼ Driver Message Preview'), note),
+    h('div', { class: 'ro-preview' }, h('div', { class: 'ro-preview-title' }, '▼ Driver Message Preview'), noteBox),
     h('div', { class: 'ro-indent' }, checkbox('Have RSS monitor this ride')),
     row('Ride Type', h('div', {}, checkbox('Emergency Ride'), checkbox('Expand Driver Search'), checkbox('Expand Vehicle Search'))),
     row('Auto Retry Getting a', h('select', { disabled: true }, h('option', {}, 'Select one'))),
@@ -627,6 +633,7 @@ function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit,
     showResult(r) {
       s.stops.forEach((x, i) => { const blk = blocks[x.kind], g = r.stops[i]; if (blk.pm) { blk.pm.lock(); blk.pm.showAnswer(g.answer, blk.pin); } });
       note.disabled = true; wearing.disabled = true; submitBtn.disabled = true;
+      if (noteOpts) noteBox.querySelectorAll('input').forEach((x) => { x.disabled = true; });
       result.replaceChildren(resultCard(r));
       result.scrollIntoView({ behavior: 'smooth' });
     },
@@ -708,7 +715,7 @@ async function practiceSet(id) {
 function practiceOne(items, i, backTo = 'practice') {
   const s = items[i];
   const next = h('div', { class: 'row' });
-  const form = scenarioForm(s, { checkStep: async (step, pick) => (await api(`/api/practice/${s.id}/step`, { step, pick })).right, onSubmit: async (sub) => {
+  const form = scenarioForm(s, { practice: true, checkStep: async (step, pick) => (await api(`/api/practice/${s.id}/step`, { step, pick })).right, onSubmit: async (sub) => {
     const r = await api(`/api/practice/${s.id}`, sub);
     form.showResult(r);
     next.replaceChildren(h('button', { class: 'btn ghost', onclick: () => practiceOne(items, i, backTo) }, 'Try again'),
@@ -837,6 +844,17 @@ function editScenario(existing) {
   const why = h('textarea', { value: d.why, placeholder: 'Shown after they answer: what goes wrong if you only use the address, and how to get it right.' });
   const stopsHost = h('div'), qHost = h('div'), acctHost = h('div'), stepsHost = h('div');
   const must = h('input', { type: 'text', value: d.note.mustMention.join(', '), placeholder: 'e.g. Menchie, blue, jeans' });
+  d.note.options = d.note.options || [];
+  const optsHost = h('div');
+  // Practice note choices: 2-3 notes, one marked right. Tests always make them write the note.
+  function drawNoteOptions() {
+    optsHost.replaceChildren(...d.note.options.map((o, i) => {
+      const t = h('input', { type: 'text', value: o.text, placeholder: i === 0 ? 'e.g. Two passengers. The female rider uses a walker, please assist her.' : 'A note that sounds fine but misses something', oninput: () => (o.text = t.value) });
+      const r = h('input', { type: 'radio', name: 'note-right', checked: o.right, onchange: () => { d.note.options.forEach((x, j) => (x.right = j === i)); } });
+      return h('div', { class: 'row' }, h('div', { class: 'grow' }, t), h('label', { class: 'check', style: 'margin:0' }, r, 'Right one'),
+        h('button', { class: 'btn ghost small', onclick: () => { d.note.options.splice(i, 1); drawNoteOptions(); } }, '✕'));
+    }), d.note.options.length < 4 ? h('button', { class: 'btn ghost small', onclick: () => { d.note.options.push({ text: '', right: !d.note.options.length }); drawNoteOptions(); } }, '+ Add a note choice') : null);
+  }
   const model = h('textarea', { value: d.note.model, placeholder: "e.g. Customer is waiting at Menchie's Frozen Yogurt. Please call her if you can't find her. She is wearing a blue top and black jeans." });
 
   function drawStops() {
@@ -958,6 +976,7 @@ function editScenario(existing) {
     h('div', { class: 'card' }, h('h2', {}, 'Driver note'),
       h('label', {}, 'The note must mention (comma separated). The What Are You Wearing Today? box counts too.'), must,
       h('label', {}, 'A good note (shown after they answer)'), model,
+      h('label', {}, 'Note choices for practice (optional). In practice they pick one of these instead of writing it; in a test they always write it. Give 2 or 3, and mark the right one.'), optsHost,
       h('label', {}, 'Why (shown after they answer)'), why),
     h('button', { class: 'btn', onclick: safe(async () => {
       const empty = d.steps.findIndex((st) => !st.right.length);
@@ -967,13 +986,15 @@ function editScenario(existing) {
       const newAt = new Map(kept.map(([, i], n) => [i, n]));
       const data = { ...d, caller: caller.value, why: why.value, questions: kept.map(([q]) => q),
         steps: shiftSteps(d.steps, (x) => (newAt.has(x) ? newAt.get(x) : -1)),
-        note: { mustMention: must.value.split(',').map((x) => x.trim()).filter(Boolean), model: model.value } };
+        note: { mustMention: must.value.split(',').map((x) => x.trim()).filter(Boolean), model: model.value, options: d.note.options.filter((o) => o.text.trim()) } };
+      if (data.note.options.length === 1) return toast('Give at least 2 note choices, or none.', true);
+      if (data.note.options.length && !data.note.options.some((o) => o.right)) return toast('Mark which note choice is the right one.', true);
       if (data.steps.some((st) => !st.right.length)) return toast('A step’s right answer is a line with no caller answer. Fill in the answer first.', true);
       if (data.stops.some((s) => !s.answer)) return toast('Search each stop and place its pin first.', true);
       await api('/api/admin/scenarios', { id: existing?.id, version: existing?.version, title: title.value, category: cat.value, practice: practice.checked, data });
       toast('Saved'); go('a-scenarios');
     }) }, 'Save scenario'));
-  drawStops(); drawAccount(); drawQuestions();
+  drawStops(); drawAccount(); drawQuestions(); drawNoteOptions();
 }
 
 // ── admins: practice sets & tests ────────────────────────────────────
