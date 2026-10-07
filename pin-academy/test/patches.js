@@ -24,7 +24,7 @@ try {
   // The live call from before steps: no steps, no "confirm the name" line.
   delete d.steps; d.questions = d.questions.filter((q) => q.q !== "Confirm the customer's name");
   // ...and from before Vee's new order: no 'save as preferred' / 'confirm the home address' lines, no note choices, old answers.
-  d.questions = d.questions.filter((q) => !['Save it as their preferred location', 'Confirm the home address'].includes(q.q));
+  d.questions = d.questions.filter((q) => !['Save it as their preferred location', 'Confirm the home address', 'Confirm the best contact number'].includes(q.q));
   delete d.note.options;
   d.questions.find((q) => q.q === 'Ask where they are going').a = 'Home. Can we set up the pickup first?';
   d.questions[0].say = 'ADMIN WORDING';
@@ -60,8 +60,10 @@ try {
   assert.equal(after.questions[0].q, "Confirm the customer's name", 'confirm-name line not added first');
   assert.equal(after.questions.filter((q) => q.q === "Confirm the customer's name").length, 1);
   const name = (i) => after.questions[i].q;
-  assert.equal(after.steps.length, 16);
-  assert.deepEqual(after.steps.map((st) => name(st.right[0])).slice(0, 5), ["Confirm the customer's name", 'Ask them to repeat the address', 'Read the address back', 'Mention the saved location', 'Ask for the name of the business']);
+  assert.equal(after.steps.length, 17);
+  assert.equal(name(after.steps[1].right[0]), 'Confirm the best contact number', 'contact number not confirmed right after the name');
+  assert.equal(after.questions.filter((q) => /best contact number/i.test(q.q)).length, 1);
+  assert.deepEqual(after.steps.map((st) => name(st.right[0])).slice(0, 6), ["Confirm the customer's name", 'Confirm the best contact number', 'Ask them to repeat the address', 'Read the address back', 'Mention the saved location', 'Ask for the name of the business']);
   assert.ok(!after.steps.some((st) => st.choices.some((i) => name(i) === 'Ask them to spell the street')), 'a line the admin removed shows as a choice');
   assert.ok(after.steps.every((st) => st.choices.every((i) => i >= 0 && i < after.questions.length)));
   check('steps added in order, pointing at the right lines; "confirm the name" first; removed lines never offered');
@@ -104,7 +106,7 @@ try {
   run(`DELETE FROM patches WHERE name = 'add-torikaya-2026-10-07'`); runPatches();
   assert.equal(torCount(), 1, 'Torikaya added twice');
   const td = JSON.parse(one('SELECT data FROM scenarios WHERE title = ?', 'Anniversary dinner on Houston Street').data);
-  assert.equal(td.steps.length, 12); assert.equal(td.account.home.lat, 35.0170514); assert.equal(td.ride.driver.name, 'Yoandris');
+  assert.equal(td.steps.length, 13); assert.equal(td.account.home.lat, 35.0170514); assert.equal(td.ride.driver.name, 'Yoandris');
   check('Torikaya added once to a site that already has the examples, with its steps, home and driver');
 
   // The live Torikaya (first version) gets the new flow; an edited one is left alone.
@@ -115,7 +117,7 @@ try {
   const before = tor().version;
   run(`DELETE FROM patches WHERE name = 'torikaya-flow-v2-2026-10-07'`); runPatches();
   const up = JSON.parse(tor().data);
-  assert.equal(up.steps.length, 12); assert.ok(up.note.mustMention.includes('walker')); assert.ok(tor().version > before, 'version not bumped');
+  assert.equal(up.steps.length, 13); assert.ok(up.note.mustMention.includes('walker')); assert.ok(tor().version > before, 'version not bumped');
   const edited = JSON.parse(v1); edited.why = 'VEE EDITED IT';
   run('UPDATE scenarios SET data = ? WHERE title = ?', JSON.stringify(edited), 'Anniversary dinner on Houston Street');
   run(`DELETE FROM patches WHERE name = 'torikaya-flow-v2-2026-10-07'`); runPatches();

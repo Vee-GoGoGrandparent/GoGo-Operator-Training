@@ -594,8 +594,9 @@ function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit,
 
   const form = h('div', { class: 'ro-card' },
     h('div', { class: 'ro-card-title' }, 'Order rides on behalf of a registered user'),
-    row('Phone Number*', h('input', { type: 'text', value: '(+1) account on file', disabled: true })),
-    row('Preferred Contact Number', h('select', {}, h('option', {}, 'Account Phone Number'), h('option', {}, 'New Phone Number'))),
+    // GoGo's toll-free number stands in for the customer's phone (Vee, 2026-10-07): it is only a practice copy.
+    row('Phone Number*', h('input', { type: 'text', value: '(+1) 855-464-6872', disabled: true })),
+    row('Preferred Contact Number', h('select', {}, h('option', {}, '(+1) 855-464-6872'), h('option', {}, 'New Phone Number'))),
     row('Service Type', h('select', {}, h('option', {}, 'Transportation'))),
     row('Type of Car*', h('select', {}, h('option', {}, 'Car (Auto selects a vendor based on ETA or by user preference)'))),
     blocks.pickup.el,

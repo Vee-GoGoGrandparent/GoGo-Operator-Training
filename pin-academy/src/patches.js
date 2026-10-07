@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { db, one, all, run, tx } from './db.js';
 import { pinSkill } from './skills.js';
 import { cleanScenario } from './grading.js';
-import { CONFIRM_NAME_LINE, MENCHIES_STEPS, stepsFromNames, EXAMPLE_SCENARIOS, MENCHIES_NEW_LINES, MENCHIES_ANSWERS,
+import { CONFIRM_NAME_LINE, CONTACT_LINE, MENCHIES_STEPS, stepsFromNames, EXAMPLE_SCENARIOS, MENCHIES_NEW_LINES, MENCHIES_ANSWERS,
   MENCHIES_NOTE_OPTIONS, TORIKAYA_NOTE_OPTIONS } from './examples.js';
 
 db.exec(`CREATE TABLE IF NOT EXISTS patches (name TEXT PRIMARY KEY, ran_at TEXT NOT NULL DEFAULT (datetime('now')))`);
@@ -185,6 +185,33 @@ const PATCHES = [
       if (d.note?.options?.length) return true;
       d.note = { ...(d.note || { mustMention: [], model: '' }), options: TORIKAYA_NOTE_OPTIONS.map((o) => ({ ...o })) };
       run('UPDATE scenarios SET data = ?, version = version + 1 WHERE id = ?', JSON.stringify(cleanScenario(d)), row.id);
+      return true;
+    },
+  },
+  {
+    // Vee, 2026-10-07 evening: every call confirms the best contact number right after the name.
+    name: 'contact-number-step-2026-10-07',
+    run() {
+      const wrongs = {
+        "Menchie's on Petrovitsky Road": ['Ask them to repeat the address', 'Mention the saved location'],
+        'Anniversary dinner on Houston Street': ['Ask for the pickup address', 'Confirm the pickup is home'],
+      };
+      for (const [title, wrongNames] of Object.entries(wrongs)) {
+        const row = one('SELECT * FROM scenarios WHERE title = ?', title);
+        if (!row) continue;
+        const d = JSON.parse(row.data);
+        const at = (label) => d.questions.findIndex((q) => q.q.trim().toLowerCase() === label.toLowerCase());
+        if (d.questions.some((q) => /best contact number/i.test(`${q.q} ${q.say}`))) continue; // already there
+        d.questions.push({ ...CONTACT_LINE });
+        const line = d.questions.length - 1;
+        if (d.steps?.length) {
+          const nameStep = d.steps.findIndex((st) => st.right.includes(at("Confirm the customer's name")));
+          const earlier = new Set(d.steps.slice(0, nameStep + 1).flatMap((st) => st.right));
+          const wrong = wrongNames.map(at).filter((i) => i >= 0 && !earlier.has(i));
+          d.steps.splice(nameStep >= 0 ? nameStep + 1 : 0, 0, { choices: [line, ...wrong], right: [line] });
+        }
+        run('UPDATE scenarios SET data = ?, version = version + 1 WHERE id = ?', JSON.stringify(cleanScenario(d)), row.id);
+      }
       return true;
     },
   },

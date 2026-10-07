@@ -58,7 +58,8 @@ try {
   assert.ok(men, 'example missing');
   check('example scenario added once, not twice');
   // The Menchie's call comes in steps: the right line at each step.
-  assert.equal(men.data.steps.length, 16);
+  assert.equal(men.data.steps.length, 17);
+  assert.equal(men.data.questions[men.data.steps[1].right[0]].q, 'Confirm the best contact number');
   assert.equal(men.data.questions[men.data.steps[0].right[0]].q, "Confirm the customer's name");
   const RIGHT = men.data.steps.map((st) => [st.right[0]]);
   const M_NOTE = men.data.note.options.findIndex((o) => o.right), M_EMOJI = men.data.note.options.findIndex((o) => /🚪/u.test(o.text));
@@ -77,7 +78,7 @@ try {
   const pubM = pub.find((s) => s.title.startsWith("Menchie's"));
   const json = JSON.stringify(pub);
   for (const secret of ['answer', 'needed', 'model', 'mustMention', 'why', '"right"', String(MENCHIES.lng)]) assert.ok(!json.includes(secret), `practice list leaks ${secret}`);
-  assert.equal(pubM.steps.length, 16); assert.equal(pubM.steps[0].choices.length, 3);
+  assert.equal(pubM.steps.length, 17); assert.equal(pubM.steps[0].choices.length, 3);
   assert.deepEqual(pubM.stops[0].start, ADDRESS_ONLY, 'map should open where the address alone puts it');
   assert.ok(pubM.questions[0].say.includes('pull up your account') && pubM.questions.some((q) => q.q === 'Read the address back'), 'operator lines missing');
   check('practice list hides the right pin, must-ask flags, model note and why');
@@ -86,7 +87,7 @@ try {
   const bad = (await ana(`/api/practice/${men.id}`, { pins: [ADDRESS_ONLY], asked: [], noteChoice: M_EMOJI })).data;
   assert.equal(bad.passed, false);
   assert.ok(bad.stops[0].distance > 35 && bad.stops[0].distance < 50, `distance ${bad.stops[0].distance}`);
-  assert.equal(bad.missingQuestions.length, 16);
+  assert.equal(bad.missingQuestions.length, 17);
   assert.ok(bad.stepMode && bad.missingQuestions[0].startsWith('Step 1: not reached'));
   assert.equal(bad.ordered.ok, false);
   assert.equal(bad.saved.ok, false);
@@ -135,7 +136,8 @@ try {
   assert.ok(tor, 'Torikaya example missing'); assert.equal(tor.category, 'Place or business name');
   const T_HOME = { lat: 35.0170514, lng: -85.1643452 }, T_ADDR = { lat: 35.0427, lng: -85.3060933 }, T_RIGHT = { lat: 35.04246931201211, lng: -85.30682293621099 };
   const tq = (i) => tor.data.questions[i].q;
-  assert.equal(tor.data.steps.length, 12);
+  assert.equal(tor.data.steps.length, 13);
+  assert.equal(tq(tor.data.steps[1].right[0]), 'Confirm the best contact number');
   const last = tor.data.steps.length - 1;
   const cs = tor.data.steps.findIndex((st) => tq(st.right[0]) === 'Congratulate them on their anniversary');
   assert.equal(tq(tor.data.steps[cs - 1].right[0]), 'Ask for the name of the place', 'the congratulations must come right after the anniversary is mentioned');

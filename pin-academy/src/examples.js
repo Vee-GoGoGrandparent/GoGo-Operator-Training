@@ -2,6 +2,11 @@
 // Admins add them from the Scenarios page ("Add / refresh the examples"). Coordinates are Vee's, from the dashboard.
 // The caller only says what they want; the trainee gets the rest by asking, the way a real call goes.
 
+// Every call: right after the name, confirm the best contact number (Vee, 2026-10-07). The number is GoGo's own
+// toll-free line, standing in for the customer's phone in this practice copy.
+export const CONTACT_LINE = { q: 'Confirm the best contact number', say: 'And is this still the best contact number for you, 855-464-6872?',
+  a: "Yes, that's the best number.", needed: true };
+
 export const CONFIRM_NAME_LINE = { q: "Confirm the customer's name", say: 'Perfect, I was able to pull up your account. Am I speaking with Marge Simpson?',
   a: 'Yes, this is Marge.', needed: true };
 
@@ -11,6 +16,7 @@ export const CONFIRM_NAME_LINE = { q: "Confirm the customer's name", say: 'Perfe
 // Admins change it in the scenario editor. Lines are named by their button.
 export const MENCHIES_STEPS = [
   { right: ["Confirm the customer's name"], wrong: ['Ask them to repeat the address', 'Mention the saved location'] },
+  { right: ['Confirm the best contact number'], wrong: ['Ask them to repeat the address', 'Mention the saved location'] },
   { right: ['Ask them to repeat the address'], wrong: ['Mention the saved location', 'Ask them to spell the street'] },
   { right: ['Read the address back'], wrong: ['Ask them to spell the street', 'Send the driver to the address'] },
   { right: ['Mention the saved location'], wrong: ['Send the driver to the address', 'Ask what they are wearing'] },
@@ -97,6 +103,7 @@ export const EXAMPLE_SCENARIOS = [
       // In the order Vee runs the call. Must-asks: the address, reading it back, the business, what they're wearing.
       questions: [
         CONFIRM_NAME_LINE,
+        CONTACT_LINE,
         { q: 'Ask them to repeat the address', say: 'Thank you, Marge. Can you repeat the address for me?',
           a: '14060 Southeast Petrovitsky Road, in Renton.', needed: true },
         { q: 'Read the address back', say: "Okay, that's 14060 Southeast Petrovitsky Road in Renton, Washington. Is that correct?",
@@ -168,6 +175,7 @@ export const EXAMPLE_SCENARIOS = [
       },
       questions: [
         { q: "Confirm the customer's name", say: 'Perfect, I was able to pull up your account. Am I speaking with Rick Sanchez?', a: 'Yes, this is Rick.', needed: true },
+        CONTACT_LINE,
         { q: 'Ask for the pickup address', say: 'Okay. What address will we be picking you up from?', a: "From home. Isn't that on my account?", needed: false },
         { q: 'Confirm the pickup is home', say: 'Will we be picking you up from your home at 7301 East Brainerd Road, Chattanooga, Tennessee 37421?', a: 'Yes, from home.', needed: true },
         { q: 'Ask for the drop-off address', say: 'Perfect. And where will we be taking you today? Can you give me the address?', a: "It's 1120 Houston Street, in Chattanooga.", needed: true },
@@ -207,6 +215,7 @@ EXAMPLE_SCENARIOS[0].data.steps = stepsFromNames(EXAMPLE_SCENARIOS[0].data.quest
 // the plain close is wrong here).
 export const TORIKAYA_STEPS = [
   { right: ["Confirm the customer's name"], wrong: ['Ask for the pickup address', 'Ask for the drop-off address'] },
+  { right: ['Confirm the best contact number'], wrong: ['Ask for the pickup address', 'Confirm the pickup is home'] },
   { right: ['Confirm the pickup is home'], wrong: ['Ask for the pickup address', 'Ask what they are wearing'] },
   { right: ['Ask for the drop-off address'], wrong: ['Ask what they are wearing', 'Send the driver to the address'] },
   { right: ['Read the address back'], wrong: ['Ask them to spell the street', 'Send the driver to the address'] },
