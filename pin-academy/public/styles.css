@@ -247,3 +247,7 @@ main:has(.ro) > p, main:has(.ro) > .row:not(.ro-top), main:has(.ro) > h2 { paddi
 .ro-driver { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; justify-content: center; }
 .car-pic { width: 200px; height: auto; border-radius: 8px; }
 .card.admins { border-top: 4px solid var(--yellow); }
+td.actions { white-space: nowrap; }
+td.actions .btn { margin: 2px 2px 2px 0; }
+.btn.danger { color: #c62828; border-color: #f0b4b4; }
+.btn.danger:hover { background: #fdecec; }

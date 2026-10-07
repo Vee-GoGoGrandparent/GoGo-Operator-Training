@@ -208,6 +208,50 @@ try {
   assert.equal((await admin('/api/admin/people')).data.find((p) => p.slack_id === 'UADMIN').practice_tries, 1, 'admin should still see their own tries');
   check("admins' own practice is visible to them but never counted in a scenario's stats");
 
+  // One link per class, ending with its name; it redirects into the page.
+  const jan = (await admin('/api/admin/classes', { name: 'January 2027' })).data.id;
+  assert.equal((await admin('/api/admin/classes')).data.find((c) => c.id === jan).slug, 'january-2027');
+  assert.equal((await admin('/api/admin/classes', { name: 'january-2027!' })).status, 409, 'two classes sharing one link');
+  const redir = await fetch(BASE + '/class/january-2027', { redirect: 'manual' });
+  assert.equal(redir.status, 302); assert.equal(redir.headers.get('location'), '/#class-january-2027');
+  // One form: Menchie's for practice, the set-only scenario for the test.
+  const g = await admin('/api/admin/tests/group', { name: 'January pins', classId: jan, practiceIds: [men.id], testIds: [hidden], passMeters: 15, passCount: 1, timeLimitMin: 20 });
+  assert.equal(g.status, 200);
+  const both = (await admin('/api/admin/tests')).data.filter((t) => t.grp === g.data.groupId);
+  assert.deepEqual(both.map((t) => [t.mode, t.status, t.classSlug]), [['practice', 'draft', 'january-2027'], ['test', 'draft', 'january-2027']]);
+  const fay = client();
+  await fay('/auth/dev?as=UFAY&name=Fay%20New', null, { raw: true });
+  let cp = (await fay('/api/class/january-2027/join', {})).data;
+  assert.equal(cp.user.className, 'January 2027'); assert.equal(cp.practice.length + cp.tests.length, 0, 'drafts showed on the class link');
+  for (const t of both) await admin(`/api/admin/tests/${t.id}/status`, { status: 'open' });
+  cp = (await fay('/api/class/january-2027/join', {})).data;
+  assert.deepEqual([cp.practice.map((s) => s.id), cp.tests.length], [[men.id], 1]);
+  assert.ok(!JSON.stringify(cp).includes('"answer":'), 'class page leaked an answer');
+  assert.equal((await ana('/api/class/january-2027/join', {})).status, 409, 'someone in another class joined');
+  assert.equal((await fay('/api/class/no-such-class/join', {})).status, 404);
+  check('class link ends with the class name; one form makes practice + test; drafts hidden; other class refused');
+
+  const testRow = both.find((t) => t.mode === 'test');
+  await fay(`/api/tests/${testRow.id}/start`, {});
+  assert.equal((await admin('/api/admin/tests/group', { groupId: g.data.groupId, name: 'January pins', classId: jan, practiceIds: [men.id], testIds: [men.id + 999] })).status, 400);
+  assert.equal((await admin('/api/admin/tests/group', { groupId: g.data.groupId, name: 'January pins', classId: jan, practiceIds: [], testIds: [men.id] })).status, 409, 'started test calls changed');
+  assert.equal((await admin('/api/admin/tests/group', { groupId: g.data.groupId, name: 'January pins v2', classId: jan, practiceIds: [], testIds: [hidden], timeLimitMin: 25 })).status, 200);
+  const after = (await admin('/api/admin/tests')).data.filter((t) => t.grp === g.data.groupId);
+  assert.deepEqual(after.map((t) => [t.mode, t.name, t.time_limit_min]), [['test', 'January pins v2', 25]], 'emptied practice not removed, or test not renamed');
+  check('edit: a started test keeps its calls (name and time can change); emptying practice removes it');
+
+  assert.equal((await admin(`/api/admin/tests/${testRow.id}/delete`, {})).status, 200);
+  assert.ok(!(await admin('/api/admin/tests')).data.some((t) => t.id === testRow.id), 'deleted test still listed');
+  assert.equal((await fay(`/api/tests/${testRow.id}/start`, {})).status, 404, 'deleted test still opens');
+  assert.equal((await fay('/api/class/january-2027/join', {})).data.tests.length, 0);
+  assert.equal((await ana(`/api/admin/tests/${testRow.id}/delete`, {})).status, 403);
+  const feb = (await admin('/api/admin/classes', { name: 'Feb typo' })).data.id;
+  await admin('/api/admin/tests/group', { name: 'Feb', classId: feb, practiceIds: [men.id], testIds: [] });
+  assert.equal((await admin(`/api/admin/classes/${feb}/delete`, {})).status, 200, 'class with only a practice set could not be deleted');
+  assert.ok(!(await admin('/api/admin/tests')).data.some((t) => t.class_id === feb), "deleted class's practice still listed");
+  assert.equal((await admin(`/api/admin/classes/${jan}/delete`, {})).status, 409, 'class with a trainee deleted');
+  check('delete a test (gone from list and link); a class with no trainees deletes with its practice/tests; with trainees it is refused');
+
   assert.ok((await (await fetch(BASE + '/')).text()).includes('GoGo Pin Academy'));
   check('page loads');
   console.log(`\nAll ${passed} checks passed.`);

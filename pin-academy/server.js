@@ -195,7 +195,7 @@ route('GET', '/api/tests', (req, res) => {
 
 function loadTestForTrainee(u, testId) {
   const t = one('SELECT * FROM tests WHERE id = ?', testId);
-  if (!t || t.status === 'draft' || (u.role !== 'admin' && t.class_id !== u.class_id)) fail(404, 'Test not found.');
+  if (!t || t.status === 'draft' || t.status === 'deleted' || (u.role !== 'admin' && t.class_id !== u.class_id)) fail(404, 'Test not found.');
   return t;
 }
 
@@ -251,12 +251,52 @@ route('POST', '/api/tests/(\\d+)/submit', (req, res, { m }) => {
 route('POST', '/api/tests/(\\d+)/join', (req, res, { m }) => {
   const u = needUser(req);
   const t = one('SELECT t.*, c.name class_name FROM tests t LEFT JOIN classes c ON c.id = t.class_id WHERE t.id = ?', num(m[1]));
-  if (!t || t.status === 'draft') fail(404, 'This link is not open yet. Ask your trainer.');
+  if (!t || t.status === 'draft' || t.status === 'deleted') fail(404, 'This link is not open yet. Ask your trainer.');
   if (u.role !== 'admin') {
     if (!u.class_id) run('UPDATE users SET class_id = ? WHERE slack_id = ?', t.class_id, u.slack_id);
     else if (u.class_id !== t.class_id) fail(409, `This link is for the ${t.class_name} class, and you are in another class. Ask your trainer.`);
   }
   send(res, 200, { id: t.id, mode: t.mode, name: t.name, user: publicUser(one('SELECT * FROM users WHERE slack_id = ?', u.slack_id)) });
+});
+
+// ── class links ────────────────────────────────────────────────────────
+// Each class has ONE link that ends with its name: /class/october-2026. Opening it joins the class (if you have none)
+// and shows that class's open practice and tests. The link follows the class name, so renaming a class changes it.
+export const slugify = (name) => String(name || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '')
+  .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'class';
+const classBySlug = (slug) => all('SELECT * FROM classes').find((c) => slugify(c.name) === slug);
+
+route('GET', '/class/([a-z0-9-]+)', (req, res, { m }) => {
+  res.writeHead(302, { Location: `/#class-${m[1]}` });
+  res.end();
+});
+
+route('POST', '/api/class/([a-z0-9-]+)/join', (req, res, { m }) => {
+  const u = needUser(req);
+  const c = classBySlug(m[1]);
+  if (!c) fail(404, 'This class link does not work any more. Ask your trainer for the new one.');
+  if (u.role !== 'admin') {
+    if (u.class_id && u.class_id !== c.id) fail(409, `This link is for the ${c.name} class, and you are in another class. Ask your trainer.`);
+    if (!u.class_id) {
+      if (!c.active) fail(409, `The ${c.name} class is closed. Ask your trainer.`);
+      run('UPDATE users SET class_id = ? WHERE slack_id = ?', c.id, u.slack_id);
+    }
+  }
+  const done = Object.fromEntries(all(`SELECT sa.scenario_id, MAX(sa.passed) ok, COUNT(*) n FROM scenario_answers sa JOIN attempts at ON at.id = sa.attempt_id
+    WHERE at.slack_id = ? AND at.test_id IS NULL GROUP BY sa.scenario_id`, u.slack_id).map((r) => [r.scenario_id, r]));
+  const sets = all(`SELECT * FROM tests WHERE class_id = ? AND mode = 'practice' AND status = 'open' ORDER BY id`, c.id);
+  const seen = new Set();
+  const practice = sets.flatMap((t) => testScenarios(t.id)).filter((s) => !seen.has(s.id) && seen.add(s.id))
+    .map((s) => ({ ...publicScenario(s), tries: done[s.id]?.n || 0, gotRight: !!done[s.id]?.ok }));
+  const tests = all(`SELECT * FROM tests WHERE class_id = ? AND mode = 'test' AND status IN ('open','closed') ORDER BY id DESC`, c.id).map((t) => {
+    let att = one('SELECT * FROM attempts WHERE slack_id = ? AND test_id = ?', u.slack_id, t.id);
+    if (att) att = autoSubmitIfLate(att);
+    const n = one('SELECT COUNT(*) n FROM test_scenarios WHERE test_id = ?', t.id).n;
+    return { id: t.id, name: t.name, status: t.status, questions: n, passMeters: t.pass_meters, passCount: t.pass_count,
+      timeLimitMin: t.time_limit_min, state: !att ? 'not started' : att.submitted_at ? 'done' : 'in progress' };
+  });
+  send(res, 200, { class: { id: c.id, name: c.name, slug: slugify(c.name) }, practice, tests,
+    user: publicUser(one('SELECT * FROM users WHERE slack_id = ?', u.slack_id)) });
 });
 
 route('GET', '/api/tests/(\\d+)/set', (req, res, { m }) => {
@@ -330,8 +370,14 @@ route('POST', '/api/admin/scenarios/examples', (req, res) => {
 // ── admins: classes and people ─────────────────────────────────────────
 route('GET', '/api/admin/classes', (req, res) => {
   needAdmin(req);
-  send(res, 200, all(`SELECT c.*, (SELECT COUNT(*) FROM users u WHERE u.class_id = c.id) people FROM classes c ORDER BY id DESC`));
+  send(res, 200, all(`SELECT c.*, (SELECT COUNT(*) FROM users u WHERE u.class_id = c.id) people FROM classes c ORDER BY id DESC`)
+    .map((c) => ({ ...c, slug: slugify(c.name) })));
 });
+// Two classes can't share a link: "October 2026" and "october-2026" would both be /class/october-2026.
+function linkTaken(name, exceptId = 0) {
+  const other = all('SELECT id, name FROM classes WHERE id != ?', exceptId).find((c) => slugify(c.name) === slugify(name));
+  if (other) fail(409, `A class with that name already exists ("${other.name}").`);
+}
 route('POST', '/api/admin/classes', async (req, res) => {
   needAdmin(req);
   const b = await readJson(req);
@@ -341,24 +387,30 @@ route('POST', '/api/admin/classes', async (req, res) => {
     if ('name' in b) {
       const nm = str(b.name, 80);
       if (!nm) fail(400, 'The class needs a name.');
-      if (one('SELECT id FROM classes WHERE name = ? AND id != ?', nm, num(b.id))) fail(409, 'A class with that name already exists.');
+      linkTaken(nm, num(b.id));
       run('UPDATE classes SET name = ? WHERE id = ?', nm, num(b.id));
     }
     return send(res, 200, { ok: true });
   }
   const name = str(b.name, 80);
   if (!name) fail(400, 'Name the class, e.g. "October 2026".');
-  if (one('SELECT id FROM classes WHERE name = ?', name)) fail(409, 'A class with that name already exists.');
+  linkTaken(name);
   send(res, 200, { id: Number(run('INSERT INTO classes (name) VALUES (?)', name).lastInsertRowid) });
 });
 
-// Only an empty class can be deleted (no people, no practice sets or tests), so no results are ever lost.
+// A class with people in it can't be deleted (move them first). Deleting an empty class also deletes its practice
+// sets and tests (status 'deleted': hidden everywhere, any results stay in the database).
 route('POST', '/api/admin/classes/(\\d+)/delete', (req, res, { m }) => {
   needAdmin(req);
   const id = num(m[1]);
-  if (one('SELECT 1 FROM users WHERE class_id = ?', id)) fail(409, 'People are in this class. Move them first, or close the class instead.');
-  if (one('SELECT 1 FROM tests WHERE class_id = ?', id)) fail(409, 'This class has practice sets or tests. Close the class instead.');
-  run('DELETE FROM classes WHERE id = ?', id);
+  const c = one('SELECT * FROM classes WHERE id = ?', id);
+  if (!c) fail(404, 'Class not found.');
+  if (one(`SELECT 1 FROM users WHERE class_id = ? AND role = 'trainee'`, id)) fail(409, 'Trainees are in this class. Move them to another class first, or close the class instead.');
+  tx(() => {
+    run(`UPDATE tests SET status = 'deleted', deleted_class_name = ?, class_id = NULL WHERE class_id = ?`, c.name, id);
+    run('UPDATE users SET class_id = NULL WHERE class_id = ?', id); // admins only, by the check above
+    run('DELETE FROM classes WHERE id = ?', id);
+  });
   send(res, 200, { ok: true });
 });
 
@@ -386,13 +438,78 @@ route('POST', '/api/admin/people', async (req, res) => {
 // ── admins: tests ──────────────────────────────────────────────────────
 route('GET', '/api/admin/tests', (req, res) => {
   needAdmin(req);
-  send(res, 200, all(`SELECT t.*, c.name class_name,
+  send(res, 200, all(`SELECT t.*, c.name class_name, COALESCE(t.group_id, t.id) grp,
     (SELECT COUNT(*) FROM test_scenarios ts WHERE ts.test_id = t.id) questions,
+    (SELECT COUNT(*) FROM attempts a WHERE a.test_id = t.id) started,
     (SELECT COUNT(*) FROM attempts a WHERE a.test_id = t.id AND a.submitted_at IS NOT NULL) handed_in,
     (SELECT COUNT(DISTINCT a.slack_id) FROM scenario_answers sa JOIN attempts a ON a.id = sa.attempt_id JOIN test_scenarios ts ON ts.scenario_id = sa.scenario_id
       JOIN users u ON u.slack_id = a.slack_id WHERE ts.test_id = t.id AND a.test_id IS NULL AND u.class_id = t.class_id) practised
-    FROM tests t LEFT JOIN classes c ON c.id = t.class_id ORDER BY t.id DESC`)
-    .map((t) => ({ ...t, scenarioIds: all('SELECT scenario_id FROM test_scenarios WHERE test_id = ? ORDER BY position', t.id).map((r) => r.scenario_id) })));
+    FROM tests t LEFT JOIN classes c ON c.id = t.class_id WHERE t.status != 'deleted' ORDER BY grp DESC, t.mode, t.id`)
+    .map((t) => ({ ...t, classSlug: t.class_name ? slugify(t.class_name) : null,
+      scenarioIds: all('SELECT scenario_id FROM test_scenarios WHERE test_id = ? ORDER BY position', t.id).map((r) => r.scenario_id) })));
+});
+
+// One form makes a class's practice set AND its test: each scenario is marked Practice, Test, or not used.
+// Practice can be changed any time. A test's calls can't change once someone has started it (name, time and
+// pass mark still can). New ones start as drafts, so nothing shows on the class link until it is opened.
+route('POST', '/api/admin/tests/group', async (req, res) => {
+  const u = needAdmin(req);
+  const b = await readJson(req);
+  const name = str(b.name, 120);
+  const ids = (x) => (Array.isArray(x) ? [...new Set(x.map(num))] : []);
+  const practiceIds = ids(b.practiceIds);
+  const testIds = ids(b.testIds).filter((id) => !practiceIds.includes(id));
+  const classId = num(b.classId);
+  if (!name) fail(400, 'Give it a name, e.g. "October 2026 pins".');
+  if (!one('SELECT id FROM classes WHERE id = ?', classId)) fail(400, 'Pick the class this is for.');
+  if (!practiceIds.length && !testIds.length) fail(400, 'Mark at least one scenario as Practice or Test.');
+  for (const id of [...practiceIds, ...testIds]) if (!one('SELECT id FROM scenarios WHERE id = ? AND archived = 0', id)) fail(400, 'One of the scenarios no longer exists.');
+  const passMeters = Math.min(200, Math.max(1, num(b.passMeters) || 15));
+  const passCount = Math.min(Math.max(testIds.length, 1), Math.max(1, Math.round(num(b.passCount) || testIds.length)));
+  const minutes = Math.min(240, Math.max(1, Math.round(num(b.timeLimitMin) || 20)));
+  const groupId = num(b.groupId) || 0;
+  const rows = groupId ? all(`SELECT * FROM tests WHERE COALESCE(group_id, id) = ? AND status != 'deleted'`, groupId) : [];
+  if (groupId && !rows.length) fail(404, 'Not found. Reload the page.');
+  const sorted = (a) => JSON.stringify([...a].sort((x, y) => x - y));
+  const sameList = (t, list) => sorted(all('SELECT scenario_id FROM test_scenarios WHERE test_id = ?', t.id).map((r) => r.scenario_id)) === sorted(list);
+  const out = tx(() => {
+    let grp = groupId;
+    const save = (mode, list) => {
+      const cur = rows.find((t) => t.mode === mode);
+      const started = cur && one('SELECT 1 FROM attempts WHERE test_id = ?', cur.id);
+      if (!list.length) {
+        if (!cur) return;
+        if (started) fail(409, 'People have already taken this test, so it can\'t be emptied. Delete it from the list instead.');
+        run(`UPDATE tests SET status = 'deleted' WHERE id = ?`, cur.id);
+        return;
+      }
+      if (cur) {
+        if (started && !sameList(cur, list)) fail(409, 'People have already started this test, so its calls can\'t change. Make a new test instead.');
+        run('UPDATE tests SET name=?, class_id=?, pass_meters=?, pass_count=?, time_limit_min=? WHERE id = ?', name, classId, passMeters, passCount, minutes, cur.id);
+        if (started) return;
+        run('DELETE FROM test_scenarios WHERE test_id = ?', cur.id);
+        list.forEach((sid, i) => run('INSERT INTO test_scenarios (test_id, scenario_id, position) VALUES (?, ?, ?)', cur.id, sid, i));
+        return;
+      }
+      const id = Number(run('INSERT INTO tests (name, class_id, pass_meters, pass_count, time_limit_min, mode, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        name, classId, passMeters, passCount, minutes, mode, u.slack_id).lastInsertRowid);
+      if (!grp) grp = id;
+      run('UPDATE tests SET group_id = ? WHERE id = ?', grp, id);
+      list.forEach((sid, i) => run('INSERT INTO test_scenarios (test_id, scenario_id, position) VALUES (?, ?, ?)', id, sid, i));
+    };
+    save('practice', practiceIds);
+    save('test', testIds);
+    return grp;
+  });
+  send(res, 200, { groupId: out });
+});
+
+// Delete = hidden everywhere (list, class link, results). Answers already given stay in the database.
+route('POST', '/api/admin/tests/(\\d+)/delete', (req, res, { m }) => {
+  needAdmin(req);
+  if (!one(`SELECT id FROM tests WHERE id = ? AND status != 'deleted'`, num(m[1]))) fail(404, 'Not found. Reload the page.');
+  run(`UPDATE tests SET status = 'deleted' WHERE id = ?`, num(m[1]));
+  send(res, 200, { ok: true });
 });
 
 route('POST', '/api/admin/tests', async (req, res) => {
@@ -430,7 +547,7 @@ route('POST', '/api/admin/tests/(\\d+)/status', async (req, res, { m }) => {
   needAdmin(req);
   const { status } = await readJson(req);
   if (!['draft', 'open', 'closed'].includes(status)) fail(400, 'Unknown status.');
-  const t = one('SELECT * FROM tests WHERE id = ?', num(m[1]));
+  const t = one(`SELECT * FROM tests WHERE id = ? AND status != 'deleted'`, num(m[1]));
   if (!t) fail(404, 'Test not found.');
   if (status === 'draft' && one('SELECT id FROM attempts WHERE test_id = ?', t.id)) fail(409, 'People have already started this test, so it cannot go back to draft.');
   run('UPDATE tests SET status = ? WHERE id = ?', status, t.id);

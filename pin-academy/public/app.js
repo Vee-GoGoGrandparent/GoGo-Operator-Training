@@ -223,8 +223,8 @@ async function boot() {
   if (err) { history.replaceState(null, '', '/'); toast(err, true); }
   const hash = location.hash.slice(1) || recall() || '';
   if (!ME) { if (hash) remember(hash); return drawLogin(me); }
-  // A class link (#t-12) puts someone with no class into that class, then opens it.
-  if (/^t-\d+$/.test(hash)) return render(hash);
+  // A class link (/class/october-2026 → #class-october-2026, or an older #t-12) puts someone with no class into that class.
+  if (/^(t-\d+|class-[a-z0-9-]+)$/.test(hash)) return render(hash);
   if (!ME.classId && ME.role !== 'admin') return drawClassPicker();
   render(hash || (ME.role === 'admin' ? 'a-scenarios' : 'practice'));
 }
@@ -291,6 +291,8 @@ async function render(id) {
       drawShell(j.mode === 'practice' ? 'practice' : 'tests');
       return j.mode === 'practice' ? practiceSet(j.id) : takeTest(j.id);
     }
+    const cls = /^class-([a-z0-9-]+)$/.exec(id || '');
+    if (cls) return classPage(cls[1]);
     if (!VIEWS[id] || (id.startsWith('a-') && ME.role !== 'admin')) id = ME.role === 'admin' ? 'a-scenarios' : 'practice';
     drawShell(id);
     await VIEWS[id]();
@@ -624,6 +626,30 @@ VIEWS.practice = async () => {
         h('span', { class: 'tag' }, s.category), h('b', {}, s.title), h('span', { class: 'small muted' }, s.stops.map((x) => x.kind === 'dropoff' ? 'drop-off' : 'pickup').join(' + ')))))]));
 };
 
+// The class link's page: this class's practice calls and its tests, all in one place.
+async function classPage(slug) {
+  const d = await api(`/api/class/${slug}/join`, {});
+  ME = d.user;
+  drawShell('practice');
+  const back = `class-${slug}`;
+  mount(h('h1', {}, d.class.name),
+    h('p', { class: 'lead' }, 'Your class page. Practice as many times as you like. A test is timed, and you get one go.'),
+    h('h2', {}, 'Practice'),
+    !d.practice.length ? h('div', { class: 'card muted' }, 'No practice is open for this class yet.')
+      : h('div', { class: 'tiles' }, d.practice.map((s, i) => h('button', { class: 'tile', style: catColour(s.category), onclick: () => practiceOne(d.practice, i, back) },
+        h('span', { class: 'tag' }, s.category), h('b', {}, s.title),
+        h('span', { class: `small ${s.gotRight ? '' : 'muted'}` }, s.gotRight ? '✓ Got it right' : s.tries ? `${s.tries} tries so far` : 'Not tried yet')))),
+    h('h2', {}, 'Tests'),
+    !d.tests.length ? h('div', { class: 'card muted' }, 'No test is open for this class right now.') : null,
+    d.tests.map((t) => h('div', { class: 'card row' },
+      h('div', { class: 'grow' }, h('b', {}, t.name), h('div', { class: 'small muted' },
+        `${t.questions} calls · ${t.timeLimitMin} min · pass = ${t.passCount} of ${t.questions} right (pins within ${t.passMeters} m, right questions, clear note)`)),
+      h('span', { class: `tag ${t.state === 'done' ? 'pass' : ''}` }, t.state),
+      t.state === 'done' ? h('button', { class: 'btn ghost', onclick: () => takeTest(t.id) }, 'See results')
+        : t.status === 'open' ? h('button', { class: 'btn orange', onclick: () => takeTest(t.id) }, t.state === 'in progress' ? 'Continue' : 'Start test')
+        : h('span', { class: 'muted small' }, 'Closed'))));
+}
+
 async function practiceSet(id) {
   const set = await api(`/api/tests/${id}/set`);
   mount(h('h1', {}, set.name), h('p', { class: 'lead' }, 'A practice set from your trainer. Do them in any order, as many times as you like.'),
@@ -861,52 +887,78 @@ function editScenario(existing) {
 }
 
 // ── admins: practice sets & tests ────────────────────────────────────
-const linkFor = (t) => `${location.origin}/#t-${t.id}`;
-const copyLink = (t) => safe(async () => { await navigator.clipboard.writeText(linkFor(t)); toast('Link copied. Send it to the class.'); });
+// Each class has ONE link, ending with its name: …/class/october-2026. It shows that class's open practice and tests.
+const classLink = (slug) => `${location.origin}/class/${slug}`;
+const copyClassLink = (slug) => safe(async () => { await navigator.clipboard.writeText(classLink(slug)); toast('Class link copied. Send it to the class.'); });
 
 VIEWS['a-tests'] = async () => {
   const [tests, classes] = await Promise.all([api('/api/admin/tests'), api('/api/admin/classes')]);
   const setStatus = (t, status) => safe(async () => { await api(`/api/admin/tests/${t.id}/status`, { status }); go('a-tests'); });
+  const del = (t) => safe(async () => {
+    const kind = t.mode === 'practice' ? 'practice set' : 'test';
+    const warn = t.mode === 'test' && t.started ? `\n\n${t.started} ${t.started === 1 ? 'person has' : 'people have'} started it. Their results will no longer show on Results.` : '';
+    if (!confirm(`Delete the ${kind} "${t.name}" (${t.class_name || 'no class'})?${warn}`)) return;
+    await api(`/api/admin/tests/${t.id}/delete`, {}); toast('Deleted'); go('a-tests');
+  });
   mount(h('div', { class: 'row' }, h('h1', { class: 'grow' }, 'Practice & tests'),
-      h('button', { class: 'btn ghost', onclick: () => editTest(null, classes, 'practice') }, '+ New practice set'),
-      h('button', { class: 'btn orange', onclick: () => editTest(null, classes, 'test') }, '+ New test')),
-    h('p', { class: 'lead' }, 'Each practice set or test is for one class and has its own link. Send the link: anyone who opens it joins that class, and People & classes shows who did what. A practice set can be done any number of times; a test is timed, one go.'),
+      h('button', { class: 'btn orange', onclick: () => editGroup(null, tests, classes) }, '+ New practice & test')),
+    h('p', { class: 'lead' }, 'Pick a class and mark each scenario as Practice or Test. Each class has one link that ends with its name. Whoever opens it joins the class and sees its open practice and tests. Practice can be done any number of times; a test is timed, one go.'),
     h('div', { class: 'card' }, !tests.length ? h('p', { class: 'muted' }, 'Nothing yet.') :
       h('table', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Kind'), h('th', {}, 'Class'), h('th', {}, 'Done by'), h('th', {}, 'Status'), h('th', {}, '')),
         tests.map((t) => h('tr', {}, h('td', {}, h('b', {}, t.name), h('div', { class: 'small muted' }, t.mode === 'practice' ? `${t.questions} calls` : `${t.pass_count} of ${t.questions} right · ${t.pass_meters} m · ${t.time_limit_min} min`)),
-          h('td', {}, h('span', { class: 'tag' }, t.mode === 'practice' ? 'Practice set' : 'Test')), h('td', {}, t.class_name || '–'),
+          h('td', {}, h('span', { class: 'tag' }, t.mode === 'practice' ? 'Practice' : 'Test')),
+          h('td', {}, t.class_name || '–', t.classSlug ? h('div', { class: 'small muted' }, `/class/${t.classSlug}`) : null),
           h('td', {}, t.mode === 'practice' ? `${t.practised} practised` : `${t.handed_in} handed in`),
-          h('td', {}, h('span', { class: `tag ${t.status === 'open' ? 'pass' : ''}` }, t.status)),
-          h('td', {}, t.status !== 'draft' ? h('button', { class: 'btn ghost small', onclick: copyLink(t) }, 'Copy link') : null, ' ',
-            t.status === 'draft' ? [h('button', { class: 'btn ghost small', onclick: () => editTest(t, classes, t.mode) }, 'Edit'), ' ', h('button', { class: 'btn small', onclick: setStatus(t, 'open') }, 'Open')]
-            : t.status === 'open' ? h('button', { class: 'btn ghost small', onclick: setStatus(t, 'closed') }, 'Close')
-            : h('button', { class: 'btn ghost small', onclick: setStatus(t, 'open') }, 'Re-open')))))));
+          h('td', {}, h('span', { class: `tag ${t.status === 'open' ? 'pass' : ''}` }, t.status === 'draft' ? 'draft (hidden)' : t.status)),
+          h('td', { class: 'actions' },
+            t.classSlug ? h('button', { class: 'btn ghost small', onclick: copyClassLink(t.classSlug) }, 'Copy class link') : null,
+            h('button', { class: 'btn ghost small', onclick: () => editGroup(t, tests, classes) }, 'Edit'),
+            t.status === 'open' ? h('button', { class: 'btn ghost small', onclick: setStatus(t, 'closed') }, 'Close')
+              : h('button', { class: 'btn small', onclick: setStatus(t, 'open') }, 'Open'),
+            h('button', { class: 'btn ghost small danger', onclick: del(t) }, 'Delete')))))));
 };
 
-async function editTest(t, classes, mode) {
+// One form for a class's practice AND test: each scenario is Practice, Test, or not used.
+async function editGroup(t, tests, classes) {
   const list = await api('/api/admin/scenarios');
-  const chosen = new Set(t?.scenarioIds || []);
-  const isTest = mode !== 'practice';
-  const name = h('input', { type: 'text', value: t?.name || '', placeholder: isTest ? 'e.g. October 2026 pin test' : 'e.g. October 2026 pin practice' });
-  const cls = h('select', {}, h('option', { value: '' }, 'Choose…'), classes.filter((c) => c.active).map((c) => h('option', { value: c.id, selected: c.id === t?.class_id }, c.name)));
-  const meters = h('input', { type: 'number', min: 1, max: 200, value: t?.pass_meters ?? 15 });
-  const count = h('input', { type: 'number', min: 1, value: t?.pass_count ?? 4 });
-  const mins = h('input', { type: 'number', min: 1, max: 240, value: t?.time_limit_min ?? 30 });
-  const n = h('span', { class: 'tag' });
-  const upd = () => (n.textContent = `${chosen.size} chosen`);
+  const grp = t ? t.grp : null;
+  const mine = grp ? tests.filter((x) => x.grp === grp) : [];
+  const pr = mine.find((x) => x.mode === 'practice');
+  const te = mine.find((x) => x.mode === 'test');
+  const role = new Map([...(pr?.scenarioIds || []).map((id) => [id, 'practice']), ...(te?.scenarioIds || []).map((id) => [id, 'test'])]);
+  const locked = te && te.started > 0; // test calls can't change once someone started
+  const base = te || pr;
+  const name = h('input', { type: 'text', value: base?.name || '', placeholder: 'e.g. October 2026 pins' });
+  const cls = h('select', {}, h('option', { value: '' }, 'Choose…'), classes.filter((c) => c.active || c.id === base?.class_id).map((c) => h('option', { value: c.id, selected: c.id === base?.class_id }, c.name)));
+  const meters = h('input', { type: 'number', min: 1, max: 200, value: te?.pass_meters ?? 15 });
+  const count = h('input', { type: 'number', min: 1, value: te?.pass_count ?? 4 });
+  const mins = h('input', { type: 'number', min: 1, max: 240, value: te?.time_limit_min ?? 30 });
+  const tally = h('span', { class: 'tag' });
+  const upd = () => { const v = [...role.values()]; tally.textContent = `${v.filter((x) => x === 'practice').length} practice · ${v.filter((x) => x === 'test').length} test`; };
   upd();
-  mount(h('button', { class: 'btn ghost small', onclick: () => go('a-tests') }, '← Practice & tests'), h('h1', {}, `${t ? 'Edit' : 'New'} ${isTest ? 'test' : 'practice set'}`),
-    h('div', { class: 'card' }, h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Name'), name), h('div', {}, h('label', {}, 'Class'), cls)),
-      isTest ? [h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'A pin counts as right within (metres)'), meters),
-        h('div', {}, h('label', {}, 'To pass, calls right needed'), count)), h('label', {}, 'Time limit (minutes)'), mins] : null),
-    h('div', { class: 'card' }, h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Scenarios'), n),
+  const linkNote = h('div', { class: 'small muted' });
+  const showLink = () => { const c = classes.find((k) => k.id === Number(cls.value)); linkNote.textContent = c ? `Class link: ${classLink(c.slug)}` : ''; };
+  cls.onchange = showLink; showLink();
+  mount(h('button', { class: 'btn ghost small', onclick: () => go('a-tests') }, '← Practice & tests'), h('h1', {}, t ? 'Edit practice & test' : 'New practice & test'),
+    h('div', { class: 'card' }, h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Name'), name), h('div', {}, h('label', {}, 'Class'), cls, linkNote)),
+      h('h3', {}, 'Test settings'),
+      h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'A pin counts as right within (metres)'), meters),
+        h('div', {}, h('label', {}, 'To pass, calls right needed'), count)), h('label', {}, 'Time limit (minutes)'), mins),
+    h('div', { class: 'card' }, h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Scenarios'), tally),
+      locked ? h('p', { class: 'tag warn' }, `${te.started} ${te.started === 1 ? 'person has' : 'people have'} started the test, so its calls are locked. Practice can still change.`) : null,
       !list.length ? h('p', { class: 'muted' }, 'Add scenarios first.') :
-      list.map((s) => { const cb = h('input', { type: 'checkbox', checked: chosen.has(s.id), onchange: () => { cb.checked ? chosen.add(s.id) : chosen.delete(s.id); upd(); } });
-        return h('label', { class: 'check' }, cb, `${s.title} `, h('span', { class: 'small muted' }, `· ${s.category}`)); })),
+      h('table', {}, h('tr', {}, h('th', {}, 'Scenario'), h('th', {}, 'Type'), h('th', {}, 'Use it for')),
+        list.map((s) => {
+          const was = role.get(s.id) || '';
+          const sel = h('select', { disabled: locked && was === 'test', onchange: () => { sel.value ? role.set(s.id, sel.value) : role.delete(s.id); upd(); } },
+            [['', 'Not used'], ['practice', 'Practice'], ['test', 'Test']].map(([v, l]) => h('option', { value: v, selected: v === was, disabled: locked && v === 'test' && was !== 'test' }, l)));
+          return h('tr', {}, h('td', {}, h('b', {}, s.title)), h('td', { class: 'small muted' }, s.category), h('td', {}, sel));
+        }))),
     h('button', { class: 'btn', onclick: safe(async () => {
-      await api('/api/admin/tests', { id: t?.id, mode, name: name.value, classId: Number(cls.value), scenarioIds: [...chosen],
+      const pick = (k) => list.map((s) => s.id).filter((id) => role.get(id) === k);
+      await api('/api/admin/tests/group', { groupId: grp, name: name.value, classId: Number(cls.value), practiceIds: pick('practice'), testIds: pick('test'),
         passMeters: Number(meters.value), passCount: Number(count.value), timeLimitMin: Number(mins.value) });
-      toast('Saved as a draft. Open it to get its link.'); go('a-tests');
+      toast(t ? 'Saved' : 'Saved as drafts. Press Open on each one when the class should see it.'); go('a-tests');
     }) }, 'Save'));
 }
 
@@ -914,9 +966,18 @@ async function editTest(t, classes, mode) {
 VIEWS['a-results'] = async () => {
   const tests = (await api('/api/admin/tests')).filter((t) => t.status !== 'draft' && t.mode !== 'practice');
   const host = h('div');
-  const sel = h('select', { onchange: () => show(Number(sel.value)) }, tests.map((t) => h('option', { value: t.id }, `${t.name} · ${t.class_name || ''}`)));
-  mount(h('h1', {}, 'Test results'), h('p', { class: 'lead' }, 'Practice progress is on People & classes.'),
-    !tests.length ? h('div', { class: 'card muted' }, 'Results appear here once a test is opened.') : [sel, h('p'), host]);
+  // Pick the class first, then (if the class has more than one) the test.
+  const classNames = [...new Map(tests.map((t) => [t.class_id, t.class_name || 'No class'])).entries()];
+  const testSel = h('select', { onchange: () => show(Number(testSel.value)) });
+  const classSel = h('select', { onchange: () => pickClass(Number(classSel.value)) }, classNames.map(([id, nm]) => h('option', { value: id }, nm)));
+  function pickClass(classId) {
+    const mine = tests.filter((t) => t.class_id === classId);
+    testSel.replaceChildren(...mine.map((t) => h('option', { value: t.id }, t.name)));
+    if (mine.length) show(mine[0].id);
+  }
+  mount(h('h1', {}, 'Test results'), h('p', { class: 'lead' }, 'Pick a class to see how its people did. Practice progress is on People & classes.'),
+    !tests.length ? h('div', { class: 'card muted' }, 'Results appear here once a test is opened.')
+      : [h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Class'), classSel), h('div', {}, h('label', {}, 'Test'), testSel)), h('p'), host]);
   async function show(id) {
     const r = await api(`/api/admin/results/${id}`);
     const done = r.rows.filter((x) => x.state === 'done');
@@ -938,7 +999,7 @@ VIEWS['a-results'] = async () => {
           r.perScenario.map((s) => h('tr', {}, h('td', {}, s.title), h('td', {}, s.answered ? `${s.passed} of ${s.answered}` : '–'),
             h('td', {}, s.pinWrong), h('td', {}, s.questionsMissed), h('td', {}, s.noteWrong))))));
   }
-  if (tests.length) show(tests[0].id);
+  if (tests.length) pickClass(classNames[0][0]);
 };
 
 // ── admins: people & classes ─────────────────────────────────────────
@@ -947,23 +1008,28 @@ VIEWS['a-people'] = async () => {
   const newName = h('input', { type: 'text', placeholder: 'e.g. October 2026' });
   const classCard = (c) => {
     const nm = h('input', { type: 'text', value: c.name });
-    const links = tests.filter((t) => t.class_id === c.id && t.status !== 'draft');
+    const shown = tests.filter((t) => t.class_id === c.id && t.status === 'open');
     return h('div', { class: 'card' },
       h('div', { class: 'row' }, h('div', { class: 'grow' }, nm),
         h('button', { class: 'btn ghost small', onclick: safe(async () => { await api('/api/admin/classes', { id: c.id, name: nm.value }); toast('Renamed'); go('a-people'); }) }, 'Rename'),
         h('span', { class: `tag ${c.active ? 'pass' : ''}` }, c.active ? 'open' : 'closed'),
         h('button', { class: 'btn ghost small', onclick: safe(async () => { await api('/api/admin/classes', { id: c.id, active: !c.active }); go('a-people'); }) }, c.active ? 'Close' : 'Re-open'),
-        h('button', { class: 'btn ghost small', onclick: safe(async () => { if (!confirm(`Delete the class "${c.name}"?`)) return; await api(`/api/admin/classes/${c.id}/delete`, {}); toast('Deleted'); go('a-people'); }) }, 'Delete')),
+        h('button', { class: 'btn ghost small danger', onclick: safe(async () => {
+          const own = tests.filter((t) => t.class_id === c.id);
+          if (!confirm(`Delete the class "${c.name}"?${own.length ? `\n\nThis also deletes its ${own.length} practice set(s)/test(s): ${own.map((t) => t.name).join(', ')}.` : ''}`)) return;
+          await api(`/api/admin/classes/${c.id}/delete`, {}); toast('Deleted'); go('a-people'); }) }, 'Delete')),
       h('div', { class: 'small muted' }, `${c.people} people`),
-      links.length ? h('div', { class: 'row', style: 'margin-top:8px' }, links.map((t) => h('button', { class: 'btn ghost small', onclick: copyLink(t) }, `Copy link: ${t.name} (${t.mode === 'practice' ? 'practice' : 'test'})`)))
-        : h('div', { class: 'small muted' }, 'No practice set or test yet. Make one on Practice & tests to get a link.'));
+      h('div', { class: 'row', style: 'margin-top:8px' }, h('code', { class: 'small' }, classLink(c.slug)),
+        h('button', { class: 'btn ghost small', onclick: copyClassLink(c.slug) }, 'Copy class link')),
+      h('div', { class: 'small muted' }, shown.length ? `Open on the link now: ${shown.map((t) => `${t.name} (${t.mode === 'practice' ? 'practice' : 'test'})`).join(', ')}`
+        : 'Nothing is open on this link yet. Make practice and a test on Practice & tests, then press Open.'));
   };
   // Admins and trainers sit apart from the classes: their own tries are visible here but never mixed into a class.
   const admins = people.filter((p) => p.role === 'admin');
   const byClass = {};
   people.filter((p) => p.role !== 'admin').forEach((p) => (byClass[p.class_name || 'No class yet'] ||= []).push(p));
   mount(h('h1', {}, 'People & classes'),
-    h('p', { class: 'lead' }, 'Make a class, then make a practice set and a test for it on Practice & tests. Each has a link: whoever opens it joins the class. A class can be deleted only while it is empty.'),
+    h('p', { class: 'lead' }, 'Make a class, then its practice and test on Practice & tests. Each class has one link that ends with its name: whoever opens it joins the class. A class with trainees in it can’t be deleted (move them first).'),
     h('div', { class: 'card' }, h('h2', {}, 'Add a class'), h('div', { class: 'row' }, h('div', { class: 'grow' }, newName),
       h('button', { class: 'btn', onclick: safe(async () => { await api('/api/admin/classes', { name: newName.value }); go('a-people'); }) }, 'Add class'))),
     classes.map(classCard),

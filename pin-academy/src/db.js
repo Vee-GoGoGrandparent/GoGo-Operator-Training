@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS tests (
   pass_meters REAL NOT NULL DEFAULT 15,
   pass_count INTEGER NOT NULL DEFAULT 8,
   time_limit_min INTEGER NOT NULL DEFAULT 20,
-  status TEXT NOT NULL DEFAULT 'draft',          -- draft | open | closed
+  status TEXT NOT NULL DEFAULT 'draft',          -- draft | open | closed | deleted
   created_by TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -128,6 +128,11 @@ function addColumn(table, column, ddl) {
 // Every save bumps the version; a save from a page opened before the last change is refused (no silent overwrite).
 addColumn('scenarios', 'version', 'version INTEGER NOT NULL DEFAULT 1');
 addColumn('tests', 'mode', "mode TEXT NOT NULL DEFAULT 'test'"); // 'test' = timed, one go | 'practice' = a practice set for a class
+// A practice set and a test made together in one form share a group_id (the first one's id), so Edit opens both.
+// Deleting a practice set or test sets status = 'deleted': it disappears everywhere, but its results stay in the database.
+addColumn('tests', 'group_id', 'group_id INTEGER');
+// When a class is deleted its (deleted) tests let go of it; the class name is kept here so old answers still say whose they were.
+addColumn('tests', 'deleted_class_name', 'deleted_class_name TEXT');
 
 export const one = (sql, ...p) => db.prepare(sql).get(...p);
 export const all = (sql, ...p) => db.prepare(sql).all(...p);
