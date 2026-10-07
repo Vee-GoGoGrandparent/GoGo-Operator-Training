@@ -161,3 +161,59 @@ details summary { cursor: pointer; }
 .ac-item:hover { background: #f3f3f8; }
 .ac-pin { display: inline-block; width: 9px; height: 12px; background: #9a9aa8; margin-right: 8px; clip-path: path('M4.5 0C2 0 0 2 0 4.5 0 8 4.5 12 4.5 12S9 8 9 4.5C9 2 7 0 4.5 0z'); }
 .ac-foot { text-align: right; font-size: 11px; color: #777; padding: 4px 10px; }
+
+/* ── practice copy of the dashboard's Ride Ordering page ── */
+main:has(.ro) { max-width: none; padding: 0; }
+.ro { display: grid; grid-template-columns: 190px 1fr; min-height: calc(100vh - 62px); background: #f4f4f8; font-size: 13.5px; }
+.ro-side { background: #4a47a8; color: #fff; padding: 14px 10px; }
+.ro-logo { font-weight: 700; font-size: 12px; letter-spacing: .02em; margin-bottom: 12px; }
+.ro-side input { width: 100%; font-size: 12px; padding: 5px 8px; margin-bottom: 14px; border-radius: 3px; border: 0; }
+.ro-nav { padding: 9px 6px; font-weight: 600; font-size: 12.5px; color: #e9e8ff; }
+.ro-sub { padding: 6px 6px 6px 18px; font-size: 11.5px; color: #cfcdf3; }
+.ro-sub.on { color: #fff; font-weight: 700; background: rgba(255,255,255,.12); border-radius: 4px; }
+.ro-main { padding: 10px 18px 40px; min-width: 0; }
+.ro-crumb { display: flex; align-items: center; gap: 12px; color: #555; margin-bottom: 6px; font-size: 14px; }
+.ro-practice { background: var(--yellow-soft); color: #6b5300; border-radius: 99px; padding: 2px 12px; font-size: 12px; font-weight: 700; }
+.ro-cols { display: grid; grid-template-columns: minmax(0, 560px) minmax(320px, 1fr); gap: 18px; align-items: start; }
+.ro-title { font-family: 'Open Sans', sans-serif; font-weight: 400; color: #444; font-size: 24px; margin: 4px 0 10px; }
+.ro-tabs { display: flex; border: 1px solid #d8d8e6; margin-bottom: 8px; }
+.ro-tabs span { flex: 1; text-align: center; padding: 5px; font-size: 12px; color: #555; background: #fff; }
+.ro-tabs span.on { background: #3d9df5; color: #fff; }
+.ro-card { background: #fff; border: 1px solid #e3e3ee; padding: 12px 16px 16px; }
+.ro-card-title { font-size: 16px; color: #444; border-bottom: 1px solid #eee; padding-bottom: 8px; margin-bottom: 8px; }
+.ro .df-row { grid-template-columns: 170px 1fr; margin: 6px 0; }
+.ro .df-row > label { font-weight: 400; font-size: 12.5px; color: #333; }
+.ro .df-saved { grid-template-columns: 170px 1fr; }
+.ro input[type=text], .ro select, .ro textarea { padding: 6px 9px; border-radius: 3px; font-size: 13px; }
+.ro-block { margin-top: 12px; }
+.ro-block-title { color: #8b1d1d; font-weight: 700; font-size: 14px; border-bottom: 1px solid #eee; padding-bottom: 6px; margin-bottom: 10px; }
+.ro .round { background: #fff; cursor: pointer; }
+.ro .slot { display: block; width: 100%; max-width: 300px; text-align: left; background: #fff; cursor: pointer; }
+.ro-mapbox { border: 1px solid #d9e9c6; margin: 10px 0; }
+.ro-mapbox > summary { background: #f3f9ec; color: #6b7d4f; font-size: 12px; padding: 6px 10px; cursor: pointer; }
+.ro-mapbox .pm { border-radius: 0; border: 0; }
+.ro-btns { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.ro-center { justify-content: center; text-align: center; }
+.pill { border: 0; border-radius: 99px; padding: 6px 16px; font-size: 12px; font-weight: 700; cursor: pointer; color: #fff; }
+.pill.purple { background: #6b5bd2; } .pill.grey { background: #8e8e9a; } .pill.yellow { background: #ffd200; color: #3a3000; }
+.pill.cyan { background: #4cc3e6; } .pill.small { padding: 4px 12px; font-size: 11.5px; }
+.pill:disabled { opacity: .5; cursor: default; }
+.ro-check { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12.5px; color: #333; font-weight: 400; }
+.ro-check input { width: 16px; height: 16px; }
+.ro-indent { padding-left: 182px; }
+.ro-preview { margin: 12px 0; }
+.ro-preview-title { font-weight: 700; color: #333; margin-bottom: 6px; }
+.ro-preview textarea { width: 100%; min-height: 80px; }
+.ro-right { position: sticky; top: 72px; display: grid; gap: 12px; max-height: calc(100vh - 84px); overflow: auto; }
+.ro-call { background: #fff; border: 1px solid #e3e3ee; border-top: 4px solid #4a47a8; padding: 12px 14px; }
+.ro-call-title { display: flex; justify-content: space-between; align-items: center; font-weight: 800; color: var(--indigo); font-family: 'Nunito', sans-serif; font-size: 17px; }
+.ro-call .transcript { max-height: 300px; overflow: auto; }
+.ro-call-label { font-weight: 700; color: var(--indigo); font-size: 12.5px; margin: 10px 0 6px; }
+.ro .qbtn { font-size: 12.5px; padding: 5px 12px; }
+@media (max-width: 1100px) { .ro-cols { grid-template-columns: 1fr; } .ro-right { position: static; max-height: none; } }
+@media (max-width: 760px) { .ro { grid-template-columns: 1fr; } .ro-side { display: none; } .ro .df-row, .ro .df-saved { grid-template-columns: 1fr; } .ro-indent { padding-left: 0; } }
+
+.ro-top { padding: 10px 18px 0; }
+main:has(.ro) > p, main:has(.ro) > .row:not(.ro-top), main:has(.ro) > h2 { padding-left: 18px; padding-right: 18px; }
+#tabs button { padding: 8px 10px; }
+@media (max-width: 1350px) { .brand { font-size: 17px; } #tabs button { padding: 7px 8px; font-size: 14px; } #who > span { display: none; } }

@@ -121,6 +121,12 @@ CREATE TABLE IF NOT EXISTS scenario_answers (
 );
 `);
 
+// Columns added after the first version: add them to existing databases without touching any data.
+function addColumn(table, column, ddl) {
+  if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+}
+addColumn('tests', 'mode', "mode TEXT NOT NULL DEFAULT 'test'"); // 'test' = timed, one go | 'practice' = a practice set for a class
+
 export const one = (sql, ...p) => db.prepare(sql).get(...p);
 export const all = (sql, ...p) => db.prepare(sql).all(...p);
 export const run = (sql, ...p) => db.prepare(sql).run(...p);

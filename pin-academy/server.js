@@ -9,6 +9,13 @@ import { EXAMPLE_SCENARIOS } from './src/examples.js';
 import * as auth from './src/auth.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+// Worked examples already added are brought up to date on every start, so improvements reach the live site
+// without anyone clicking anything. Examples nobody added yet are left alone.
+for (const ex of EXAMPLE_SCENARIOS) {
+  const have = one('SELECT id FROM scenarios WHERE title = ?', ex.title);
+  if (have) run('UPDATE scenarios SET category = ?, data = ? WHERE id = ?', ex.category, JSON.stringify(cleanScenario(ex.data)), have.id);
+}
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC = path.join(HERE, 'public');
 const GRACE_MS = 60 * 1000; // a late answer within a minute of the deadline still counts (slow networks)
@@ -61,6 +68,8 @@ function cleanSubmission(b) {
     note: str(b.note, 800),
     specific: (Array.isArray(b.specific) ? b.specific : []).slice(0, 2).map((s) => str(s, 120)),
     locationName: (Array.isArray(b.locationName) ? b.locationName : []).slice(0, 2).map((s) => str(s, 120)),
+    wearing: str(b.wearing, 200),
+    announce: str(b.announce, 40),
   };
 }
 
@@ -153,7 +162,9 @@ route('GET', '/api/practice', (req, res) => {
 
 route('POST', '/api/practice/(\\d+)', async (req, res, { m }) => {
   const u = needUser(req);
-  const row = one('SELECT * FROM scenarios WHERE id = ? AND practice = 1 AND archived = 0', num(m[1]));
+  const row = one(`SELECT s.* FROM scenarios s WHERE s.id = ? AND s.archived = 0 AND (s.practice = 1 OR ? = 'admin' OR EXISTS (
+      SELECT 1 FROM test_scenarios ts JOIN tests t ON t.id = ts.test_id
+      WHERE ts.scenario_id = s.id AND t.mode = 'practice' AND t.status = 'open' AND t.class_id = ?))`, num(m[1]), u.role, u.class_id);
   if (!row) fail(404, 'That scenario is not in practice.');
   const b = await readJson(req);
   const sub = cleanSubmission(b);
@@ -175,20 +186,21 @@ route('GET', '/api/tests', (req, res) => {
     let att = one('SELECT * FROM attempts WHERE slack_id = ? AND test_id = ?', u.slack_id, t.id);
     if (att) att = autoSubmitIfLate(att);
     const n = one('SELECT COUNT(*) n FROM test_scenarios WHERE test_id = ?', t.id).n;
-    return { id: t.id, name: t.name, status: t.status, questions: n, passMeters: t.pass_meters, passCount: t.pass_count,
+    return { id: t.id, name: t.name, mode: t.mode, status: t.status, questions: n, passMeters: t.pass_meters, passCount: t.pass_count,
       timeLimitMin: t.time_limit_min, state: !att ? 'not started' : att.submitted_at ? 'done' : 'in progress' };
   }));
 });
 
 function loadTestForTrainee(u, testId) {
   const t = one('SELECT * FROM tests WHERE id = ?', testId);
-  if (!t || t.class_id !== u.class_id || t.status === 'draft') fail(404, 'Test not found.');
+  if (!t || t.status === 'draft' || (u.role !== 'admin' && t.class_id !== u.class_id)) fail(404, 'Test not found.');
   return t;
 }
 
 route('POST', '/api/tests/(\\d+)/start', (req, res, { m }) => {
   const u = needUser(req);
   const t = loadTestForTrainee(u, num(m[1]));
+  if (t.mode === 'practice') fail(409, 'This is a practice set, not a test.');
   let att = one('SELECT * FROM attempts WHERE slack_id = ? AND test_id = ?', u.slack_id, t.id);
   if (!att) {
     if (t.status !== 'open') fail(409, 'This test is closed.');
@@ -231,6 +243,27 @@ route('POST', '/api/tests/(\\d+)/submit', (req, res, { m }) => {
   att = autoSubmitIfLate(att);
   if (!att.submitted_at) { att.submitted_at = sqlNow(); run('UPDATE attempts SET submitted_at = ? WHERE id = ?', att.submitted_at, att.id); }
   send(res, 200, { done: true, result: testResult(t, att) });
+});
+
+// Opening a class link: someone with no class joins the link's class. Someone already in another class is told to ask.
+route('POST', '/api/tests/(\\d+)/join', (req, res, { m }) => {
+  const u = needUser(req);
+  const t = one('SELECT t.*, c.name class_name FROM tests t LEFT JOIN classes c ON c.id = t.class_id WHERE t.id = ?', num(m[1]));
+  if (!t || t.status === 'draft') fail(404, 'This link is not open yet. Ask your trainer.');
+  if (u.role !== 'admin') {
+    if (!u.class_id) run('UPDATE users SET class_id = ? WHERE slack_id = ?', t.class_id, u.slack_id);
+    else if (u.class_id !== t.class_id) fail(409, `This link is for the ${t.class_name} class, and you are in another class. Ask your trainer.`);
+  }
+  send(res, 200, { id: t.id, mode: t.mode, name: t.name, user: publicUser(one('SELECT * FROM users WHERE slack_id = ?', u.slack_id)) });
+});
+
+route('GET', '/api/tests/(\\d+)/set', (req, res, { m }) => {
+  const u = needUser(req);
+  const t = loadTestForTrainee(u, num(m[1]));
+  if (t.mode !== 'practice') fail(409, 'This is a test, not a practice set.');
+  const done = Object.fromEntries(all(`SELECT sa.scenario_id, MAX(sa.passed) ok, COUNT(*) n FROM scenario_answers sa JOIN attempts at ON at.id = sa.attempt_id
+    WHERE at.slack_id = ? AND at.test_id IS NULL GROUP BY sa.scenario_id`, u.slack_id).map((r) => [r.scenario_id, r]));
+  send(res, 200, { id: t.id, name: t.name, scenarios: testScenarios(t.id).map((s) => ({ ...publicScenario(s), tries: done[s.id]?.n || 0, gotRight: !!done[s.id]?.ok })) });
 });
 
 route('GET', '/api/my/history', (req, res) => {
@@ -297,17 +330,40 @@ route('GET', '/api/admin/classes', (req, res) => {
 route('POST', '/api/admin/classes', async (req, res) => {
   needAdmin(req);
   const b = await readJson(req);
-  if (b.id) { run('UPDATE classes SET active = ? WHERE id = ?', b.active ? 1 : 0, num(b.id)); return send(res, 200, { ok: true }); }
+  if (b.id) {
+    if (!one('SELECT id FROM classes WHERE id = ?', num(b.id))) fail(404, 'Class not found.');
+    if ('active' in b) run('UPDATE classes SET active = ? WHERE id = ?', b.active ? 1 : 0, num(b.id));
+    if ('name' in b) {
+      const nm = str(b.name, 80);
+      if (!nm) fail(400, 'The class needs a name.');
+      if (one('SELECT id FROM classes WHERE name = ? AND id != ?', nm, num(b.id))) fail(409, 'A class with that name already exists.');
+      run('UPDATE classes SET name = ? WHERE id = ?', nm, num(b.id));
+    }
+    return send(res, 200, { ok: true });
+  }
   const name = str(b.name, 80);
   if (!name) fail(400, 'Name the class, e.g. "October 2026".');
   if (one('SELECT id FROM classes WHERE name = ?', name)) fail(409, 'A class with that name already exists.');
   send(res, 200, { id: Number(run('INSERT INTO classes (name) VALUES (?)', name).lastInsertRowid) });
 });
 
+// Only an empty class can be deleted (no people, no practice sets or tests), so no results are ever lost.
+route('POST', '/api/admin/classes/(\\d+)/delete', (req, res, { m }) => {
+  needAdmin(req);
+  const id = num(m[1]);
+  if (one('SELECT 1 FROM users WHERE class_id = ?', id)) fail(409, 'People are in this class. Move them first, or close the class instead.');
+  if (one('SELECT 1 FROM tests WHERE class_id = ?', id)) fail(409, 'This class has practice sets or tests. Close the class instead.');
+  run('DELETE FROM classes WHERE id = ?', id);
+  send(res, 200, { ok: true });
+});
+
 route('GET', '/api/admin/people', (req, res) => {
   needAdmin(req);
-  send(res, 200, all(`SELECT u.slack_id, u.name, u.role, u.class_id, c.name class_name, u.last_login FROM users u
-    LEFT JOIN classes c ON c.id = u.class_id ORDER BY u.last_login DESC`));
+  send(res, 200, all(`SELECT u.slack_id, u.name, u.role, u.class_id, c.name class_name, u.last_login,
+    (SELECT COUNT(*) FROM scenario_answers sa JOIN attempts a ON a.id = sa.attempt_id WHERE a.slack_id = u.slack_id AND a.test_id IS NULL) practice_tries,
+    (SELECT COUNT(DISTINCT sa.scenario_id) FROM scenario_answers sa JOIN attempts a ON a.id = sa.attempt_id WHERE a.slack_id = u.slack_id AND a.test_id IS NULL AND sa.passed = 1) practice_right,
+    (SELECT COUNT(*) FROM attempts a WHERE a.slack_id = u.slack_id AND a.test_id IS NOT NULL AND a.submitted_at IS NOT NULL) tests_done
+    FROM users u LEFT JOIN classes c ON c.id = u.class_id ORDER BY c.id DESC, u.name`));
 });
 route('POST', '/api/admin/people', async (req, res) => {
   const me = needAdmin(req);
@@ -327,7 +383,9 @@ route('GET', '/api/admin/tests', (req, res) => {
   needAdmin(req);
   send(res, 200, all(`SELECT t.*, c.name class_name,
     (SELECT COUNT(*) FROM test_scenarios ts WHERE ts.test_id = t.id) questions,
-    (SELECT COUNT(*) FROM attempts a WHERE a.test_id = t.id AND a.submitted_at IS NOT NULL) handed_in
+    (SELECT COUNT(*) FROM attempts a WHERE a.test_id = t.id AND a.submitted_at IS NOT NULL) handed_in,
+    (SELECT COUNT(DISTINCT a.slack_id) FROM scenario_answers sa JOIN attempts a ON a.id = sa.attempt_id JOIN test_scenarios ts ON ts.scenario_id = sa.scenario_id
+      JOIN users u ON u.slack_id = a.slack_id WHERE ts.test_id = t.id AND a.test_id IS NULL AND u.class_id = t.class_id) practised
     FROM tests t LEFT JOIN classes c ON c.id = t.class_id ORDER BY t.id DESC`)
     .map((t) => ({ ...t, scenarioIds: all('SELECT scenario_id FROM test_scenarios WHERE test_id = ? ORDER BY position', t.id).map((r) => r.scenario_id) })));
 });
@@ -344,17 +402,18 @@ route('POST', '/api/admin/tests', async (req, res) => {
   const passMeters = Math.min(200, Math.max(1, num(b.passMeters) || 15));
   const passCount = Math.min(ids.length, Math.max(1, Math.round(num(b.passCount) || ids.length)));
   const minutes = Math.min(240, Math.max(1, Math.round(num(b.timeLimitMin) || 20)));
+  const mode = b.mode === 'practice' ? 'practice' : 'test';
   const id = tx(() => {
     let testId = num(b.id);
     if (testId) {
       const t = one('SELECT * FROM tests WHERE id = ?', testId);
       if (!t) fail(404, 'Test not found.');
       if (t.status !== 'draft') fail(409, 'A test can only be edited while it is a draft.');
-      run('UPDATE tests SET name=?, class_id=?, pass_meters=?, pass_count=?, time_limit_min=? WHERE id = ?', name, num(b.classId), passMeters, passCount, minutes, testId);
+      run('UPDATE tests SET name=?, class_id=?, pass_meters=?, pass_count=?, time_limit_min=?, mode=? WHERE id = ?', name, num(b.classId), passMeters, passCount, minutes, mode, testId);
       run('DELETE FROM test_scenarios WHERE test_id = ?', testId);
     } else {
-      testId = Number(run('INSERT INTO tests (name, class_id, pass_meters, pass_count, time_limit_min, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-        name, num(b.classId), passMeters, passCount, minutes, u.slack_id).lastInsertRowid);
+      testId = Number(run('INSERT INTO tests (name, class_id, pass_meters, pass_count, time_limit_min, mode, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        name, num(b.classId), passMeters, passCount, minutes, mode, u.slack_id).lastInsertRowid);
     }
     ids.forEach((sid, i) => run('INSERT INTO test_scenarios (test_id, scenario_id, position) VALUES (?, ?, ?)', testId, sid, i));
     return testId;

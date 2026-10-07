@@ -142,6 +142,44 @@ try {
   assert.equal((await ben('/api/tests')).data.find((x) => x.id === t2).state, 'done');
   check('time limit enforced by the server; late test handed in automatically');
 
+  // The clothing box counts toward the driver note: clothing there, note without it, still passes.
+  const split = (await ana(`/api/practice/${men.id}`, { pins: [MENCHIES], asked: [0, 1, 3, 8], wearing: 'Blue top, black jeans',
+    note: "Customer is waiting inside Menchie's Frozen Yogurt, please call her if you cannot find her right away." })).data;
+  assert.equal(split.passed, true, JSON.stringify(split.note));
+  check('clothing in the What Are You Wearing Today? box counts toward the driver note');
+
+  // Class links: a practice set for a class; someone with no class joins it from the link; another class is refused.
+  const dec = (await admin('/api/admin/classes', { name: 'December 2026' })).data.id;
+  const hidden = (await admin('/api/admin/scenarios', { title: 'Set only', category: 'Other', practice: false,
+    data: { caller: 'Hi, I need a ride.', stops: [{ kind: 'pickup', label: 'Z', start: { lat: 40.1, lng: -75.1 }, answer: { lat: 40.1001, lng: -75.1 } }], questions: [], note: {} } })).data.id;
+  const set = (await admin('/api/admin/tests', { mode: 'practice', name: 'December practice', classId: dec, scenarioIds: [hidden] })).data.id;
+  const cara = client();
+  await cara('/auth/dev?as=UCARA&name=Cara%20New', null, { raw: true });
+  assert.equal((await cara(`/api/tests/${set}/join`, {})).status, 404, 'draft link should not work');
+  await admin(`/api/admin/tests/${set}/status`, { status: 'open' });
+  assert.equal((await cara(`/api/practice/${hidden}`, { pins: [] })).status, 404, 'set-only scenario open before joining');
+  const j = (await cara(`/api/tests/${set}/join`, {})).data;
+  assert.equal(j.mode, 'practice'); assert.equal(j.user.className, 'December 2026');
+  assert.equal((await ana(`/api/tests/${set}/join`, {})).status, 409, 'someone in another class must be refused');
+  const listed = (await cara(`/api/tests/${set}/set`)).data;
+  assert.equal(listed.scenarios.length, 1); assert.ok(!JSON.stringify(listed).includes('"answer":'));
+  assert.equal((await cara(`/api/practice/${hidden}`, { pins: [{ lat: 40.1001, lng: -75.1 }], note: 'x' })).status, 200);
+  assert.equal((await cara(`/api/tests/${set}/start`, {})).status, 409, 'a practice set is not a timed test');
+  assert.equal((await cara('/api/practice')).data.some((x) => x.id === hidden), false, 'set-only scenario leaked into general practice');
+  const ppl = (await admin('/api/admin/people')).data.find((p) => p.slack_id === 'UCARA');
+  assert.equal(ppl.practice_tries, 1); assert.equal(ppl.class_name, 'December 2026');
+  check('class link: draft refused, joins the class, other class refused, practice set works, People shows progress');
+
+  // Classes: rename; delete only while empty.
+  assert.equal((await admin('/api/admin/classes', { id: dec, name: 'Dec 2026' })).status, 200);
+  assert.equal((await admin('/api/admin/classes', { id: dec, name: 'October 2026' })).status, 409, 'duplicate name allowed');
+  assert.equal((await admin(`/api/admin/classes/${dec}/delete`, {})).status, 409, 'class with people deleted');
+  const empty = (await admin('/api/admin/classes', { name: 'Typo clas' })).data.id;
+  assert.equal((await admin(`/api/admin/classes/${empty}/delete`, {})).status, 200);
+  assert.ok(!(await admin('/api/admin/classes')).data.some((c) => c.id === empty));
+  assert.equal((await ana(`/api/admin/classes/${empty}/delete`, {})).status, 403);
+  check('classes rename (no duplicates); only an empty class can be deleted; trainees cannot delete');
+
   assert.ok((await (await fetch(BASE + '/')).text()).includes('GoGo Pin Academy'));
   check('page loads');
   console.log(`\nAll ${passed} checks passed.`);
