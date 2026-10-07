@@ -28,7 +28,34 @@ const PATCHES = [
       if (!has('Provide driver info')) d.questions.push({ q: 'Provide driver info',
         say: "We were able to find you a driver. Looks like Lidong, in a black Toyota Sienna, last 4 digits 0734 should be arriving in the next 2 minutes. If for any reason he doesn't show up within the estimated time, please give us a call back.",
         a: 'Okay, thank you.', needed: true });
-      run('UPDATE scenarios SET data = ? WHERE id = ?', JSON.stringify(cleanScenario(d)), row.id);
+      run('UPDATE scenarios SET data = ?, version = version + 1 WHERE id = ?', JSON.stringify(cleanScenario(d)), row.id);
+      return true;
+    },
+  },
+  {
+    // Vee, 2026-10-06 late: saved location #3 (14060 SE Petrovitsky Rd, saved by the system with the WRONG pin) was
+    // missing on the live Menchie's, most likely saved over from an editor page opened before it existed.
+    // Put it back, mark it as the one to fix, and make sure the "go there often" line is there. Add-only.
+    name: 'menchies-saved-slot3-2026-10-06',
+    run() {
+      const row = one('SELECT * FROM scenarios WHERE title = ?', "Menchie's on Petrovitsky Road");
+      if (!row) return false;
+      const d = JSON.parse(row.data);
+      d.account = d.account || { home: null, saved: [] };
+      d.account.saved = Array.isArray(d.account.saved) ? d.account.saved : [];
+      let idx = d.account.saved.findIndex((p) => p && /petrovitsky/i.test(`${p.label} ${p.address}`));
+      if (idx < 0) {
+        if (d.account.saved.length >= 3) return true; // all three slots used by an admin: leave them alone
+        d.account.saved.unshift({ label: '14060 SE Petrovitsky Rd', address: '14060 Southeast Petrovitsky Road, Renton, WA 98058', lat: 47.44598587, lng: -122.15203913 });
+        idx = 0;
+      }
+      if (!d.savedFix) d.savedFix = { slot: idx + 3, action: 'update', stop: 'pickup' };
+      if (!d.questions.some((q) => /go(es)? (there|to) often/i.test(`${q.q} ${q.say}`))) {
+        const at = d.questions.findIndex((q) => /notes for the driver/i.test(q.q));
+        const line = { q: 'Ask if they go there often', say: "Is Menchie's a place you go to often?", a: 'Yes, I go every Sunday with my grandkids.', needed: true };
+        if (at >= 0) d.questions.splice(at, 0, line); else d.questions.push(line);
+      }
+      run('UPDATE scenarios SET data = ?, version = version + 1 WHERE id = ?', JSON.stringify(cleanScenario(d)), row.id);
       return true;
     },
   },

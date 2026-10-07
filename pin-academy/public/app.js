@@ -815,7 +815,7 @@ function editScenario(existing) {
       const data = { ...d, caller: caller.value, why: why.value, questions: d.questions.filter((q) => q.q && q.a),
         note: { mustMention: must.value.split(',').map((x) => x.trim()).filter(Boolean), model: model.value } };
       if (data.stops.some((s) => !s.answer)) return toast('Search each stop and place its pin first.', true);
-      await api('/api/admin/scenarios', { id: existing?.id, title: title.value, category: cat.value, practice: practice.checked, data });
+      await api('/api/admin/scenarios', { id: existing?.id, version: existing?.version, title: title.value, category: cat.value, practice: practice.checked, data });
       toast('Saved'); go('a-scenarios');
     }) }, 'Save scenario'));
   drawStops(); drawAccount(); drawQuestions();

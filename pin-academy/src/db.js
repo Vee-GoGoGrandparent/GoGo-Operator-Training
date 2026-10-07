@@ -125,6 +125,8 @@ CREATE TABLE IF NOT EXISTS scenario_answers (
 function addColumn(table, column, ddl) {
   if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
 }
+// Every save bumps the version; a save from a page opened before the last change is refused (no silent overwrite).
+addColumn('scenarios', 'version', 'version INTEGER NOT NULL DEFAULT 1');
 addColumn('tests', 'mode', "mode TEXT NOT NULL DEFAULT 'test'"); // 'test' = timed, one go | 'practice' = a practice set for a class
 
 export const one = (sql, ...p) => db.prepare(sql).get(...p);

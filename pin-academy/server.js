@@ -284,7 +284,7 @@ route('GET', '/api/admin/scenarios', (req, res) => {
   needAdmin(req);
   send(res, 200, all(`SELECT s.*, (SELECT COUNT(*) FROM scenario_answers sa WHERE sa.scenario_id = s.id) tries,
     (SELECT SUM(passed) FROM scenario_answers sa WHERE sa.scenario_id = s.id) passes FROM scenarios s WHERE archived = 0 ORDER BY id DESC`)
-    .map((s) => ({ id: s.id, title: s.title, category: s.category, practice: !!s.practice, tries: s.tries, passes: s.passes || 0, data: scenarioData(s) })));
+    .map((s) => ({ id: s.id, version: s.version, title: s.title, category: s.category, practice: !!s.practice, tries: s.tries, passes: s.passes || 0, data: scenarioData(s) })));
 });
 
 route('POST', '/api/admin/scenarios', async (req, res) => {
@@ -296,8 +296,10 @@ route('POST', '/api/admin/scenarios', async (req, res) => {
   try { data = cleanScenario(b.data || {}); } catch (e) { fail(400, e.message); }
   const vals = [title, str(b.category, 40) || 'Other', JSON.stringify(data), b.practice === false ? 0 : 1];
   if (b.id) {
-    if (!one('SELECT id FROM scenarios WHERE id = ?', num(b.id))) fail(404, 'Scenario not found.');
-    run('UPDATE scenarios SET title = ?, category = ?, data = ?, practice = ? WHERE id = ?', ...vals, num(b.id));
+    const cur = one('SELECT id, version FROM scenarios WHERE id = ?', num(b.id));
+    if (!cur) fail(404, 'Scenario not found.');
+    if (num(b.version) !== cur.version) fail(409, 'This scenario changed since you opened it (someone saved it, or an update reached it). Reload the page so nothing newer gets written over, then make your change again.');
+    run('UPDATE scenarios SET title = ?, category = ?, data = ?, practice = ?, version = version + 1 WHERE id = ?', ...vals, num(b.id));
     return send(res, 200, { id: num(b.id) });
   }
   send(res, 200, { id: Number(run('INSERT INTO scenarios (title, category, data, practice, created_by) VALUES (?, ?, ?, ?, ?)', ...vals, u.slack_id).lastInsertRowid) });

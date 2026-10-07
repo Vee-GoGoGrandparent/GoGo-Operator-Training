@@ -94,6 +94,13 @@ try {
   assert.ok(hosp);
   check('admin builder saves a two-stop scenario with entrances; a stop with no pin is refused');
 
+  const ed = (await admin('/api/admin/scenarios')).data.find((x) => x.id === hosp);
+  const body = { id: hosp, title: 'Hospital to home', category: 'Hospital', data: ed.data };
+  assert.equal((await admin('/api/admin/scenarios', { ...body, version: ed.version })).status, 200);
+  assert.equal((await admin('/api/admin/scenarios', { ...body, version: ed.version })).status, 409, 'a stale page overwrote a newer save');
+  assert.equal((await admin('/api/admin/scenarios', { ...body, version: ed.version + 1 })).status, 200);
+  check('saving from an out-of-date page is refused; an up-to-date save works');
+
   const t = (await admin('/api/admin/tests', { name: 'Week 1', classId: oct, scenarioIds: [men.id, hosp], passMeters: 15, passCount: 2, timeLimitMin: 30 })).data.id;
   assert.equal((await ana('/api/tests')).data.length, 0, 'draft visible');
   await admin(`/api/admin/tests/${t}/status`, { status: 'open' });

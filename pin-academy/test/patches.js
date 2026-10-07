@@ -18,6 +18,8 @@ try {
   const ex = structuredClone(EXAMPLE_SCENARIOS[0]);
   const d = ex.data;
   delete d.account.home; d.stops = d.stops.filter((x) => x.kind === 'pickup'); delete d.ride;
+  d.account.saved = [{ label: 'Doctor', address: 'Admin saved place', lat: 47.5, lng: -122.2 }]; delete d.savedFix; // #3 lost, admin's own place kept
+  d.questions = d.questions.filter((q) => q.q !== 'Ask if they go there often');
   d.questions = d.questions.filter((q) => !['Provide estimate', 'Provide driver info', 'Ask them to spell the street'].includes(q.q));
   d.questions[0].say = 'ADMIN WORDING';
   d.questions.push({ q: 'Admin extra line', say: 'Something Vee added', a: 'Sure.', needed: false });
@@ -34,6 +36,12 @@ try {
   assert.ok(after.stops.some((x) => x.kind === 'dropoff' && x.answer.lat === 47.44892956));
   assert.equal(after.ride.customerName, 'Marge Simpson');
   check('patch adds home, drop-off, ride and the two lines; admin wording, extra line and removal all kept');
+  assert.equal(after.account.saved[0].lat, 47.44598587, 'saved #3 with the wrong pin not restored');
+  assert.equal(after.account.saved[1].label, 'Doctor', "admin's own saved place lost or moved out");
+  assert.deepEqual(after.savedFix, { slot: 3, action: 'update', stop: 'pickup' });
+  const oi = after.questions.findIndex((q) => q.q === 'Ask if they go there often');
+  assert.ok(oi >= 0 && after.questions[oi + 1].q === 'Ask for notes for the driver', 'go-often line missing or misplaced');
+  check('saved #3 (wrong pin) restored as the slot to fix; admin saved place kept; "go there often" line back');
 
   // Running again changes nothing, and does not add the lines twice.
   run('UPDATE scenarios SET data = ? WHERE title = ?', JSON.stringify({ ...after, why: 'ADMIN WHY' }), ex.title);
