@@ -17,6 +17,10 @@ Pin placement practice and class pin tests for GoGo orientation. Built from Osca
   editable on the Standard lines page; a change reaches every New call). A pasted transcript is cleaned in the
   browser first (`public/clean.js`: phones, emails, dates, cards, addresses, names where found); the raw text is
   never saved or sent. The old editor is still there as "Advanced editor".
+- **Draft the call with Claude** (`src/draft.js`, Claude Opus 5.5, needs `ANTHROPIC_API_KEY`): writes only the special
+  parts (first line, moments like an anniversary, the Why, the note and its choices), never pins. Refused if it writes a
+  phone number, email, date, card, Uber/Lyft or a callback offer. Nothing is saved until the trainer saves.
+- **Graded in two parts:** the pin (pins, entrance, saved-location fix) and the call flow (steps, note, ordering).
 - **Driver note choices:** a call can carry 2-3 notes (one right). In practice the trainee picks one; in a test they
   always write the note themselves.
 - **Pin skills:** every call teaches one situation (place or business name, past rides, multiple entrances,

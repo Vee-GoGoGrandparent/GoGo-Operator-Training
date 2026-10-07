@@ -58,9 +58,13 @@ export function gradeScenario(s, sub, passMeters, { practice = false } = {}) {
   const note = practice && noteOptions.length ? pickedNote(noteOptions, sub?.noteChoice) : checkNote(sub?.note, s.note?.mustMention || [], sub?.wearing);
   const saved = gradeSavedFix(s, sub, passMeters);
   const ordered = s.mustOrder === false ? null : { ok: !!sub?.ordered };
+  // Graded in two parts (Vee): the CALL FLOW (the steps, the driver note, ordering the ride) and the PIN (every pin
+  // and entrance, and fixing a saved location). Overall passes only when both do.
+  const callFlow = { ok: missingQuestions.length === 0 && note.ok && (!ordered || ordered.ok) };
+  const pin = { ok: stops.every((x) => x.passed) && (!saved || saved.ok) };
   return {
     stops, stepMode: !!steps, missingQuestions, note, saved, ordered, modelNote: s.note?.model || '', why: s.why || '',
-    passed: stops.every((x) => x.passed) && missingQuestions.length === 0 && note.ok && (!saved || saved.ok) && (!ordered || ordered.ok),
+    callFlow, pin, passed: callFlow.ok && pin.ok,
   };
 }
 
@@ -102,7 +106,8 @@ function gradeSavedFix(s, sub, passMeters) {
   const changes = (Array.isArray(sub?.savedChanges) ? sub.savedChanges : []).filter((c) => c && String(c.slot) === String(fix.slot));
   const last = changes[changes.length - 1];
   const stop = s.stops.find((x) => x.kind === fix.stop) || s.stops[0];
-  const want = fix.action === 'delete' ? `Delete Custom Location #${fix.slot}` : `Save the corrected pin over Custom Location #${fix.slot}`;
+  const where = fix.slot === 'home' ? 'Home' : `Custom Location #${fix.slot}`;
+  const want = fix.action === 'delete' ? `Delete ${where}` : `Save the corrected pin over ${where}`;
   if (!last) return { ok: false, want, did: 'Left it as it was (the saved pin is still wrong)' };
   if (fix.action === 'delete') return { ok: last.action === 'delete', want, did: last.action === 'delete' ? 'Deleted it' : 'Saved over it instead of deleting it' };
   if (last.action !== 'save') return { ok: false, want, did: 'Deleted it, but the customer goes there often' };
@@ -174,10 +179,13 @@ export function cleanScenario(b) {
     caller: str(b.caller, 600), why: str(b.why, 1500),
     // Made with the New call screen: the call's own details for its standard lines, and what happened (cleaned, no
     // customer details). Kept only when there is something in them, so older calls stay exactly as they were.
-    ...(b.vars ? { vars: { wearing: str(b.vars.wearing, 160), notesAnswer: str(b.vars.notesAnswer, 200), dropoffAnswer: str(b.vars.dropoffAnswer, 200) } } : {}),
+    ...(b.vars ? { vars: { wearing: str(b.vars.wearing, 160), notesAnswer: str(b.vars.notesAnswer, 200), dropoffAnswer: str(b.vars.dropoffAnswer, 200),
+      savedPlace: str(b.vars.savedPlace, 120), oftenAnswer: str(b.vars.oftenAnswer, 200) } } : {}),
+    ...(b.newCaller ? { newCaller: true } : {}),
     ...(str(b.story, 4000) ? { story: str(b.story, 4000) } : {}),
     ride: cleanRide(b.ride), mustOrder: b.mustOrder !== false,
-    savedFix: [3, 4, 5].includes(Number(b.savedFix?.slot)) ? { slot: Number(b.savedFix.slot), action: b.savedFix.action === 'delete' ? 'delete' : 'update', stop: b.savedFix.stop === 'dropoff' ? 'dropoff' : 'pickup' } : null,
+    savedFix: b.savedFix?.slot === 'home' ? { slot: 'home', action: 'update', stop: b.savedFix.stop === 'dropoff' ? 'dropoff' : 'pickup' }
+      : [3, 4, 5].includes(Number(b.savedFix?.slot)) ? { slot: Number(b.savedFix.slot), action: b.savedFix.action === 'delete' ? 'delete' : 'update', stop: b.savedFix.stop === 'dropoff' ? 'dropoff' : 'pickup' } : null,
     account: { home: savedPlace(b.account?.home), saved: (Array.isArray(b.account?.saved) ? b.account.saved : []).map(savedPlace).filter(Boolean).slice(0, 3) },
     stops,
     questions: lines.map(({ i, ...q }) => q),

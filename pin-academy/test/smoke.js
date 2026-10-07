@@ -248,6 +248,14 @@ try {
   const savedWrong = (await ana(`/api/practice/${men.id}`, { ...base, savedChanges: [{ slot: 3, action: 'save', lat: 47.44598587, lng: -122.15203913 }] })).data;
   assert.equal(savedWrong.passed, false, 'saving the old wrong pin again must not pass');
   check('saved location #3: left wrong, deleted, or re-saved with the wrong pin all fail; trap slot is hidden');
+  // Two grades (Vee): the pin and the call flow are graded apart; overall passes only when both do.
+  assert.deepEqual([good.pin.ok, good.callFlow.ok, good.passed], [true, true, true]);
+  assert.deepEqual([leftIt.pin.ok, leftIt.callFlow.ok, leftIt.passed], [false, true, false], 'saved location left wrong is a PIN miss');
+  const flowMiss = (await ana(`/api/practice/${men.id}`, { ...base, savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], steps: RIGHT.slice(0, 5) })).data;
+  assert.deepEqual([flowMiss.pin.ok, flowMiss.callFlow.ok, flowMiss.passed], [true, false, false], 'missed steps are a CALL FLOW miss');
+  const pinMiss = (await ana(`/api/practice/${men.id}`, { ...base, pins: [ADDRESS_ONLY, HOME], savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }] })).data;
+  assert.deepEqual([pinMiss.pin.ok, pinMiss.callFlow.ok, pinMiss.passed], [false, true, false], 'a wrong pin is a PIN miss');
+  check('graded in two parts: pin (pins + saved location) and call flow (steps, note, ordering); overall needs both');
 
   // The clothing box counts toward the driver note: clothing there, note without it, still passes.
   const typedInPractice = (await ana(`/api/practice/${men.id}`, { ...base, savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], noteChoice: null, note: GOOD_NOTE })).data;
@@ -275,6 +283,7 @@ try {
   assert.equal((await cara(`/api/practice/${hidden}`, { pins: [{ lat: 40.1001, lng: -75.1 }], note: 'x' })).status, 200);
   assert.equal((await cara(`/api/tests/${set}/start`, {})).status, 409, 'a practice set is not a timed test');
   assert.equal((await cara('/api/practice')).data.some((x) => x.id === hidden), false, 'set-only scenario leaked into general practice');
+  assert.equal((await admin('/api/practice')).data.some((x) => x.id === hidden), true, 'admins should be able to try every call');
   const ppl = (await admin('/api/admin/people')).data.find((p) => p.slack_id === 'UCARA');
   assert.equal(ppl.practice_tries, 1); assert.equal(ppl.class_name, 'December 2026');
   check('class link: draft refused, joins the class, other class refused, practice set works, People shows progress');
@@ -382,6 +391,36 @@ try {
     assert.equal(names.includes('Confirm the home address'), shape === 'place to home');
   }
   check('New call works for every trip shape: home to a place, a place to home, a place to another place (clothing asked when pickup is not home)');
+
+  // A new caller: their home was saved at registration with the wrong pin. They must fix it and save it over Home.
+  const HOME_RIGHT = { lat: 35.01, lng: -85.16 }, HOME_WRONG = { lat: 35.0109, lng: -85.1605 };
+  const nc = (await admin('/api/admin/scenarios/build', { ...NEW_CALL, title: 'Built: new caller', pickup: { home: true, wrong: HOME_WRONG } })).data.id;
+  const ncd = (await admin('/api/admin/scenarios')).data.find((x) => x.id === nc).data;
+  assert.deepEqual([ncd.account.home.lat, ncd.stops[0].start.lat, ncd.stops[0].answer.lat], [HOME_WRONG.lat, HOME_WRONG.lat, HOME_RIGHT.lat]);
+  assert.deepEqual(ncd.savedFix, { slot: 'home', action: 'update', stop: 'pickup' });
+  const ncNames = ncd.steps.map((st) => ncd.questions[st.right[0]].q);
+  assert.deepEqual(ncNames.slice(2, 5), ['Confirm the pickup is home', 'Tell them you are checking the map', 'Fix and save the home pin']);
+  const ncRun = (cs) => ana(`/api/practice/${nc}`, { pins: [HOME_RIGHT, { lat: 35.0402, lng: -85.3003 }], ordered: true, steps: ncd.steps.map((st) => [st.right[0]]),
+    note: 'Please drop the customer off at Test Bistro on Main Street. Thank you so much.', savedChanges: cs });
+  const ncLeft = (await ncRun([])).data, ncFixed = (await ncRun([{ slot: 'home', action: 'save', ...HOME_RIGHT }])).data;
+  assert.equal(ncLeft.passed, false); assert.ok(ncLeft.saved.want.includes('over Home'), ncLeft.saved.want);
+  assert.equal(ncFixed.passed, true, JSON.stringify(ncFixed.saved));
+  check("new caller: home saved at registration with the wrong pin; the call confirms home, checks the map, fixes and saves it; leaving it fails");
+
+  // A place saved on the account with the wrong pin: go there often = save the fix over #3, otherwise remove it.
+  for (const often of [true, false]) {
+    const sp = (await admin('/api/admin/scenarios/build', { ...NEW_CALL, title: `Built: saved place ${often}`, pickup: { home: true },
+      dropoff: { place: { ...NEW_CALL.dropoff.place, saved: true, often } } })).data.id;
+    const spd = (await admin('/api/admin/scenarios')).data.find((x) => x.id === sp).data;
+    assert.equal(spd.account.saved[0].lat, NEW_CALL.dropoff.place.start.lat, 'the saved place should hold the wrong pin');
+    assert.deepEqual(spd.savedFix, { slot: 3, action: often ? 'update' : 'delete', stop: 'dropoff' });
+    const names = spd.steps.map((st) => spd.questions[st.right[0]].q);
+    const i = names.indexOf('Mention the saved location');
+    assert.ok(i > 0 && names[i - 1] === 'Read the drop-off address back', names.join(' > '));
+    assert.ok(names.includes('Ask if they go there often') && names.includes(often ? 'Save it as their preferred location' : 'Remove the wrong saved location'));
+    assert.ok(spd.questions.find((q) => q.q === 'Ask if they go there often').say.includes('Test Bistro'));
+  }
+  check('saved place with the wrong pin: mention it after the read-back, ask if they go often, then save it over #3 (often) or remove it (not often)');
 
   // One wording for every New call: changing a standard line changes those calls, not hand-made ones like Menchie's.
   assert.equal((await ana('/api/admin/standard-lines')).status, 403);

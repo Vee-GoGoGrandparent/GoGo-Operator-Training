@@ -8,6 +8,7 @@ import { gradeScenario, publicScenario, cleanScenario, isRightPick } from './src
 import { PIN_SKILLS, pinSkill } from './src/skills.js';
 import { renderCall, standardLines, saveStandardLine, PLACEHOLDERS } from './src/standard-lines.js';
 import { buildCall } from './src/build-call.js';
+import { draftCall, draftReady } from './src/draft.js';
 import { EXAMPLE_SCENARIOS } from './src/examples.js';
 import { runPatches } from './src/patches.js';
 import * as auth from './src/auth.js';
@@ -165,8 +166,9 @@ route('POST', '/api/me/class', async (req, res) => {
 
 // ── practice ───────────────────────────────────────────────────────────
 route('GET', '/api/practice', (req, res) => {
-  needUser(req);
-  send(res, 200, all('SELECT * FROM scenarios WHERE practice = 1 AND archived = 0 ORDER BY category, title').map(publicScenario));
+  const u = needUser(req);
+  // Admins can try any call ("Try it" on Scenarios); trainees see general practice only.
+  send(res, 200, all(`SELECT * FROM scenarios WHERE ${u.role === 'admin' ? '1' : 'practice = 1'} AND archived = 0 ORDER BY category, title`).map(publicScenario));
 });
 
 // A scenario this person may practise: general practice, an open practice set for their class, or any if admin.
@@ -376,6 +378,24 @@ route('POST', '/api/admin/scenarios/build', async (req, res) => {
   const id = Number(run('INSERT INTO scenarios (title, category, data, practice, created_by) VALUES (?, ?, ?, ?, ?)',
     built.title, pinSkill(built.category), JSON.stringify(built.data), b.practice === false ? 0 : 1, u.slack_id).lastInsertRowid);
   send(res, 200, { id });
+});
+
+// Build a call WITHOUT saving it: the editor opens it so the trainer can check it, draft it with Claude, then save.
+route('POST', '/api/admin/scenarios/build-preview', async (req, res) => {
+  needAdmin(req);
+  const b = await readJson(req);
+  try { const built = buildCall(b); send(res, 200, { title: built.title, category: pinSkill(built.category), data: built.data }); } catch (e) { fail(e.status || 400, e.message); }
+});
+
+// "Draft the call with Claude": is the key there (never shows the key), and the draft itself (nothing is saved).
+route('GET', '/api/admin/draft/status', (req, res) => { needAdmin(req); send(res, 200, { ready: draftReady() }); });
+route('POST', '/api/admin/scenarios/draft', async (req, res) => {
+  needAdmin(req);
+  const b = await readJson(req);
+  let data;
+  try { data = cleanScenario(b.data || {}); } catch (e) { fail(400, e.message); }
+  try { send(res, 200, await draftCall({ data, title: str(b.title, 120), category: str(b.category, 40), story: str(b.story, 4000) })); }
+  catch (e) { fail(e.status || 502, e.status ? e.message : 'Claude could not be reached. Try again in a minute.'); }
 });
 
 // GoGo's standard lines: one wording for every call made with New call.

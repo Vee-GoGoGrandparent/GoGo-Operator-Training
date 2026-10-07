@@ -285,3 +285,33 @@ td.actions .btn { margin: 2px 2px 2px 0; }
 .clean-word { cursor: pointer; border-radius: 4px; }
 .clean-word:hover { background: var(--red-soft); text-decoration: line-through; }
 .ph { display: inline-block; margin: 2px 12px 2px 0; }
+
+/* Two grades, the dashboard phone field, the Academy home page */
+.parts { display: flex; gap: 8px; margin: 6px 0 10px; }
+.part-head td { padding-top: 14px; border-bottom: 1px solid var(--line); }
+.ro-phone { display: flex; align-items: stretch; }
+.ro-phone-cc { background: #eee; border: 1px solid #ddd; border-right: 0; border-radius: 6px 0 0 6px; padding: 6px 10px; white-space: nowrap; font-size: 13px; }
+.ro-phone input { border-radius: 0 6px 6px 0; background: #e9e9e9; }
+.ro-hint { font-size: 12px; color: #333; margin-top: 3px; }
+.academies { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.tile.academy { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; padding: 18px; text-align: left; }
+.tile.academy.soon { opacity: .55; cursor: default; }
+
+/* Step-by-step screens: the steps across the top, skill buttons, two-way choices */
+.stepper { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 14px; }
+.step-pill { display: flex; align-items: center; gap: 8px; background: #fff; border: 1.5px solid var(--line); border-radius: 99px; padding: 6px 14px 6px 6px; cursor: pointer; color: var(--muted); font-weight: 600; }
+.step-pill span { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--line); color: var(--ink); font-size: 12px; }
+.step-pill.on { border-color: var(--purple); color: var(--indigo); background: var(--purple-soft); }
+.step-pill.on span { background: var(--purple); color: #fff; }
+.step-pill.done span { background: var(--green); color: #fff; }
+.step-nav { margin: 14px 0 30px; gap: 8px; }
+.skill-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.skill-btn { text-align: left; background: #fff; border: 1.5px solid var(--line); border-radius: 12px; padding: 10px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
+.skill-btn span { color: var(--muted); font-size: 12.5px; }
+.skill-btn.on { border-color: var(--purple); background: var(--purple-soft); box-shadow: 0 0 0 2px var(--purple-soft); }
+.skill-btn.on b { color: var(--indigo); }
+.choice { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 10px; }
+.choice-btn { background: #fff; border: 1.5px solid #d5d0f3; color: var(--indigo); border-radius: 99px; padding: 7px 16px; cursor: pointer; font-weight: 600; }
+.choice-btn.on { background: var(--purple); border-color: var(--purple); color: #fff; }
+.pin-field { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 8px; }
+.draft-card { border: 1.5px dashed var(--purple); }

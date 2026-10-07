@@ -10,16 +10,34 @@ const ll = (p) => (p && Number.isFinite(num(p.lat)) && Number.isFinite(num(p.lng
 const bad = (msg) => { const e = new Error(msg); e.status = 400; throw e; };
 
 // The call flow: [the right line, two lines that sound right but are not next]. Vee's order.
-function flowFor({ pickupHome, dropoffHome }) {
+// fix = where a wrong pin is SAVED on the account: 'home' (a new caller's home, saved at registration) or 'place'
+// (a saved location with the wrong pin; often = they go there often, so save the fix, else remove it).
+function flowFor({ pickupHome, dropoffHome, fix, fixStop, often }) {
   const f = [['confirm_name', ['ask_pickup', 'send_driver']], ['contact', ['ask_pickup', 'send_driver']]];
-  if (pickupHome) f.push(['confirm_home_pickup', ['ask_pickup', 'wearing']]);
-  else f.push(['ask_pickup', ['spell_street', 'send_driver']], ['read_back_pickup', ['spell_street', 'send_driver']],
-    ['place_pickup', ['spell_street', 'notes']], ['map', ['send_driver', 'estimate']]);
+  const placeFix = (kind) => fix === 'place' && fixStop === kind;
+  const afterMap = (kind) => {
+    if (fix === 'home' && fixStop === kind) f.push(['save_home', ['send_driver', 'estimate']]);
+    if (placeFix(kind)) f.push(['go_often', ['notes', 'estimate']], [often ? 'save_place' : 'delete_place', ['send_driver', often ? 'delete_place' : 'save_place']]);
+  };
+  if (pickupHome) {
+    f.push(['confirm_home_pickup', ['ask_pickup', 'wearing']]);
+    if (fix === 'home' && fixStop === 'pickup') { f.push(['map', ['send_driver', 'estimate']]); afterMap('pickup'); }
+  } else {
+    f.push(['ask_pickup', ['spell_street', 'send_driver']], ['read_back_pickup', ['spell_street', 'send_driver']]);
+    if (placeFix('pickup')) f.push(['mention_saved', ['send_driver', 'wearing']]);
+    f.push(['place_pickup', ['spell_street', 'notes']], ['map', ['send_driver', 'estimate']]);
+    afterMap('pickup');
+  }
   f.push(['ask_where', ['estimate', 'send_driver']]);
-  if (dropoffHome) f.push(['confirm_home_dropoff', ['wearing', 'estimate']]);
-  else {
-    f.push(['read_back_dropoff', ['spell_street', 'send_driver']], ['place_dropoff', ['spell_street', 'estimate']]);
-    if (pickupHome) f.push(['map', ['send_driver', 'notes']]);
+  if (dropoffHome) {
+    f.push(['confirm_home_dropoff', ['wearing', 'estimate']]);
+    if (fix === 'home' && fixStop === 'dropoff') { f.push(['map', ['send_driver', 'estimate']]); afterMap('dropoff'); }
+  } else {
+    f.push(['read_back_dropoff', ['spell_street', 'send_driver']]);
+    if (placeFix('dropoff')) f.push(['mention_saved', ['send_driver', 'estimate']]);
+    f.push(['place_dropoff', ['spell_street', 'estimate']]);
+    if (pickupHome && !(fix === 'home' && fixStop === 'pickup')) f.push(['map', ['send_driver', 'notes']]);
+    afterMap('dropoff');
   }
   if (!pickupHome) f.push(['wearing', ['notes', 'estimate']]); // the driver has to spot them somewhere that is not home
   f.push(['notes', ['estimate', 'send_driver']], ['estimate', ['driver', 'anything_else']], ['driver', ['anything_else', 'close']],
@@ -46,9 +64,25 @@ export function buildCall(b) {
   const homeLL = ll(b.home);
   const home = homeLL ? { label: 'Home', address: str(b.home.address, 200), ...homeLL } : null;
   if ((pickupHome || dropoffHome) && (!home || !home.address)) bad('Search the home address on the account first.');
-  const homeStop = (kind) => ({ kind, label: 'Home', addressGiven: home.address, start: { lat: home.lat, lng: home.lng }, answer: { lat: home.lat, lng: home.lng }, entrances: [] });
+  // A new caller's home was saved at registration; its pin may be wrong (Vee). Then the account holds the WRONG pin,
+  // the map opens there, and the right answer is the home's real spot. The trainee must fix it and save it over Home.
+  const homeWrong = ll(pickupHome ? b.pickup?.wrong : dropoffHome ? b.dropoff?.wrong : null);
+  const homeStop = (kind) => ({ kind, label: 'Home', addressGiven: home.address, start: homeWrong || { lat: home.lat, lng: home.lng }, answer: { lat: home.lat, lng: home.lng }, entrances: [] });
   const stops = [pickupHome ? homeStop('pickup') : placeStop('pickup', b.pickup?.place), dropoffHome ? homeStop('dropoff') : placeStop('dropoff', b.dropoff?.place)];
   const [pu, dof] = stops;
+  // A place saved on the account with the wrong pin (the pin where the address alone puts it, or the trainer's wrong pin).
+  const savedStop = !pickupHome && b.pickup?.place?.saved ? 'pickup' : !dropoffHome && b.dropoff?.place?.saved ? 'dropoff' : null;
+  const often = savedStop ? b[savedStop].place.often !== false : false;
+  const fix = homeWrong ? 'home' : savedStop ? 'place' : null;
+  const fixStop = homeWrong ? (pickupHome ? 'pickup' : 'dropoff') : savedStop;
+  const account = { home: home ? { ...home, ...(homeWrong || {}) } : null, saved: [] };
+  let savedFix = null;
+  if (fix === 'home') savedFix = { slot: 'home', action: 'update', stop: fixStop };
+  if (fix === 'place') {
+    const st = stops.find((x) => x.kind === savedStop);
+    account.saved.push({ label: st.label, address: st.addressGiven, lat: st.start.lat, lng: st.start.lng });
+    savedFix = { slot: 3, action: often ? 'update' : 'delete', stop: savedStop };
+  }
 
   const low = num(b.ride?.low), high = num(b.ride?.high);
   if (!(low > 0) || !(high >= low)) bad('Fill in the estimate (low and high).');
@@ -59,12 +93,13 @@ export function buildCall(b) {
     perMile: '', perMinute: '', baseFare: '', minFare: '', cost, driver };
 
   const wearing = str(b.wearing, 160), notesAnswer = str(b.notesAnswer, 200);
-  const vars = { wearing, notesAnswer, dropoffAnswer: dropoffHome ? 'Home.' : `It's ${dof.addressGiven}.` };
+  const vars = { wearing, notesAnswer, dropoffAnswer: dropoffHome ? 'Home.' : `It's ${dof.addressGiven}.`,
+    savedPlace: savedStop ? stops.find((x) => x.kind === savedStop).label : '', oftenAnswer: often ? 'Yes, I go there every week.' : 'No, not really. Just this once.' };
   const where = pickupHome ? `from home to ${dof.label}` : dropoffHome ? `from ${pu.label} back home` : `from ${pu.label} to ${dof.label}`;
   const caller = str(b.caller, 600) || (pickupHome ? `Hi, I need a ride ${where}.` : `Hi, I'd like to be picked up at ${pu.addressGiven}.`);
 
   // The lines this call uses (every right line and every wrong pick), then the steps pointing at them.
-  const flow = flowFor({ pickupHome, dropoffHome });
+  const flow = flowFor({ pickupHome, dropoffHome, fix, fixStop, often });
   const keys = [...new Set(flow.flatMap(([r, w]) => [r, ...w]).concat(FILL))];
   const idx = Object.fromEntries(keys.map((k, i) => [k, i]));
   const rightSoFar = new Set();
@@ -82,7 +117,7 @@ export function buildCall(b) {
   const mustMention = Array.isArray(b.note?.mustMention) && b.note.mustMention.length ? b.note.mustMention : [place.label.split(/[\s']/)[0]];
 
   const data = renderCall({
-    caller, why: str(b.why, 1500), story: str(b.story, 4000), account: { home, saved: [] }, stops, ride, vars, questions, steps,
+    caller, why: str(b.why, 1500), story: str(b.story, 4000), account, savedFix, newCaller: fix === 'home', stops, ride, vars, questions, steps,
     note: { mustMention, model, options: [] },
   }, standardLines());
   return { title, category: str(b.category, 40), data: cleanScenario(data) };

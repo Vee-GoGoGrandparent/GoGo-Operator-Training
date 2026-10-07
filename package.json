@@ -7,9 +7,10 @@
   "scripts": {
     "start": "node scripts/server.js",
     "discover": "node --env-file=.env scripts/discover.js",
-    "test:pins": "node --check pin-academy/public/app.js && node --no-warnings pin-academy/test/smoke.js && node --no-warnings pin-academy/test/patches.js && node --no-warnings pin-academy/test/clean.js"
+    "test:pins": "node --check pin-academy/public/app.js && node --no-warnings pin-academy/test/smoke.js && node --no-warnings pin-academy/test/patches.js && node --no-warnings pin-academy/test/clean.js && node --no-warnings pin-academy/test/draft.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.132.0",
     "googleapis": "^144.0.0",
     "mysql2": "^3.11.0",
     "node-cron": "^3.0.3"

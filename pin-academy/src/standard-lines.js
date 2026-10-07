@@ -22,6 +22,11 @@ export const STANDARD_LINES = [
   { key: 'driver', q: 'Provide driver info', say: "We were able to find you a driver. Looks like {driver}, in a {car}, license plate {plate}, should be arriving in about {eta}. If you don't see the driver within that time, please give us a call back immediately so we can look into the status of your ride.", a: 'Perfect, thank you.' },
   { key: 'anything_else', q: 'Ask if there is anything else', say: 'Is there anything else I can help you with today?', a: "No, that's all. Thank you!" },
   { key: 'close', q: 'Close the call', say: 'Perfect! Thank you so much for calling GoGo, and we hope you have a beautiful and wonderful day.', a: 'You too, bye!' },
+  { key: 'save_home', q: 'Fix and save the home pin', say: 'I went ahead and adjusted the pin for your home so the driver comes right to you, and I saved it on your account.', a: 'Oh, thank you!' },
+  { key: 'mention_saved', q: 'Mention the saved location', say: 'Okay, looks like we have this location saved on your account.', a: 'Oh yes, I was dropped off there before.' },
+  { key: 'go_often', q: 'Ask if they go there often', say: 'Is {savedPlace} a place you go to often?', a: '{oftenAnswer}' },
+  { key: 'save_place', q: 'Save it as their preferred location', say: "Okay, I'm going to go ahead and save this on your account as your preferred location number three. That way it's easier for you when it's time to order rides to or from here.", a: "Oh, that's great, thank you!" },
+  { key: 'delete_place', q: 'Remove the wrong saved location', say: "Since you don't go there often, I'm going to remove it from your saved locations so it doesn't send a driver to the wrong spot next time.", a: "Okay, that's fine." },
   // Lines that sound right but are not what comes next (the wrong picks).
   { key: 'send_driver', q: 'Send the driver to the address', say: "Okay, I'll send the driver to that address.", a: 'Okay, thank you.' },
   { key: 'spell_street', q: 'Ask them to spell the street', say: 'Can you spell the street name for me?', a: 'Sure, let me spell it for you.' },
@@ -34,7 +39,7 @@ export const PLACEHOLDERS = {
   customer: "the customer's made-up full name", first: 'their first name', phone: "GoGo's toll-free number (stands in for theirs)",
   home: 'the home address on the account', pickupGiven: 'the pickup address the caller gives', pickupPlace: 'the pickup place name',
   dropoffGiven: 'the drop-off address the caller gives', dropoffPlace: 'the drop-off place name', dropoffAnswer: 'where they say they are going',
-  wearing: 'what they say they are wearing', notesAnswer: 'their answer about driver notes', cost: 'the estimate, e.g. $8-$10',
+  wearing: 'what they say they are wearing', notesAnswer: 'their answer about driver notes', cost: 'the estimate, e.g. $8-$10', savedPlace: 'the place saved with the wrong pin', oftenAnswer: 'whether they go there often',
   driver: "the driver's name", car: 'the car', plate: 'the license plate', eta: 'how soon the driver arrives',
 };
 
@@ -68,6 +73,7 @@ export function callVars(s) {
     dropoffGiven: spoken(dropoff?.addressGiven || ''), dropoffPlace: dropoff?.label || '',
     dropoffAnswer: v.dropoffAnswer || (dropoff?.label === 'Home' ? 'Home.' : `It's ${dropoff?.label || 'the address'}.`),
     wearing: v.wearing || 'A blue top and black pants.', notesAnswer: v.notesAnswer || "No, that's all.",
+    savedPlace: v.savedPlace || '', oftenAnswer: v.oftenAnswer || 'Yes, I go there every week.',
     cost: costWords(ride.cost || ''), driver: dr.name || '', car: dr.car ? dr.car.charAt(0).toLowerCase() + dr.car.slice(1) : '',
     plate: dr.plate || '', eta: dr.eta || '',
   };
