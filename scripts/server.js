@@ -57,21 +57,36 @@ function run(script) {
 // the trainees' pin practice and tests. If it ever fails to load, the tracker keeps
 // running and the port just answers "alive", so a Pin Academy problem can never stop
 // the daily refresh. /alive always answers, for checking the service is up.
-let pinAcademy = null;
+let pinAcademy = null, closePinAcademy = null;
 try {
-  ({ handle: pinAcademy } = await import('../pin-academy/server.js'));
+  ({ handle: pinAcademy, close: closePinAcademy } = await import('../pin-academy/server.js'));
   console.log('[pin-academy] ready');
 } catch (err) {
   console.error('[pin-academy] did not start (tracker unaffected):', err.message);
 }
 const port = process.env.PORT || 3000;
-http
+const web = http
   .createServer((req, res) => {
     if (pinAcademy && req.url !== '/alive') return pinAcademy(req, res);
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('gogo-operator-training: alive\n');
   })
   .listen(port, () => console.log(`[server] listening on ${port}`));
+
+// Railway stops the old copy on every deploy (with a volume attached it must, before the new one can use it).
+// Without this, the stop request cut the process off with an error code and Railway emailed "Deployment crashed".
+// Now: stop taking visits, close the Pin Academy database cleanly (nothing half-written), exit with 0.
+let stopping = false;
+export function shutdown(signal) {
+  if (stopping) return;
+  stopping = true;
+  console.log(`[server] ${signal} received: shutting down cleanly`);
+  web.close();
+  try { closePinAcademy && closePinAcademy(); } catch (err) { console.error('[server] closing the database:', err.message); }
+  process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 // ---------------------------------------------------------------- daily refresh
 //

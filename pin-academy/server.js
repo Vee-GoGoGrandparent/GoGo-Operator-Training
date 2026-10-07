@@ -3,7 +3,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { one, all, run, tx } from './src/db.js';
+import { db, one, all, run, tx } from './src/db.js';
 import { gradeScenario, publicScenario, cleanScenario } from './src/grading.js';
 import { EXAMPLE_SCENARIOS } from './src/examples.js';
 import * as auth from './src/auth.js';
@@ -440,6 +440,8 @@ export async function handle(req, res) {
   }
 }
 export const server = http.createServer(handle);
+// Called when the service is told to stop: closes the database so nothing is left half-written.
+export function close() { db.close(); }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   server.listen(PORT, () => console.log(`Pin Academy on http://localhost:${PORT}`));
