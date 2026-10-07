@@ -117,7 +117,7 @@ export function cleanScenario(b) {
     savedFix: [3, 4, 5].includes(Number(b.savedFix?.slot)) ? { slot: Number(b.savedFix.slot), action: b.savedFix.action === 'delete' ? 'delete' : 'update', stop: b.savedFix.stop === 'dropoff' ? 'dropoff' : 'pickup' } : null,
     account: { home: savedPlace(b.account?.home), saved: (Array.isArray(b.account?.saved) ? b.account.saved : []).map(savedPlace).filter(Boolean).slice(0, 3) },
     stops,
-    questions: (Array.isArray(b.questions) ? b.questions : []).slice(0, 16)
+    questions: (Array.isArray(b.questions) ? b.questions : []).slice(0, 30)
       .map((q) => ({ q: str(q.q, 160), say: str(q.say, 400), a: str(q.a, 300), needed: !!q.needed })).filter((q) => q.q),
     note: { mustMention: (Array.isArray(b.note?.mustMention) ? b.note.mustMention : []).map((k) => str(k, 40)).filter(Boolean).slice(0, 8), model: str(b.note?.model, 600) },
   };

@@ -69,13 +69,13 @@ try {
   const bad = (await ana(`/api/practice/${men.id}`, { pins: [ADDRESS_ONLY], asked: [], note: "🚪 Menchie's ☎️ Call Sheryl upon arrival" })).data;
   assert.equal(bad.passed, false);
   assert.ok(bad.stops[0].distance > 35 && bad.stops[0].distance < 50, `distance ${bad.stops[0].distance}`);
-  assert.equal(bad.missingQuestions.length, 7);
+  assert.equal(bad.missingQuestions.length, 9);
   assert.equal(bad.ordered.ok, false);
   assert.equal(bad.saved.ok, false);
   assert.ok(bad.note.problems.some((p) => p.includes('emoji')) && bad.note.problems.some((p) => p.includes('short')) && bad.note.missing.includes('blue'));
   check(`address-only pin is ${bad.stops[0].distance} m off; missed questions and the emoji note all caught`);
 
-  const good = (await ana(`/api/practice/${men.id}`, { pins: [MENCHIES, HOME], ordered: true, asked: [0, 1, 3, 7, 9, 12, 13], savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], note: GOOD_NOTE })).data;
+  const good = (await ana(`/api/practice/${men.id}`, { pins: [MENCHIES, HOME], ordered: true, asked: [0, 1, 4, 8, 10, 13, 14, 15, 16], savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], note: GOOD_NOTE })).data;
   assert.equal(good.passed, true, JSON.stringify(good));
   assert.ok(good.modelNote && good.why);
   check('right business pin + right questions + clear note passes, then shows the model note and why');
@@ -112,7 +112,7 @@ try {
   const st = (await ana(`/api/tests/${t}/start`, {})).data;
   assert.equal(st.scenarios.length, 2);
   assert.ok(!JSON.stringify(st).includes('"answer":') && !JSON.stringify(st).includes('needed') && !JSON.stringify(st).includes(String(MENCHIES.lng)), 'test start leaks answers');
-  const saved = (await ana(`/api/tests/${t}/answer`, { scenarioId: men.id, pins: [MENCHIES, HOME], ordered: true, asked: [0, 1, 3, 7, 9, 12, 13], savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], note: GOOD_NOTE })).data;
+  const saved = (await ana(`/api/tests/${t}/answer`, { scenarioId: men.id, pins: [MENCHIES, HOME], ordered: true, asked: [0, 1, 4, 8, 10, 13, 14, 15, 16], savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], note: GOOD_NOTE })).data;
   assert.deepEqual(saved, { saved: true }, 'answer must not reveal the result during a test');
   // Hospital: right pickup door but the ER entrance picked from the list, no question asked, good drop-off.
   await ana(`/api/tests/${t}/answer`, { scenarioId: hosp, pins: [{ lat: 39.8008, lng: -89.65 }, { lat: 39.81, lng: -89.66 }], entrances: [0, null], asked: [],
@@ -155,7 +155,7 @@ try {
   // Saved location #3 was stored with the wrong pin: it must be fixed (saved over), not left alone or deleted.
   assert.ok(!JSON.stringify(pub).includes('savedFix'), 'trainees must not see which saved slot is wrong');
   assert.ok(pub[0].account.saved[0].label.includes('Petrovitsky'), 'saved #3 should be on the account');
-  const base = { pins: [MENCHIES, HOME], ordered: true, asked: [0, 1, 3, 7, 9, 12, 13], note: GOOD_NOTE };
+  const base = { pins: [MENCHIES, HOME], ordered: true, asked: [0, 1, 4, 8, 10, 13, 14, 15, 16], note: GOOD_NOTE };
   const leftIt = (await ana(`/api/practice/${men.id}`, base)).data;
   assert.equal(leftIt.passed, false); assert.ok(leftIt.saved.did.includes('Left it'));
   const deleted = (await ana(`/api/practice/${men.id}`, { ...base, savedChanges: [{ slot: 3, action: 'delete' }] })).data;
@@ -165,7 +165,7 @@ try {
   check('saved location #3: left wrong, deleted, or re-saved with the wrong pin all fail; trap slot is hidden');
 
   // The clothing box counts toward the driver note: clothing there, note without it, still passes.
-  const split = (await ana(`/api/practice/${men.id}`, { pins: [MENCHIES, HOME], ordered: true, asked: [0, 1, 3, 7, 9, 12, 13], savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], wearing: 'Blue top, black jeans',
+  const split = (await ana(`/api/practice/${men.id}`, { pins: [MENCHIES, HOME], ordered: true, asked: [0, 1, 4, 8, 10, 13, 14, 15, 16], savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], wearing: 'Blue top, black jeans',
     note: "Customer is waiting inside Menchie's Frozen Yogurt, please call her if you cannot find her right away." })).data;
   assert.equal(split.passed, true, JSON.stringify(split.note));
   check('clothing in the What Are You Wearing Today? box counts toward the driver note');
@@ -201,6 +201,12 @@ try {
   assert.ok(!(await admin('/api/admin/classes')).data.some((c) => c.id === empty));
   assert.equal((await ana(`/api/admin/classes/${empty}/delete`, {})).status, 403);
   check('classes rename (no duplicates); only an empty class can be deleted; trainees cannot delete');
+
+  const before = (await admin('/api/admin/scenarios')).data.find((x) => x.id === men.id).tries;
+  await admin(`/api/practice/${men.id}`, { pins: [MENCHIES], note: 'x' });
+  assert.equal((await admin('/api/admin/scenarios')).data.find((x) => x.id === men.id).tries, before, 'an admin try counted in the scenario stats');
+  assert.equal((await admin('/api/admin/people')).data.find((p) => p.slack_id === 'UADMIN').practice_tries, 1, 'admin should still see their own tries');
+  check("admins' own practice is visible to them but never counted in a scenario's stats");
 
   assert.ok((await (await fetch(BASE + '/')).text()).includes('GoGo Pin Academy'));
   check('page loads');

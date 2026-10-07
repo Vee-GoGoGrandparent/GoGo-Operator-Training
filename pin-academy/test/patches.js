@@ -19,7 +19,7 @@ try {
   const d = ex.data;
   delete d.account.home; d.stops = d.stops.filter((x) => x.kind === 'pickup'); delete d.ride;
   d.account.saved = [{ label: 'Doctor', address: 'Admin saved place', lat: 47.5, lng: -122.2 }]; delete d.savedFix; // #3 lost, admin's own place kept
-  d.questions = d.questions.filter((q) => q.q !== 'Ask if they go there often');
+  d.questions = d.questions.filter((q) => !['Ask if they go there often', 'Mention the saved location', 'Ask if there is anything else', 'Close the call'].includes(q.q));
   d.questions = d.questions.filter((q) => !['Provide estimate', 'Provide driver info', 'Ask them to spell the street'].includes(q.q));
   d.questions[0].say = 'ADMIN WORDING';
   d.questions.push({ q: 'Admin extra line', say: 'Something Vee added', a: 'Sure.', needed: false });
@@ -42,6 +42,11 @@ try {
   const oi = after.questions.findIndex((q) => q.q === 'Ask if they go there often');
   assert.ok(oi >= 0 && after.questions[oi + 1].q === 'Ask for notes for the driver', 'go-often line missing or misplaced');
   check('saved #3 (wrong pin) restored as the slot to fix; admin saved place kept; "go there often" line back');
+  assert.ok(after.questions.filter((q) => /anything else/i.test(q.say)).length === 1, 'anything-else line missing or doubled');
+  assert.ok(after.questions.some((q) => q.q === 'Close the call' && q.needed));
+  const sv = after.questions.findIndex((q) => q.q === 'Mention the saved location');
+  assert.ok(sv > 0 && /read the address back/i.test(after.questions[sv - 1].q), 'saved-location line missing or misplaced');
+  check('closing lines added once (must-ask); "location saved" line right after the read-back');
 
   // Running again changes nothing, and does not add the lines twice.
   run('UPDATE scenarios SET data = ? WHERE title = ?', JSON.stringify({ ...after, why: 'ADMIN WHY' }), ex.title);

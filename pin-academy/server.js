@@ -282,8 +282,10 @@ route('GET', '/api/my/history', (req, res) => {
 // ── admins: scenarios ──────────────────────────────────────────────────
 route('GET', '/api/admin/scenarios', (req, res) => {
   needAdmin(req);
-  send(res, 200, all(`SELECT s.*, (SELECT COUNT(*) FROM scenario_answers sa WHERE sa.scenario_id = s.id) tries,
-    (SELECT SUM(passed) FROM scenario_answers sa WHERE sa.scenario_id = s.id) passes FROM scenarios s WHERE archived = 0 ORDER BY id DESC`)
+  // Trainees only: admins and trainers trying their own scenarios never count toward these numbers.
+  const trainee = `JOIN attempts a ON a.id = sa.attempt_id JOIN users u ON u.slack_id = a.slack_id AND u.role = 'trainee'`;
+  send(res, 200, all(`SELECT s.*, (SELECT COUNT(*) FROM scenario_answers sa ${trainee} WHERE sa.scenario_id = s.id) tries,
+    (SELECT SUM(sa.passed) FROM scenario_answers sa ${trainee} WHERE sa.scenario_id = s.id) passes FROM scenarios s WHERE archived = 0 ORDER BY id DESC`)
     .map((s) => ({ id: s.id, version: s.version, title: s.title, category: s.category, practice: !!s.practice, tries: s.tries, passes: s.passes || 0, data: scenarioData(s) })));
 });
 

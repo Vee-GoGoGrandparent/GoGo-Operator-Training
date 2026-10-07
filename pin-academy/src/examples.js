@@ -6,7 +6,7 @@ export const EXAMPLE_SCENARIOS = [
     title: "Menchie's on Petrovitsky Road",
     category: 'Restaurant or shop',
     data: {
-      caller: 'Hi, I need a ride.',
+      caller: "Hi, I'd like to be picked up at 14060 Southeast Petrovitsky Road.",
       why: "Typed as an address only, this drops the pin on the building next door, and that is exactly where a driver went once: the customer was never picked up. "
         + "Type the business name in the same address box (start with \"Men\") and pick Menchie's from the list: the pin moves about 40 m to the right storefront. "
         + 'Always add the place name the customer mentions, then check the pin on satellite and Street View. '
@@ -40,6 +40,7 @@ export const EXAMPLE_SCENARIOS = [
           a: '14060 Southeast Petrovitsky Road, in Renton.', needed: true },
         { q: 'Read the address back', say: "Okay, that's 14060 Southeast Petrovitsky Road in Renton, Washington. Is that correct?",
           a: "Yes, that's right.", needed: true },
+        {"q":"Mention the saved location","say":"Okay, looks like we have this location saved on your account.","a":"Oh yes, I've been there before.","needed":false},
         { q: 'Ask them to spell the street', say: 'Can you spell the street name for me?', a: 'P-E-T-R-O-V-I-T-S-K-Y.', needed: false },
         { q: 'Ask for the name of the business', say: 'Are you at a business at that address? What is the name of it?', a: "Yes, I'm at Menchie's.", needed: true },
         { q: 'Ask them to spell the business', say: "You said you're located at Menchie's. Can you spell the name of the business for me?",
@@ -57,6 +58,8 @@ export const EXAMPLE_SCENARIOS = [
           a: 'Yes, please.', needed: true },
         { q: 'Provide driver info', say: "We were able to find you a driver. Looks like Lidong, in a black Toyota Sienna, last 4 digits 0734 should be arriving in the next 2 minutes. If for any reason he doesn't show up within the estimated time, please give us a call back.",
           a: 'Okay, thank you.', needed: true },
+        {"q":"Ask if there is anything else","say":"Is there anything else I can help you with today?","a":"No, that's all. Thank you!","needed":true},
+        {"q":"Close the call","say":"Perfect! Thank you so much for calling GoGo, and we hope you have a beautiful and wonderful day.","a":"You too, bye!","needed":true},
       ],
       note: {
         mustMention: ['Menchie', 'blue', 'jeans'],

@@ -114,7 +114,7 @@ async function placeSearch(host, onPick) {
 
 // Laid out like the GoGo dashboard's Location Map: Street View on top, satellite map below, legend underneath.
 // Grey = where Google put it ("Original"), green/pink = the pin you move, blue numbered = entrances.
-async function pinMap(host, { start, kind = 'pickup', draggable = true, onMove, entrances = [], onEntrance } = {}) {
+async function pinMap(host, { start, kind = 'pickup', draggable = true, onMove, onUserMove, entrances = [], onEntrance } = {}) {
   if (!(await loadMaps())) { host.append(noMap()); return null; }
   const [{ Map, Polyline }, { AdvancedMarkerElement, PinElement }, { StreetViewPanorama, StreetViewService }] = await Promise.all(
     ['maps', 'marker', 'streetView'].map((l) => google.maps.importLibrary(l)));
@@ -158,15 +158,16 @@ async function pinMap(host, { start, kind = 'pickup', draggable = true, onMove, 
     });
   }
   const moved = () => { const p = ll(marker.position); lookAt(p); onMove && onMove(p); };
-  marker.addListener('dragend', moved);
-  map.addListener('click', (e) => { if (!draggable) return; marker.position = e.latLng; moved(); });
+  const userMoved = () => { moved(); onUserMove && onUserMove(ll(marker.position)); };
+  marker.addListener('dragend', userMoved);
+  map.addListener('click', (e) => { if (!draggable) return; marker.position = e.latLng; userMoved(); });
 
   function setEntrances(list) {
     entranceMarkers.forEach((x) => (x.map = null));
     entranceMarkers = list.map((e, i) => {
       const mk = new AdvancedMarkerElement({ map, position: { lat: e.lat, lng: e.lng }, title: e.name, zIndex: 2,
         content: new PinElement({ background: '#3d9df5', borderColor: '#1f6fb8', glyph: String(i + 1), glyphColor: '#fff', scale: 0.95 }).element });
-      mk.addListener('click', () => { if (!draggable) return; marker.position = { lat: e.lat, lng: e.lng }; moved(); onEntrance && onEntrance(i); });
+      mk.addListener('click', () => { if (!draggable) return; marker.position = { lat: e.lat, lng: e.lng }; userMoved(); onEntrance && onEntrance(i); });
       return mk;
     });
   }
@@ -296,6 +297,19 @@ async function render(id) {
   } catch (e) { mount(h('div', { class: 'card' }, h('p', {}, e.message), h('button', { class: 'btn ghost', onclick: () => go('practice') }, 'Go to Practice'))); }
 }
 
+// A simple drawing of the driver's car, coloured from the description ("Black Toyota Sienna" -> black minivan).
+function carPicture(desc = '') {
+  const colours = { black: '#1f1f24', white: '#f2f2f2', silver: '#b9bcc4', grey: '#7c7f87', gray: '#7c7f87', red: '#c62828', blue: '#1f4fa8', green: '#2e7d32' };
+  const word = Object.keys(colours).find((c) => desc.toLowerCase().includes(c)) || 'grey';
+  const body = colours[word];
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 120"><rect x="0" y="0" width="240" height="120" rx="10" fill="#eef1f6"/>
+    <path d="M22 78 L30 48 Q34 36 48 34 L150 32 Q168 32 182 44 L206 62 Q218 64 220 76 L220 88 L22 88 Z" fill="${body}" stroke="#333" stroke-width="2"/>
+    <path d="M52 40 L98 38 L98 60 L42 60 Z M106 38 L146 37 Q160 37 172 48 L182 60 L106 60 Z" fill="#9fc3e0" stroke="#333" stroke-width="1.5"/>
+    <circle cx="62" cy="90" r="15" fill="#222"/><circle cx="62" cy="90" r="6" fill="#aaa"/><circle cx="180" cy="90" r="15" fill="#222"/><circle cx="180" cy="90" r="6" fill="#aaa"/>
+    <rect x="208" y="70" width="10" height="6" rx="2" fill="#ffd54f"/></svg>`;
+  return h('img', { class: 'car-pic', alt: desc || 'Driver car', src: 'data:image/svg+xml;utf8,' + encodeURIComponent(svg) });
+}
+
 // A dashboard-style pop-up. buttons: [[label, className, onClick]]; returns close().
 function modal(title, body, buttons) {
   const back = h('div', { class: 'modal-back' });
@@ -366,7 +380,7 @@ function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit 
     const ensureMap = async (start) => {
       if (b.pm || b.mapLoading) return b.pm;
       b.mapLoading = true;
-      b.pm = await pinMap(mapHost, { start, kind, entrances, onMove: (p) => { b.pin = p; showLL(p); maybeOffer(p); },
+      b.pm = await pinMap(mapHost, { start, kind, entrances, onMove: (p) => { b.pin = p; showLL(p); }, onUserMove: (p) => maybeOffer(p),
         onEntrance: (i) => { venue.value = String(i); b.entrance = i; specific.value = entrances[i].name; } });
       if (b.pm) { b.pin = b.pm.getPin(); showLL(b.pin); }
       return b.pm;
@@ -376,7 +390,7 @@ function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit 
       city.value = p.city || ''; state.value = p.state || ''; zip.value = p.zip || ''; locName.value = p.name || '';
       placeId.textContent = p.placeId || '';
       const pm = await ensureMap(p);
-      if (pm) { pm.setOriginal(p); pm.setPin(p); }
+      if (pm) { pm.setOriginal(p); pm.setPin(p); } else b.pin = { lat: p.lat, lng: p.lng };
       showLL(p);
     };
     // Saved places on the pretend account: Home (⌂) and the saved list. They fill the box like the dashboard does.
@@ -428,16 +442,25 @@ function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit 
         ['Cancel', 'yellow', (close) => close()],
       ]);
     }
-    // Moving the pin of a place that came from a saved location: offer to save it (once per pick), like Vee described.
+    // When a person adjusts the pin of a place the account already has saved (picked from the slots, or searched
+    // and it lands within about 150 m of a saved place), the save pop-up comes up, like on the dashboard. Once per address.
+    const metres = (a, c) => Math.hypot((a.lat - c.lat) * 111320, (a.lng - c.lng) * 111320 * Math.cos(a.lat * Math.PI / 180));
     function maybeOffer(p) {
-      if (b.fromSlot == null || b.offered || !b.fromPlace) return;
-      const far = Math.abs(p.lat - b.fromPlace.lat) + Math.abs(p.lng - b.fromPlace.lng) > 0.00004; // about 4 m
-      if (!far) return;
+      if (b.offered) return;
+      let slot = b.fromSlot;
+      if (slot == null) {
+        const near = [['home', acct.home], ...acct.saved.map((sp, i) => [i + 3, sp])].filter(([, sp]) => sp && metres(p, sp) < 150)
+          .sort((x, y) => metres(p, x[1]) - metres(p, y[1]))[0];
+        if (!near) return;
+        slot = near[0];
+      }
+      const from = slot === 'home' ? acct.home : acct.saved[slot - 3];
+      if (from && metres(p, from) < 3) return; // pin still on the saved spot: nothing changed
       b.offered = true;
-      setTimeout(() => saveLocation(b.fromSlot), 300);
+      setTimeout(() => saveLocation(slot), 250);
     }
     const typedLL = async () => { const p = { lat: Number(lat.value), lng: Number(lng.value) };
-      if (Number.isFinite(p.lat) && Number.isFinite(p.lng) && Math.abs(p.lat) <= 90 && Math.abs(p.lng) <= 180) { const pm = await ensureMap(p); pm && pm.setPin(p); } };
+      if (Number.isFinite(p.lat) && Number.isFinite(p.lng) && Math.abs(p.lat) <= 90 && Math.abs(p.lng) <= 180) { const pm = await ensureMap(p); if (pm) pm.setPin(p); else b.pin = p; maybeOffer(p); } };
     lat.addEventListener('change', typedLL); lng.addEventListener('change', typedLL);
     const clear = () => { [street, apt, city, state, zip, lat, lng, locName, specific].forEach((x) => (x.value = '')); placeId.textContent = ''; venue.value = ''; b.entrance = null; };
     b.el = h('div', { class: 'ro-block' },
@@ -461,7 +484,7 @@ function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit 
         h('button', { class: 'pill yellow', type: 'button', onclick: clear }, 'Reset')));
     Object.assign(b, { specific, locName });
     drawSlots();
-    addressSearch(street, (p) => { b.fromSlot = null; redrawSlots.forEach((f) => f()); fill(p); });
+    addressSearch(street, (p) => { b.fromSlot = null; b.offered = false; redrawSlots.forEach((f) => f()); fill(p); });
     if (stop) ensureMap(stop.start);
     return b;
   }
@@ -472,26 +495,44 @@ function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit 
   const note = h('textarea', { placeholder: 'Anything else the driver needs to know?' });
   const checkbox = (label, extra = {}) => h('label', { class: 'ro-check' }, h('input', { type: 'checkbox', ...extra }), label);
   const submitBtn = h('button', { class: 'btn orange end-call', type: 'button' }, submitLabel);
-  // Get Estimate shows the dashboard's estimate; Order Ride books it and shows the driver to read to the customer.
+  // Like the dashboard: Get Estimate unfolds the estimate under the buttons, which turn into Order Ride / Cancel.
+  // Order Ride waits for a driver, then the same space shows the driver (with a picture of the car) to read out.
   const ride = s.ride || {};
   let ordered = false;
   const detail = (label, ...val) => h('tr', {}, h('th', {}, label), h('td', {}, ...val));
+  const estimateBox = h('div', { class: 'ro-estimate' });
+  const mainBtns = h('div', { class: 'ro-btns ro-center' });
+  function showMainButtons() {
+    mainBtns.replaceChildren(
+      h('button', { class: 'pill purple', type: 'button', onclick: getEstimate }, 'Get Estimate'),
+      h('button', { class: 'pill yellow', type: 'button', onclick: () => { blocks.pickup.el.querySelector('.ro-btns .pill.yellow').click(); blocks.dropoff.el.querySelector('.ro-btns .pill.yellow').click(); wearing.value = ''; note.value = ''; } }, 'Reset'),
+      h('button', { class: 'pill cyan', type: 'button', onclick: () => toast('This is the Order a Ride Now tab: use Get Estimate, then Order Ride.') }, 'Schedule This Ride'));
+  }
   function getEstimate() {
     const missing = s.stops.filter((x) => !blocks[x.kind].pin).map((x) => (x.kind === 'dropoff' ? 'End Address' : 'Start Address'));
     if (missing.length) return toast(`Fill in the ${missing.join(' and ')} first.`);
-    modal(null, h('table', { class: 'estimate' },
+    estimateBox.replaceChildren(h('table', { class: 'estimate' },
       detail('Ride Type:', h('span', { class: 'red' }, `${ride.rideType} For ${ride.customerName}`)),
       detail('ETA:', ride.eta),
       detail('Ride Details:', h('div', {}, ride.trip), h('div', {}, `Surge Factor: ${ride.surge}`), h('div', {}, `Cost Per Mile: ${ride.perMile}`),
         h('div', {}, `Cost Per Minute: ${ride.perMinute}`), h('div', {}, `Base Fare: ${ride.baseFare}`), h('div', {}, `Minimum Fare: ${ride.minFare}`)),
       detail('GoGo Cost', ride.cost), detail('Caller GoGo Credits:', ride.credits), detail('Caller Expiring Credits:', ride.expiring),
-      detail('User Has Auto Tipping On:', ride.autoTip), detail('Caller Partner Subsidies:', ''), detail('Partner Info for Operator:', '')),
-      [['Order Ride', 'purple', (close) => {
-        close(); ordered = true;
-        const dr = ride.driver || {};
-        modal('Ride ordered', h('table', { class: 'estimate' }, detail('Driver:', dr.name), detail('Car:', dr.car), detail('Plate (last 4):', dr.plate), detail('Arriving in:', dr.eta)),
-          [['OK', 'yellow', (c2) => c2()]]);
-      }], ['Cancel', 'yellow', (close) => close()]]);
+      detail('User Has Auto Tipping On:', ride.autoTip), detail('Caller Partner Subsidies:', ''), detail('Partner Info for Operator:', '')));
+    mainBtns.replaceChildren(
+      h('button', { class: 'pill purple', type: 'button', onclick: orderRide }, 'Order Ride'),
+      h('button', { class: 'pill yellow', type: 'button', onclick: () => { estimateBox.replaceChildren(); showMainButtons(); } }, 'Cancel'));
+    estimateBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+  function orderRide() {
+    ordered = true;
+    mainBtns.replaceChildren();
+    estimateBox.replaceChildren(h('div', { class: 'ro-finding' }, h('span', { class: 'spin' }), 'Finding a driver…'));
+    setTimeout(() => {
+      const dr = ride.driver || {};
+      estimateBox.replaceChildren(h('div', { class: 'ro-driver' }, carPicture(dr.car),
+        h('table', { class: 'estimate' }, detail('Ride Type:', h('span', { class: 'red' }, `${ride.rideType} For ${ride.customerName}`)),
+          detail('Driver:', dr.name), detail('Vehicle:', dr.car), detail('License Plate:', `Last 4 digits ${dr.plate}`), detail('Arriving In:', dr.eta))));
+    }, 4000);
   }
   const getSubmission = () => ({
     pins: s.stops.map((x) => blocks[x.kind].pin), entrances: s.stops.map((x) => blocks[x.kind].entrance), asked: [...asked],
@@ -519,10 +560,8 @@ function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit 
     row('Ride Type', h('div', {}, checkbox('Emergency Ride'), checkbox('Expand Driver Search'), checkbox('Expand Vehicle Search'))),
     row('Auto Retry Getting a', h('select', { disabled: true }, h('option', {}, 'Select one'))),
     h('div', { class: 'ro-indent' }, checkbox('Do not apply expiring credits to this ride')),
-    h('div', { class: 'ro-btns ro-center' },
-      h('button', { class: 'pill purple', type: 'button', onclick: getEstimate }, 'Get Estimate'),
-      h('button', { class: 'pill yellow', type: 'button', onclick: () => { blocks.pickup.el.querySelector('.pill.yellow').click(); blocks.dropoff.el.querySelector('.pill.yellow').click(); wearing.value = ''; note.value = ''; } }, 'Reset'),
-      h('button', { class: 'pill cyan', type: 'button', onclick: () => toast('This is the Order a Ride Now tab: use Get Estimate, then Order Ride.') }, 'Schedule This Ride')));
+    mainBtns, estimateBox);
+  showMainButtons();
 
   const side = h('nav', { class: 'ro-side' }, h('div', { class: 'ro-logo' }, 'GOGOGRANDPARENT'),
     h('input', { type: 'text', placeholder: 'Form Search', disabled: true }),
@@ -919,14 +958,25 @@ VIEWS['a-people'] = async () => {
       links.length ? h('div', { class: 'row', style: 'margin-top:8px' }, links.map((t) => h('button', { class: 'btn ghost small', onclick: copyLink(t) }, `Copy link: ${t.name} (${t.mode === 'practice' ? 'practice' : 'test'})`)))
         : h('div', { class: 'small muted' }, 'No practice set or test yet. Make one on Practice & tests to get a link.'));
   };
+  // Admins and trainers sit apart from the classes: their own tries are visible here but never mixed into a class.
+  const admins = people.filter((p) => p.role === 'admin');
   const byClass = {};
-  people.forEach((p) => (byClass[p.class_name || 'No class yet'] ||= []).push(p));
+  people.filter((p) => p.role !== 'admin').forEach((p) => (byClass[p.class_name || 'No class yet'] ||= []).push(p));
   mount(h('h1', {}, 'People & classes'),
     h('p', { class: 'lead' }, 'Make a class, then make a practice set and a test for it on Practice & tests. Each has a link: whoever opens it joins the class. A class can be deleted only while it is empty.'),
     h('div', { class: 'card' }, h('h2', {}, 'Add a class'), h('div', { class: 'row' }, h('div', { class: 'grow' }, newName),
       h('button', { class: 'btn', onclick: safe(async () => { await api('/api/admin/classes', { name: newName.value }); go('a-people'); }) }, 'Add class'))),
     classes.map(classCard),
-    h('h2', {}, 'People'),
+    h('h2', {}, 'Admins & trainers'),
+    h('div', { class: 'card admins' }, h('p', { class: 'small muted' }, 'You, Oscar and anyone given admin access. Your own practice shows here and is never counted in a class or in a scenario\u2019s "Got right".'),
+      h('table', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Practice calls'), h('th', {}, 'Calls got right'), h('th', {}, 'Role'), h('th', {}, 'Last sign-in')),
+        admins.map((p) => {
+          const r = h('select', { onchange: safe(async () => { await api('/api/admin/people', { slackId: p.slack_id, role: r.value }); toast('Role updated'); go('a-people'); }) },
+            ['admin', 'trainee'].map((x) => h('option', { value: x, selected: x === p.role }, x === 'admin' ? 'Admin' : 'Trainee')));
+          return h('tr', {}, h('td', {}, p.name), h('td', {}, p.practice_tries), h('td', {}, p.practice_right), h('td', {}, r), h('td', { class: 'small muted' }, when(p.last_login)));
+        }))),
+    h('h2', {}, 'Trainees by class'),
+    !Object.keys(byClass).length ? h('div', { class: 'card muted' }, 'No trainees yet. Send a class its practice or test link.') : null,
     Object.entries(byClass).map(([cname, list]) => h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, cname),
       h('table', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Practice calls'), h('th', {}, 'Calls got right'), h('th', {}, 'Tests handed in'), h('th', {}, 'Class'), h('th', {}, 'Role'), h('th', {}, 'Last sign-in')),
         list.map((p) => {
@@ -937,6 +987,7 @@ VIEWS['a-people'] = async () => {
           return h('tr', {}, h('td', {}, p.name), h('td', {}, p.practice_tries), h('td', {}, p.practice_right), h('td', {}, p.tests_done),
             h('td', {}, c), h('td', {}, r), h('td', { class: 'small muted' }, when(p.last_login)));
         })))));
+  // (a trainee made admin moves up to Admins & trainers on the next refresh)
 };
 
 boot().catch((e) => mount(h('div', { class: 'card' }, e.message)));

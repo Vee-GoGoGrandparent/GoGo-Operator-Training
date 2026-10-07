@@ -59,6 +59,27 @@ const PATCHES = [
       return true;
     },
   },
+  {
+    // Vee, 2026-10-06 night: the caller gives the address right away; "we have this location saved" after the
+    // read-back; every call closes with "anything else?" and the closing line (both must-ask). Add-only: the opening
+    // line changes only if it is still the original default.
+    name: 'menchies-callflow-close-2026-10-06',
+    run() {
+      const row = one('SELECT * FROM scenarios WHERE title = ?', "Menchie's on Petrovitsky Road");
+      if (!row) return false;
+      const d = JSON.parse(row.data);
+      if (d.caller === 'Hi, I need a ride.') d.caller = "Hi, I'd like to be picked up at 14060 Southeast Petrovitsky Road.";
+      const has = (re) => d.questions.some((q) => re.test(`${q.q} ${q.say}`));
+      if (!has(/location saved/i)) {
+        const at = d.questions.findIndex((q) => /read the address back/i.test(q.q));
+        d.questions.splice(at >= 0 ? at + 1 : d.questions.length, 0, {"q":"Mention the saved location","say":"Okay, looks like we have this location saved on your account.","a":"Oh yes, I've been there before.","needed":false});
+      }
+      if (!has(/anything else/i)) d.questions.push({"q":"Ask if there is anything else","say":"Is there anything else I can help you with today?","a":"No, that's all. Thank you!","needed":true});
+      if (!has(/thank you so much for calling/i)) d.questions.push({"q":"Close the call","say":"Perfect! Thank you so much for calling GoGo, and we hope you have a beautiful and wonderful day.","a":"You too, bye!","needed":true});
+      run('UPDATE scenarios SET data = ?, version = version + 1 WHERE id = ?', JSON.stringify(cleanScenario(d)), row.id);
+      return true;
+    },
+  },
 ];
 
 export function runPatches() {
