@@ -134,7 +134,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 20px 0; }
 .stop.dropoff { border-left: 5px solid #6b5bd2; }
 .search { margin-bottom: 4px; }
 .model { background: var(--green-soft); border-radius: 10px; padding: 10px 14px; }
-.qrow { display: grid; grid-template-columns: 1.2fr 1fr auto auto; gap: 8px; align-items: center; margin-bottom: 8px; }
+.qrow { display: grid; grid-template-columns: 1fr 1.4fr 1fr auto auto; gap: 8px; align-items: center; margin-bottom: 8px; }
 @media (max-width: 860px) { .qrow { grid-template-columns: 1fr; } }
 details summary { cursor: pointer; }
 

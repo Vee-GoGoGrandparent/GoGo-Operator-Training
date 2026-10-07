@@ -294,7 +294,7 @@ function scenarioForm(s) {
   const qButtons = s.questions.map((q, i) => h('button', { class: 'qbtn', onclick: () => {
     if (asked.has(i)) return;
     asked.add(i); qButtons[i].classList.add('on');
-    transcript.append(h('div', { class: 'line you' }, h('b', {}, 'You: '), q.q), h('div', { class: 'line caller' }, h('b', {}, 'Caller: '), q.a));
+    transcript.append(h('div', { class: 'line you' }, h('b', {}, 'You: '), q.say || q.q), h('div', { class: 'line caller' }, h('b', {}, 'Caller: '), q.a));
   } }, q.q));
 
   const copyBtn = (get) => h('button', { class: 'copy', type: 'button', title: 'Copy', onclick: () => { navigator.clipboard?.writeText(get()); toast('Copied'); } }, '⧉');
@@ -358,7 +358,7 @@ function scenarioForm(s) {
   const el = h('div', {},
     h('div', { class: 'card call' }, h('div', { class: 'row' }, h('h2', { class: 'grow' }, '📞 The call'), h('span', { class: 'tag' }, s.category)),
       transcript,
-      s.questions.length ? [h('label', {}, 'Ask the caller (pick the questions you would ask)'), h('div', { class: 'qbtns' }, qButtons)] : null),
+      s.questions.length ? [h('label', {}, 'What do you say next? Pick in the order you would on the call'), h('div', { class: 'qbtns' }, qButtons)] : null),
     stops.map((x) => x.card),
     h('div', { class: 'card' }, h('h2', {}, 'Driver Message Preview'), note),
     result);
@@ -528,7 +528,7 @@ VIEWS['a-scenarios'] = async () => {
 function editScenario(existing) {
   const d = existing ? structuredClone(existing.data) : {
     caller: '', why: '', stops: [{ kind: 'pickup', label: '', addressGiven: '', answer: null, start: null, entrances: [], correctEntrance: null }],
-    questions: SUGGESTED_QUESTIONS.map((q) => ({ q, a: '', needed: false })), note: { mustMention: [], model: '' },
+    questions: SUGGESTED_QUESTIONS.map((q) => ({ q, say: '', a: '', needed: false })), note: { mustMention: [], model: '' },
   };
   const title = h('input', { type: 'text', value: existing?.title || '', placeholder: "e.g. Menchie's on Petrovitsky Road" });
   const cat = h('select', {}, CATEGORIES.map((c) => h('option', { value: c, selected: c === (existing?.category || 'Restaurant or shop') }, c)));
@@ -585,12 +585,13 @@ function editScenario(existing) {
   }
   function drawQuestions() {
     qHost.replaceChildren(...d.questions.map((q, i) => {
-      const qq = h('input', { type: 'text', value: q.q, placeholder: 'Question the trainee could ask', oninput: () => (q.q = qq.value) });
+      const qq = h('input', { type: 'text', value: q.q, placeholder: 'Button, e.g. Read the address back', oninput: () => (q.q = qq.value) });
+      const say = h('input', { type: 'text', value: q.say || '', placeholder: 'What you say (optional), e.g. Okay, that is 14060...', oninput: () => (q.say = say.value) });
       const aa = h('input', { type: 'text', value: q.a, placeholder: 'What the caller answers', oninput: () => (q.a = aa.value) });
       const need = h('input', { type: 'checkbox', checked: q.needed, onchange: () => (q.needed = need.checked) });
-      return h('div', { class: 'qrow' }, qq, aa, h('label', { class: 'check', style: 'margin:0' }, need, 'Must ask'),
+      return h('div', { class: 'qrow' }, qq, say, aa, h('label', { class: 'check', style: 'margin:0' }, need, 'Must ask'),
         h('button', { class: 'btn ghost small', onclick: () => { d.questions.splice(i, 1); drawQuestions(); } }, '✕'));
-    }), h('button', { class: 'btn ghost small', onclick: () => { d.questions.push({ q: '', a: '', needed: false }); drawQuestions(); } }, '+ Add a question'));
+    }), h('button', { class: 'btn ghost small', onclick: () => { d.questions.push({ q: '', say: '', a: '', needed: false }); drawQuestions(); } }, '+ Add a question'));
   }
 
   mount(h('button', { class: 'btn ghost small', onclick: () => go('a-scenarios') }, '← Scenarios'),
@@ -599,7 +600,7 @@ function editScenario(existing) {
       h('label', {}, 'What the caller says'), caller,
       h('label', { class: 'check' }, practice, 'Use in practice (untick to keep it for tests only)')),
     stopsHost,
-    h('div', { class: 'card' }, h('h2', {}, 'Questions'), h('p', { class: 'small muted' }, 'Trainees pick which ones to ask. Tick "Must ask" for the ones they need to get it right. Leave an answer blank to remove a question.'), qHost),
+    h('div', { class: 'card' }, h('h2', {}, 'Questions'), h('p', { class: 'small muted' }, 'Each line is something the operator can say: a short button, the full line they say, and the caller answer. Include read-backs and a weak option or two. Tick "Must ask" for the ones needed to get it right. Lines with no answer are dropped.'), qHost),
     h('div', { class: 'card' }, h('h2', {}, 'Driver note'),
       h('label', {}, 'The note must mention (comma separated, any order)'), must,
       h('label', {}, 'A good note (shown after they answer)'), model,

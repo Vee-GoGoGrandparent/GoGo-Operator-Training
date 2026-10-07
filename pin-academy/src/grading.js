@@ -55,7 +55,7 @@ export function publicScenario(row) {
     id: row.id, title: row.title, category: row.category,
     caller: s.caller,
     stops: s.stops.map((x) => ({ kind: x.kind, label: x.label, addressGiven: x.addressGiven, start: x.start || nearby(x.answer), entrances: x.entrances.map((e) => ({ name: e.name, lat: e.lat, lng: e.lng })) })),
-    questions: s.questions.map((q) => ({ q: q.q, a: q.a })),
+    questions: s.questions.map((q) => ({ q: q.q, say: q.say || '', a: q.a })),
   };
 }
 
@@ -78,8 +78,8 @@ export function cleanScenario(b) {
   return {
     caller: str(b.caller, 600), why: str(b.why, 1500),
     stops,
-    questions: (Array.isArray(b.questions) ? b.questions : []).slice(0, 10)
-      .map((q) => ({ q: str(q.q, 160), a: str(q.a, 300), needed: !!q.needed })).filter((q) => q.q),
+    questions: (Array.isArray(b.questions) ? b.questions : []).slice(0, 16)
+      .map((q) => ({ q: str(q.q, 160), say: str(q.say, 400), a: str(q.a, 300), needed: !!q.needed })).filter((q) => q.q),
     note: { mustMention: (Array.isArray(b.note?.mustMention) ? b.note.mustMention : []).map((k) => str(k, 40)).filter(Boolean).slice(0, 8), model: str(b.note?.model, 600) },
   };
 }
