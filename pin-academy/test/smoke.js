@@ -51,7 +51,7 @@ try {
   assert.equal((await ana('/api/me/class', { classId: nov })).status, 409);
   check('classes made; a trainee can pick their class only once');
 
-  assert.equal((await admin('/api/admin/scenarios/examples', {})).data.added, 1);
+  assert.equal((await admin('/api/admin/scenarios/examples', {})).data.added, 2);
   assert.equal((await admin('/api/admin/scenarios/examples', {})).data.added, 0);
   const list = (await admin('/api/admin/scenarios')).data;
   const men = list.find((s) => s.title.startsWith("Menchie's"));
@@ -72,11 +72,12 @@ try {
   check('pin skills sent to the page; Menchie\'s is "Place or business name"; old types and unknown values saved as a pin skill');
 
   const pub = (await ana('/api/practice')).data;
+  const pubM = pub.find((s) => s.title.startsWith("Menchie's"));
   const json = JSON.stringify(pub);
   for (const secret of ['answer', 'needed', 'model', 'mustMention', 'why', '"right"', String(MENCHIES.lng)]) assert.ok(!json.includes(secret), `practice list leaks ${secret}`);
-  assert.equal(pub[0].steps.length, 12); assert.equal(pub[0].steps[0].choices.length, 3);
-  assert.deepEqual(pub[0].stops[0].start, ADDRESS_ONLY, 'map should open where the address alone puts it');
-  assert.ok(pub[0].questions[0].say.includes('pull up your account') && pub[0].questions.some((q) => q.q === 'Read the address back'), 'operator lines missing');
+  assert.equal(pubM.steps.length, 12); assert.equal(pubM.steps[0].choices.length, 3);
+  assert.deepEqual(pubM.stops[0].start, ADDRESS_ONLY, 'map should open where the address alone puts it');
+  assert.ok(pubM.questions[0].say.includes('pull up your account') && pubM.questions.some((q) => q.q === 'Read the address back'), 'operator lines missing');
   check('practice list hides the right pin, must-ask flags, model note and why');
 
   // Address only, no questions, emoji fragment note: everything wrong.
@@ -120,6 +121,32 @@ try {
   const mv = (await admin('/api/admin/scenarios')).data.find((x) => x.id === moved).data;
   assert.deepEqual(mv.steps, [{ choices: [0, 1, 2], right: [1, 2] }], JSON.stringify(mv.steps));
   check('steps follow their lines when blank lines are dropped; a step whose right line is gone is dropped; two right answers kept');
+
+  // Torikaya (Vee's anniversary call): home pickup from the saved Home, drop-off must be Torikaya, and skipping the
+  // congratulations fails the call even with every pin right.
+  const tor = (await admin('/api/admin/scenarios')).data.find((x) => x.title === 'Anniversary dinner on Houston Street');
+  assert.ok(tor, 'Torikaya example missing'); assert.equal(tor.category, 'Place or business name');
+  const T_HOME = { lat: 35.0170514, lng: -85.1643452 }, T_ADDR = { lat: 35.0427, lng: -85.3060933 }, T_RIGHT = { lat: 35.04246931201211, lng: -85.30682293621099 };
+  const tq = (i) => tor.data.questions[i].q;
+  assert.equal(tor.data.steps.length, 10);
+  const cs = tor.data.steps.findIndex((st) => tq(st.right[0]) === 'Congratulate them on their anniversary');
+  assert.equal(tq(tor.data.steps[cs - 1].right[0]), 'Read the address back', 'the congratulations must come right after the anniversary is mentioned');
+  assert.ok(!tor.data.caller.includes('anniversary'), 'the opening line should not mention the anniversary');
+  assert.deepEqual(tor.data.steps[9].right.map(tq).sort(), ['Close the call', 'Close with an anniversary wish']);
+  const T_OK = tor.data.steps.map((st) => [st.right[0]]);
+  const tNote = 'Please drop the customer and his wife off at Torikaya, the restaurant at 1120 Houston Street.';
+  const tGood = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_RIGHT], ordered: true, steps: T_OK, note: tNote })).data;
+  assert.equal(tGood.passed, true, JSON.stringify(tGood));
+  const tPlain = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_RIGHT], ordered: true, note: tNote,
+    steps: [...T_OK.slice(0, 9), [tor.data.steps[9].right.find((i) => tq(i) === 'Close the call')]] })).data;
+  assert.equal(tPlain.passed, true, 'a plain close should also be right');
+  const cold = tor.data.steps[cs].choices.find((i) => tq(i) === 'Tell them you are checking the map');
+  const tCold = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_RIGHT], ordered: true, note: tNote, steps: [...T_OK.slice(0, cs), [cold], ...T_OK.slice(cs + 1)] })).data;
+  assert.equal(tCold.passed, false); assert.ok(tCold.missingQuestions[0].startsWith(`Step ${cs + 1}: picked "Tell them you are checking the map"`), tCold.missingQuestions[0]);
+  assert.ok(tor.data.questions.find((q) => q.q === 'Provide driver info').say.includes('call back immediately so we can look into the status of your ride'));
+  const tAddr = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_ADDR], ordered: true, steps: T_OK, note: tNote })).data;
+  assert.equal(tAddr.passed, false); assert.ok(tAddr.stops[1].distance > 65 && tAddr.stops[1].distance < 80, `distance ${tAddr.stops[1].distance}`);
+  check(`Torikaya: right pins + steps pass (either close); skipping the congratulations fails; address-only drop-off is ${tAddr.stops[1].distance} m off and fails`);
 
   // Two-stop scenario with entrances, made in the admin builder.
   assert.equal((await admin('/api/admin/scenarios', { title: 'Broken', category: 'Hospital', data: { stops: [{ kind: 'pickup', label: 'X' }] } })).status, 400);
@@ -195,7 +222,7 @@ try {
 
   // Saved location #3 was stored with the wrong pin: it must be fixed (saved over), not left alone or deleted.
   assert.ok(!JSON.stringify(pub).includes('savedFix'), 'trainees must not see which saved slot is wrong');
-  assert.ok(pub[0].account.saved[0].label.includes('Petrovitsky'), 'saved #3 should be on the account');
+  assert.ok(pubM.account.saved[0].label.includes('Petrovitsky'), 'saved #3 should be on the account');
   const base = { pins: [MENCHIES, HOME], ordered: true, steps: RIGHT, note: GOOD_NOTE };
   const leftIt = (await ana(`/api/practice/${men.id}`, base)).data;
   assert.equal(leftIt.passed, false); assert.ok(leftIt.saved.did.includes('Left it'));

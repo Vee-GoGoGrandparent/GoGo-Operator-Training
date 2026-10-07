@@ -3,7 +3,7 @@
 import { db, one, all, run, tx } from './db.js';
 import { pinSkill } from './skills.js';
 import { cleanScenario } from './grading.js';
-import { CONFIRM_NAME_LINE, MENCHIES_STEPS, stepsFromNames } from './examples.js';
+import { CONFIRM_NAME_LINE, MENCHIES_STEPS, stepsFromNames, EXAMPLE_SCENARIOS } from './examples.js';
 
 db.exec(`CREATE TABLE IF NOT EXISTS patches (name TEXT PRIMARY KEY, ran_at TEXT NOT NULL DEFAULT (datetime('now')))`);
 
@@ -97,6 +97,35 @@ const PATCHES = [
       if (rep) rep.say = 'Thank you, Marge. Can you repeat the address for me?';
       d.steps = stepsFromNames(d.questions, MENCHIES_STEPS);
       run('UPDATE scenarios SET data = ?, version = version + 1 WHERE id = ?', JSON.stringify(cleanScenario(d)), row.id);
+      return true;
+    },
+  },
+  {
+    // Vee, 2026-10-07: the standard driver line ends with "...within that time, please give us a call back immediately
+    // so we can look into the status of your ride." Reworded only while it is still the original wording.
+    name: 'menchies-driver-line-2026-10-07',
+    run() {
+      const row = one('SELECT * FROM scenarios WHERE title = ?', "Menchie's on Petrovitsky Road");
+      if (!row) return false;
+      const d = JSON.parse(row.data);
+      const old = "We were able to find you a driver. Looks like Lidong, in a black Toyota Sienna, last 4 digits 0734 should be arriving in the next 2 minutes. If for any reason he doesn't show up within the estimated time, please give us a call back.";
+      const line = d.questions.find((q) => q.say === old);
+      if (!line) return true; // reworded by an admin, or removed: leave it
+      line.say = EXAMPLE_SCENARIOS[0].data.questions.find((q) => q.q === 'Provide driver info').say;
+      run('UPDATE scenarios SET data = ?, version = version + 1 WHERE id = ?', JSON.stringify(cleanScenario(d)), row.id);
+      return true;
+    },
+  },
+  {
+    // Vee, 2026-10-07: the Torikaya anniversary call. Added once on a site that already has the examples, so nobody
+    // has to press "Add the examples" again. Add-only: if a scenario with this title exists, it is left alone.
+    name: 'add-torikaya-2026-10-07',
+    run() {
+      if (!one('SELECT id FROM scenarios WHERE title = ?', "Menchie's on Petrovitsky Road")) return false; // examples not added here yet
+      const ex = EXAMPLE_SCENARIOS.find((x) => x.title === 'Anniversary dinner on Houston Street');
+      if (!one('SELECT id FROM scenarios WHERE title = ?', ex.title)) {
+        run('INSERT INTO scenarios (title, category, data, practice) VALUES (?, ?, ?, 1)', ex.title, ex.category, JSON.stringify(cleanScenario(ex.data)));
+      }
       return true;
     },
   },

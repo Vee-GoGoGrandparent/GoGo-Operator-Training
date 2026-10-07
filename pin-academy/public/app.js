@@ -604,7 +604,7 @@ function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit,
     row('Ride Type', h('div', {}, checkbox('Emergency Ride'), checkbox('Expand Driver Search'), checkbox('Expand Vehicle Search'))),
     row('Auto Retry Getting a', h('select', { disabled: true }, h('option', {}, 'Select one'))),
     h('div', { class: 'ro-indent' }, checkbox('Do not apply expiring credits to this ride')),
-    mainBtns, estimateBox);
+    estimateBox, mainBtns); // like the dashboard: the estimate first, Order Ride / Cancel under it
   showMainButtons();
 
   const side = h('nav', { class: 'ro-side' }, h('div', { class: 'ro-logo' }, 'GOGOGRANDPARENT'),

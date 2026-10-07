@@ -88,7 +88,7 @@ export const EXAMPLE_SCENARIOS = [
         { q: 'Send the driver to the address', say: "Okay, I'll send the driver to that address.", a: 'Okay, thank you.', needed: false },
         { q: 'Provide estimate', say: 'Okay, looks like this trip is going to cost you between $8-$10. Is it ok if I go ahead and order this ride for you now?',
           a: 'Yes, please.', needed: true },
-        { q: 'Provide driver info', say: "We were able to find you a driver. Looks like Lidong, in a black Toyota Sienna, last 4 digits 0734 should be arriving in the next 2 minutes. If for any reason he doesn't show up within the estimated time, please give us a call back.",
+        { q: 'Provide driver info', say: "We were able to find you a driver. Looks like Lidong, in a black Toyota Sienna, last 4 digits 0734, should be arriving in about 2 minutes. If you don't see the driver within that time, please give us a call back immediately so we can look into the status of your ride.",
           a: 'Okay, thank you.', needed: true },
         {"q":"Ask if there is anything else","say":"Is there anything else I can help you with today?","a":"No, that's all. Thank you!","needed":true},
         {"q":"Close the call","say":"Perfect! Thank you so much for calling GoGo, and we hope you have a beautiful and wonderful day.","a":"You too, bye!","needed":true},
@@ -99,5 +99,83 @@ export const EXAMPLE_SCENARIOS = [
       },
     },
   },
+  {
+    // Vee, 2026-10-07: a real complaint. The caller named the restaurant at the start, the operator typed only the
+    // address and never picked Torikaya from the list, and the couple were almost dropped at the wrong place (71 m off).
+    // Also an empathy check: they say it is their anniversary, and moving on without acknowledging it fails the call.
+    // Coordinates are Vee's from the dashboard. Customer name is made up.
+    title: 'Anniversary dinner on Houston Street',
+    category: 'Place or business name',
+    data: {
+      caller: 'Hi, this is Rick. My wife and I need a ride from home to Torikaya on Houston Street.',
+      why: 'The caller said the name of the restaurant right at the start. Typed as an address only, 1120 Houston Street puts the drop-off pin about 70 m away, '
+        + 'which is where the operator left it on the real call, and the couple were almost dropped off at the wrong place. '
+        + 'Type the restaurant name in the End Address box (start with "Tori") and pick Torikaya from the list, then check the pin on satellite and Street View. '
+        + 'The drop-off pin matters as much as the pickup. Home is saved on the account (the ⌂ button), so the pickup only needs confirming. '
+        + 'Listen to the customer: the moment they mention their anniversary, congratulate them and take a moment with them, right then, not only at the end of the call. '
+        + 'A call that moves on without it does not pass, even with the right pin.',
+      account: {
+        home: { label: 'Home', address: '7301 East Brainerd Road, Chattanooga, TN 37421', lat: 35.0170514, lng: -85.1643452 },
+        saved: [],
+      },
+      stops: [{
+        kind: 'pickup', label: 'Home', addressGiven: '7301 East Brainerd Road, Chattanooga, TN 37421',
+        start: { lat: 35.0170514, lng: -85.1643452 }, answer: { lat: 35.0170514, lng: -85.1643452 }, entrances: [],
+      }, {
+        kind: 'dropoff', label: 'Torikaya', addressGiven: '1120 Houston Street, Chattanooga, TN 37402',
+        start: { lat: 35.0427, lng: -85.3060933 },                      // where the operator left it (address only)
+        answer: { lat: 35.04246931201211, lng: -85.30682293621099 },    // Torikaya
+        entrances: [],
+      }],
+      ride: {
+        customerName: 'Rick Sanchez', rideType: 'UberX', eta: '5-10 min(s)', trip: 'A 20 minute(s) trip over 9 for $23 ~ $25',
+        surge: '1', perMile: '$ 0.48', perMinute: '$ 0.66', baseFare: '2.34', minFare: '6.31', cost: '$23 ~ $25',
+        credits: '$67.32', expiring: 'No', autoTip: 'No',
+        driver: { name: 'Yoandris', car: 'Red Mazda CX-5', plate: 'AWYY', eta: '10 minutes' },
+      },
+      questions: [
+        { q: "Confirm the customer's name", say: 'Perfect, I was able to pull up your account. Am I speaking with Rick Sanchez?', a: 'Yes, this is Rick.', needed: true },
+        { q: 'Congratulate them on their anniversary', say: "Oh, happy anniversary! Congratulations to you both. How long have you been married?",
+          a: 'Thank you! Forty years today.', needed: true },
+        { q: 'Ask for the pickup address', say: 'Okay. What address will we be picking you up from?', a: "From home. Isn't that on my account?", needed: false },
+        { q: 'Confirm the pickup is home', say: 'Will we be picking you up from your home on East Brainerd Road today?', a: 'Yes, from home.', needed: true },
+        { q: 'Ask for the drop-off address', say: 'And can you repeat the address of the restaurant for me?', a: "It's Torikaya, 1120 Houston Street, in Chattanooga.", needed: true },
+        { q: 'Read the address back', say: "Okay, that's Torikaya at 1120 Houston Street in Chattanooga, Tennessee. Is that correct?", a: "Yes, that's the one. We're going there for our anniversary tonight!", needed: true },
+        { q: 'Ask them to spell the street', say: 'Can you spell the street name for me?', a: 'H-O-U-S-T-O-N.', needed: false },
+        { q: 'Tell them you are checking the map', say: 'Give me just a moment while I look at the map. I want to make sure the driver drops you off right at the restaurant.',
+          a: 'Sure, take your time.', needed: true },
+        { q: 'Ask what they are wearing', say: "Would you mind telling me what you're wearing, so the driver can spot you easier?", a: "We'll be right outside the house, the driver will see us.", needed: false },
+        { q: 'Send the driver to the address', say: "Okay, I'll send the driver to that address.", a: 'Okay, thank you.', needed: false },
+        { q: 'Ask for notes for the driver', say: 'Do you have any notes for the driver?', a: 'No, just Torikaya, please.', needed: false },
+        { q: 'Provide estimate', say: 'Okay, looks like this trip is going to cost you between $23-$25. Is it ok if I go ahead and order this ride for you now?', a: 'Yes, please.', needed: true },
+        { q: 'Provide driver info', say: "We were able to find you a driver. Looks like Yoandris, in a red Mazda CX-5, license plate AWYY, should be arriving in about 10 minutes. If you don't see the driver within that time, please give us a call back immediately so we can look into the status of your ride.",
+          a: 'Perfect, thank you.', needed: true },
+        { q: 'Ask if there is anything else', say: 'Is there anything else I can help you with today?', a: "No, that's everything.", needed: true },
+        { q: 'Close with an anniversary wish', say: 'Perfect! Thank you so much for calling GoGo. Enjoy your dinner, and happy anniversary to you both!', a: 'Thank you so much! Bye!', needed: false },
+        { q: 'Close the call', say: 'Perfect! Thank you so much for calling GoGo, and we hope you have a beautiful and wonderful day.', a: 'You too, bye!', needed: false },
+      ],
+      note: {
+        mustMention: ['Torikaya'],
+        model: 'Please drop the customer and his wife off at Torikaya, the restaurant at 1120 Houston Street. They are celebrating their anniversary.',
+      },
+    },
+  },
 ];
 EXAMPLE_SCENARIOS[0].data.steps = stepsFromNames(EXAMPLE_SCENARIOS[0].data.questions, MENCHIES_STEPS);
+
+// Torikaya's call (Vee): the anniversary comes up after the read-back, and the congratulations must come right then
+// (moving on is wrong); at the end, either close is right.
+export const TORIKAYA_STEPS = [
+  { right: ["Confirm the customer's name"], wrong: ['Ask for the pickup address', 'Ask for the drop-off address'] },
+  { right: ['Confirm the pickup is home'], wrong: ['Ask for the pickup address', 'Ask what they are wearing'] },
+  { right: ['Ask for the drop-off address'], wrong: ['Ask what they are wearing', 'Send the driver to the address'] },
+  { right: ['Read the address back'], wrong: ['Ask them to spell the street', 'Send the driver to the address'] },
+  // The caller just said it's their anniversary: congratulate them right away. Moving on is wrong.
+  { right: ['Congratulate them on their anniversary'], wrong: ['Tell them you are checking the map', 'Send the driver to the address'] },
+  { right: ['Tell them you are checking the map'], wrong: ['Send the driver to the address', 'Ask for notes for the driver'] },
+  { right: ['Provide estimate'], wrong: ['Provide driver info', 'Ask for notes for the driver'] },
+  { right: ['Provide driver info'], wrong: ['Ask if there is anything else', 'Close the call'] },
+  { right: ['Ask if there is anything else'], wrong: ['Close the call', 'Close with an anniversary wish'] },
+  { right: ['Close with an anniversary wish', 'Close the call'], wrong: ['Ask for notes for the driver'] },
+];
+EXAMPLE_SCENARIOS[1].data.steps = stepsFromNames(EXAMPLE_SCENARIOS[1].data.questions, TORIKAYA_STEPS);

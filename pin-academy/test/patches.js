@@ -83,6 +83,23 @@ try {
   assert.deepEqual(JSON.parse(one('SELECT data FROM scenarios WHERE title = ?', ex.title).data).steps, own, "admin's steps were replaced");
   check("an admin's own steps are never replaced");
 
+  const torCount = () => one('SELECT COUNT(*) n FROM scenarios WHERE title = ?', 'Anniversary dinner on Houston Street').n;
+  assert.equal(torCount(), 1, 'Torikaya not added on a site that has the examples');
+  run(`DELETE FROM patches WHERE name = 'add-torikaya-2026-10-07'`); runPatches();
+  assert.equal(torCount(), 1, 'Torikaya added twice');
+  const td = JSON.parse(one('SELECT data FROM scenarios WHERE title = ?', 'Anniversary dinner on Houston Street').data);
+  assert.equal(td.steps.length, 10); assert.equal(td.account.home.lat, 35.0170514); assert.equal(td.ride.driver.name, 'Yoandris');
+  check('Torikaya added once to a site that already has the examples, with its steps, home and driver');
+  // The fixture's driver line was removed by the "admin", then re-added by the first patch in its ORIGINAL wording.
+  const drv = JSON.parse(one('SELECT data FROM scenarios WHERE title = ?', ex.title).data).questions.find((q) => q.q === 'Provide driver info');
+  assert.ok(drv.say.includes('call back immediately so we can look into the status of your ride'), 'original driver line not reworded');
+  const mine = JSON.parse(one('SELECT data FROM scenarios WHERE title = ?', ex.title).data);
+  mine.questions.find((q) => q.q === 'Provide driver info').say = 'ADMIN DRIVER LINE';
+  run('UPDATE scenarios SET data = ? WHERE title = ?', JSON.stringify(mine), ex.title);
+  run(`DELETE FROM patches WHERE name = 'menchies-driver-line-2026-10-07'`); runPatches();
+  assert.equal(JSON.parse(one('SELECT data FROM scenarios WHERE title = ?', ex.title).data).questions.find((q) => q.q === 'Provide driver info').say, 'ADMIN DRIVER LINE', 'admin driver line overwritten');
+  check('driver line reworded to the standard "call back immediately" wording only while it is the original; an admin edit is kept');
+
   // "Add the examples" must leave an existing example alone (test through the server route).
   process.env.DEV_LOGIN = '1';
   const { server } = await import('../server.js');
