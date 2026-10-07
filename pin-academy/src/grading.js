@@ -43,9 +43,10 @@ export function gradeScenario(s, sub, passMeters) {
   const missingQuestions = s.questions.map((q, i) => ({ ...q, i })).filter((q) => q.needed && !asked.has(q.i)).map((q) => q.q);
   const note = checkNote(sub?.note, s.note?.mustMention || [], sub?.wearing);
   const saved = gradeSavedFix(s, sub, passMeters);
+  const ordered = s.mustOrder === false ? null : { ok: !!sub?.ordered };
   return {
-    stops, missingQuestions, note, saved, modelNote: s.note?.model || '', why: s.why || '',
-    passed: stops.every((x) => x.passed) && missingQuestions.length === 0 && note.ok && (!saved || saved.ok),
+    stops, missingQuestions, note, saved, ordered, modelNote: s.note?.model || '', why: s.why || '',
+    passed: stops.every((x) => x.passed) && missingQuestions.length === 0 && note.ok && (!saved || saved.ok) && (!ordered || ordered.ok),
   };
 }
 
@@ -73,13 +74,24 @@ export function publicScenario(row) {
   const s = JSON.parse(row.data);
   return {
     id: row.id, title: row.title, category: row.category,
-    caller: s.caller, account: s.account || { home: null, saved: [] },
+    caller: s.caller, account: s.account || { home: null, saved: [] }, ride: cleanRide(s.ride),
     stops: s.stops.map((x) => ({ kind: x.kind, label: x.label, addressGiven: x.addressGiven, start: x.start || nearby(x.answer), entrances: x.entrances.map((e) => ({ name: e.name, lat: e.lat, lng: e.lng })) })),
     questions: s.questions.map((q) => ({ q: q.q, say: q.say || '', a: q.a })),
   };
 }
 
 const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+// What Get Estimate / Order Ride show. Defaults are Vee's example (made-up customer: Marge Simpson).
+const RIDE_DEFAULTS = { customerName: 'Marge Simpson', rideType: 'UberX', eta: '1-5 min(s)', trip: 'A 5 minute(s) trip over 1 for $8 ~ $10',
+  surge: '1', perMile: '$ 1.98', perMinute: '$ 0.84', baseFare: '', minFare: '5.99', cost: '$8 ~ $10', credits: '$67.32', expiring: 'No', autoTip: 'No',
+  driver: { name: 'Lidong', car: 'Black Toyota Sienna', plate: '0734', eta: '2 minutes' } };
+function cleanRide(r = {}) {
+  const out = {};
+  for (const [k, v] of Object.entries(RIDE_DEFAULTS)) if (k !== 'driver') out[k] = typeof r[k] === 'string' ? r[k].trim().slice(0, 120) : v;
+  out.driver = {};
+  for (const [k, v] of Object.entries(RIDE_DEFAULTS.driver)) out.driver[k] = typeof r.driver?.[k] === 'string' ? r.driver[k].trim().slice(0, 80) : v;
+  return out;
+}
 const ll = (p) => (p && validLatLng(Number(p.lat), Number(p.lng)) ? { lat: Number(p.lat), lng: Number(p.lng) } : null);
 // A place saved on the pretend customer's account (home, or a saved location that may or may not be right).
 const savedPlace = (p) => (p && ll(p) ? { label: str(p.label, 60) || 'Saved', address: str(p.address, 200), ...ll(p) } : null);
@@ -101,6 +113,7 @@ export function cleanScenario(b) {
   stops.sort((a, b) => (a.kind === 'pickup' ? 0 : 1) - (b.kind === 'pickup' ? 0 : 1)); // pickup first, like the form
   return {
     caller: str(b.caller, 600), why: str(b.why, 1500),
+    ride: cleanRide(b.ride), mustOrder: b.mustOrder !== false,
     savedFix: [3, 4, 5].includes(Number(b.savedFix?.slot)) ? { slot: Number(b.savedFix.slot), action: b.savedFix.action === 'delete' ? 'delete' : 'update', stop: b.savedFix.stop === 'dropoff' ? 'dropoff' : 'pickup' } : null,
     account: { home: savedPlace(b.account?.home), saved: (Array.isArray(b.account?.saved) ? b.account.saved : []).map(savedPlace).filter(Boolean).slice(0, 3) },
     stops,

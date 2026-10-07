@@ -18,7 +18,7 @@ export const EXAMPLE_SCENARIOS = [
         + 'Whenever a pickup is not at home, ask what the customer is wearing so the driver can spot them in a busy place.',
       // The system saved this stop after an earlier ride, with the wrong coordinates (Vee's real example).
       account: {
-        home: null,
+        home: { label: 'Home', address: '17130 127th Avenue Southeast, Renton, WA 98058', lat: 47.44892956, lng: -122.1726835 },
         saved: [{ label: '14060 SE Petrovitsky Rd', address: '14060 Southeast Petrovitsky Road, Renton, WA 98058', lat: 47.44598587, lng: -122.15203913 }],
       },
       savedFix: { slot: 3, action: 'update', stop: 'pickup' },
@@ -28,7 +28,12 @@ export const EXAMPLE_SCENARIOS = [
         start: { lat: 47.4460548, lng: -122.1517119 },   // what the address alone returns
         answer: { lat: 47.4460118, lng: -122.1522953 },  // what "Menchie's" returns
         entrances: [],
+      }, {
+        // She is going home: the Home saved on the account (the ⌂ button) has the right coordinates.
+        kind: 'dropoff', label: 'Home', addressGiven: '17130 127th Avenue Southeast, Renton, WA 98058',
+        start: { lat: 47.44892956, lng: -122.1726835 }, answer: { lat: 47.44892956, lng: -122.1726835 }, entrances: [],
       }],
+      ride: { customerName: 'Marge Simpson' },
       // In the order Vee runs the call. Must-asks: the address, reading it back, the business, what they're wearing.
       questions: [
         { q: 'Ask them to repeat the address', say: 'Perfect, I was able to pull up your account. Can you repeat the address for me?',
@@ -48,6 +53,10 @@ export const EXAMPLE_SCENARIOS = [
         { q: 'Ask what they are wearing', say: "Would you mind telling me what you're wearing, so the driver can spot you easier?", a: 'A blue top and black jeans.', needed: true },
         { q: 'Ask where they are going', say: 'And where will you be going today?', a: 'Home. Can we set up the pickup first?', needed: false },
         { q: 'Send the driver to the address', say: "Okay, I'll send the driver to that address.", a: 'Okay, thank you.', needed: false },
+        { q: 'Provide estimate', say: 'Okay, looks like this trip is going to cost you between $8-$10. Is it ok if I go ahead and order this ride for you now?',
+          a: 'Yes, please.', needed: true },
+        { q: 'Provide driver info', say: "We were able to find you a driver. Looks like Lidong, in a black Toyota Sienna, last 4 digits 0734 should be arriving in the next 2 minutes. If for any reason he doesn't show up within the estimated time, please give us a call back.",
+          a: 'Okay, thank you.', needed: true },
       ],
       note: {
         mustMention: ['Menchie', 'blue', 'jeans'],

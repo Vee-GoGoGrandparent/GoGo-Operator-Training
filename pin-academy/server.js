@@ -6,16 +6,14 @@ import { fileURLToPath } from 'node:url';
 import { db, one, all, run, tx } from './src/db.js';
 import { gradeScenario, publicScenario, cleanScenario } from './src/grading.js';
 import { EXAMPLE_SCENARIOS } from './src/examples.js';
+import { runPatches } from './src/patches.js';
 import * as auth from './src/auth.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-// Worked examples already added are brought up to date on every start, so improvements reach the live site
-// without anyone clicking anything. Examples nobody added yet are left alone.
-for (const ex of EXAMPLE_SCENARIOS) {
-  const have = one('SELECT id FROM scenarios WHERE title = ?', ex.title);
-  if (have) run('UPDATE scenarios SET category = ?, data = ? WHERE id = ?', ex.category, JSON.stringify(cleanScenario(ex.data)), have.id);
-}
+// Scenarios admins edit are NEVER overwritten by code. Changes that must reach a live scenario are one-time,
+// merge-only patches (src/patches.js): they add what is missing and leave everything an admin wrote alone.
+runPatches();
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC = path.join(HERE, 'public');
 const GRACE_MS = 60 * 1000; // a late answer within a minute of the deadline still counts (slow networks)
@@ -69,6 +67,7 @@ function cleanSubmission(b) {
     specific: (Array.isArray(b.specific) ? b.specific : []).slice(0, 2).map((s) => str(s, 120)),
     locationName: (Array.isArray(b.locationName) ? b.locationName : []).slice(0, 2).map((s) => str(s, 120)),
     wearing: str(b.wearing, 200),
+    ordered: b.ordered === true,
     savedChanges: (Array.isArray(b.savedChanges) ? b.savedChanges : []).slice(0, 12).map((c) => ({
       slot: c && (c.slot === 'home' ? 'home' : Number(c.slot)), action: c?.action === 'delete' ? 'delete' : 'save',
       lat: num(c?.lat), lng: num(c?.lng), label: str(c?.label, 120) })),
@@ -311,14 +310,13 @@ route('POST', '/api/admin/scenarios/(\\d+)/archive', (req, res, { m }) => {
   send(res, 200, { ok: true });
 });
 
-// Adds the worked examples (from real training cases, no customer details), or refreshes them if already there.
+// Adds the worked examples that are not here yet. Never changes one that is already here.
 route('POST', '/api/admin/scenarios/examples', (req, res) => {
   const u = needAdmin(req);
   let added = 0;
   for (const ex of EXAMPLE_SCENARIOS) {
-    const have = one('SELECT id FROM scenarios WHERE title = ?', ex.title);
-    // An example already here is refreshed to the latest version (so improvements reach the live site).
-    if (have) { run('UPDATE scenarios SET category = ?, data = ? WHERE id = ?', ex.category, JSON.stringify(cleanScenario(ex.data)), have.id); continue; }
+    // Add-only: an example that is already here may have been edited by an admin, so it is left exactly as it is.
+    if (one('SELECT id FROM scenarios WHERE title = ?', ex.title)) continue;
     run('INSERT INTO scenarios (title, category, data, practice, created_by) VALUES (?, ?, ?, 1, ?)', ex.title, ex.category, JSON.stringify(cleanScenario(ex.data)), u.slack_id);
     added++;
   }

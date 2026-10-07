@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node scripts/server.js",
     "discover": "node --env-file=.env scripts/discover.js",
-    "test:pins": "node --check pin-academy/public/app.js && node --no-warnings pin-academy/test/smoke.js"
+    "test:pins": "node --check pin-academy/public/app.js && node --no-warnings pin-academy/test/smoke.js && node --no-warnings pin-academy/test/patches.js"
   },
   "dependencies": {
     "googleapis": "^144.0.0",

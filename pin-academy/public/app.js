@@ -314,7 +314,7 @@ const SIDEBAR = [['Dashboard Overview'], ['Live Calls'], ['Rides', ['Ride Orderi
   ['Ride Safety & Support'], ['Client Checks'], ['Payments & Credits']];
 const notInPractice = (what) => () => toast(`${what} is not part of this practice.`);
 
-function scenarioForm(s, { submitLabel = 'Schedule This Ride', onSubmit } = {}) {
+function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit } = {}) {
   const t0 = Date.now();
   const asked = new Set();
   const first = (ME?.name || '').split(' ')[0] || 'your name';
@@ -471,10 +471,31 @@ function scenarioForm(s, { submitLabel = 'Schedule This Ride', onSubmit } = {}) 
   const announce = h('select', {}, ['Call me', 'Text me'].map((x) => h('option', {}, x)));
   const note = h('textarea', { placeholder: 'Anything else the driver needs to know?' });
   const checkbox = (label, extra = {}) => h('label', { class: 'ro-check' }, h('input', { type: 'checkbox', ...extra }), label);
-  const submitBtn = h('button', { class: 'pill cyan', type: 'button' }, submitLabel);
+  const submitBtn = h('button', { class: 'btn orange end-call', type: 'button' }, submitLabel);
+  // Get Estimate shows the dashboard's estimate; Order Ride books it and shows the driver to read to the customer.
+  const ride = s.ride || {};
+  let ordered = false;
+  const detail = (label, ...val) => h('tr', {}, h('th', {}, label), h('td', {}, ...val));
+  function getEstimate() {
+    const missing = s.stops.filter((x) => !blocks[x.kind].pin).map((x) => (x.kind === 'dropoff' ? 'End Address' : 'Start Address'));
+    if (missing.length) return toast(`Fill in the ${missing.join(' and ')} first.`);
+    modal(null, h('table', { class: 'estimate' },
+      detail('Ride Type:', h('span', { class: 'red' }, `${ride.rideType} For ${ride.customerName}`)),
+      detail('ETA:', ride.eta),
+      detail('Ride Details:', h('div', {}, ride.trip), h('div', {}, `Surge Factor: ${ride.surge}`), h('div', {}, `Cost Per Mile: ${ride.perMile}`),
+        h('div', {}, `Cost Per Minute: ${ride.perMinute}`), h('div', {}, `Base Fare: ${ride.baseFare}`), h('div', {}, `Minimum Fare: ${ride.minFare}`)),
+      detail('GoGo Cost', ride.cost), detail('Caller GoGo Credits:', ride.credits), detail('Caller Expiring Credits:', ride.expiring),
+      detail('User Has Auto Tipping On:', ride.autoTip), detail('Caller Partner Subsidies:', ''), detail('Partner Info for Operator:', '')),
+      [['Order Ride', 'purple', (close) => {
+        close(); ordered = true;
+        const dr = ride.driver || {};
+        modal('Ride ordered', h('table', { class: 'estimate' }, detail('Driver:', dr.name), detail('Car:', dr.car), detail('Plate (last 4):', dr.plate), detail('Arriving in:', dr.eta)),
+          [['OK', 'yellow', (c2) => c2()]]);
+      }], ['Cancel', 'yellow', (close) => close()]]);
+  }
   const getSubmission = () => ({
     pins: s.stops.map((x) => blocks[x.kind].pin), entrances: s.stops.map((x) => blocks[x.kind].entrance), asked: [...asked],
-    note: note.value, wearing: wearing.value, announce: announce.value, savedChanges,
+    note: note.value, wearing: wearing.value, announce: announce.value, savedChanges, ordered,
     specific: s.stops.map((x) => blocks[x.kind].specific.value), locationName: s.stops.map((x) => blocks[x.kind].locName.value),
     seconds: Math.round((Date.now() - t0) / 1000),
   });
@@ -499,9 +520,9 @@ function scenarioForm(s, { submitLabel = 'Schedule This Ride', onSubmit } = {}) 
     row('Auto Retry Getting a', h('select', { disabled: true }, h('option', {}, 'Select one'))),
     h('div', { class: 'ro-indent' }, checkbox('Do not apply expiring credits to this ride')),
     h('div', { class: 'ro-btns ro-center' },
-      h('button', { class: 'pill purple', type: 'button', onclick: () => toast('Estimates are given by phone, and are not part of this practice.') }, 'Get Estimate'),
+      h('button', { class: 'pill purple', type: 'button', onclick: getEstimate }, 'Get Estimate'),
       h('button', { class: 'pill yellow', type: 'button', onclick: () => { blocks.pickup.el.querySelector('.pill.yellow').click(); blocks.dropoff.el.querySelector('.pill.yellow').click(); wearing.value = ''; note.value = ''; } }, 'Reset'),
-      submitBtn));
+      h('button', { class: 'pill cyan', type: 'button', onclick: () => toast('This is the Order a Ride Now tab: use Get Estimate, then Order Ride.') }, 'Schedule This Ride')));
 
   const side = h('nav', { class: 'ro-side' }, h('div', { class: 'ro-logo' }, 'GOGOGRANDPARENT'),
     h('input', { type: 'text', placeholder: 'Form Search', disabled: true }),
@@ -514,7 +535,8 @@ function scenarioForm(s, { submitLabel = 'Schedule This Ride', onSubmit } = {}) 
           h('div', { class: 'ro-tabs' }, h('span', { class: 'on' }, 'Order a Ride Now'), h('span', {}, 'Schedule a Ride in the Future')), form),
         h('aside', { class: 'ro-right' },
           h('div', { class: 'ro-call' }, h('div', { class: 'ro-call-title' }, '📞 The call', h('span', { class: 'tag' }, s.category)), transcript,
-            s.questions.length ? [h('div', { class: 'ro-call-label' }, 'What do you say next? Pick in the order you would on the call'), h('div', { class: 'qbtns' }, qButtons)] : null),
+            s.questions.length ? [h('div', { class: 'ro-call-label' }, 'What do you say next? Pick in the order you would on the call'), h('div', { class: 'qbtns' }, qButtons)] : null,
+            h('div', { class: 'ro-call-end' }, submitBtn)),
           result))));
   return {
     el, getSubmission,
@@ -539,6 +561,8 @@ function resultCard(r) {
         h('td', {}, r.missingQuestions.length ? `You didn't: ${r.missingQuestions.join(' · ')}` : 'You asked what you needed to.')),
       h('tr', {}, h('td', {}, ok(r.note.ok)), h('td', {}, h('b', {}, 'Driver note')),
         h('td', {}, r.note.ok ? 'Clear and useful for the driver.' : r.note.problems.join(' '))),
+      r.ordered ? h('tr', {}, h('td', {}, ok(r.ordered.ok)), h('td', {}, h('b', {}, 'Ride ordered')),
+        h('td', {}, r.ordered.ok ? 'You got the estimate and ordered the ride.' : 'The ride was never ordered. Use Get Estimate, then Order Ride.')) : null,
       r.saved ? h('tr', {}, h('td', {}, ok(r.saved.ok)), h('td', {}, h('b', {}, 'Saved location')),
         h('td', {}, r.saved.ok ? r.saved.did : `${r.saved.did}. Should be: ${r.saved.want}.`)) : null),
     r.modelNote ? [h('h3', {}, 'A good note looks like this'), h('p', { class: 'model' }, r.modelNote)] : null,
