@@ -12,6 +12,10 @@ Pin placement practice and class pin tests for GoGo orientation. Built from Osca
   right one plus two that sound right), and one or two can be right. Practice: a wrong pick says "Not quite" and they
   pick again (still a miss). Test: the wrong line is said, the call goes on, and it is graded at the end. A call
   with no steps shows every line at once, as before.
+- **Pin skills:** every call teaches one situation (place or business name, past rides, multiple entrances,
+  hospitals and clinics, airports, apartments and complexes, drop-off checks, confirm the address). Practice is
+  grouped by skill with a one-line tip; Scenarios shows how many calls each skill has (3 = 2 practice + 1 test).
+  The list and tips live in `src/skills.js`.
 - **Sign in with Slack.** No passwords. Trainers = `ADMIN_SLACK_IDS` plus anyone a trainer promotes in the app.
 
 Scoring always happens on the server; answers are never sent to the browser before a trainee answers.

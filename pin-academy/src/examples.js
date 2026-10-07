@@ -35,7 +35,7 @@ export function stepsFromNames(questions, named) {
 export const EXAMPLE_SCENARIOS = [
   {
     title: "Menchie's on Petrovitsky Road",
-    category: 'Restaurant or shop',
+    category: 'Place or business name',
     data: {
       caller: "Hi, I'd like to be picked up at 14060 Southeast Petrovitsky Road.",
       why: "Typed as an address only, this drops the pin on the building next door, and that is exactly where a driver went once: the customer was never picked up. "

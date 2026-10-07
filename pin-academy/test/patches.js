@@ -27,6 +27,10 @@ try {
   d.questions.push({ q: 'Admin extra line', say: 'Something Vee added', a: 'Sure.', needed: false });
   run('INSERT INTO scenarios (title, category, data) VALUES (?, ?, ?)', ex.title, ex.category, JSON.stringify(cleanScenario(d)));
 
+  // Scenarios saved before pin skills, with the old "Type of place".
+  for (const [title, category] of [['Old mall', 'Shopping center'], ['Old clinic', 'Medical office'], ['Old odd', 'Other'], ['Old new', 'Airports']]) {
+    run('INSERT INTO scenarios (title, category, data) VALUES (?, ?, ?)', title, category, JSON.stringify(cleanScenario(d)));
+  }
   const { runPatches } = await import('../src/patches.js');
   runPatches();
   const after = JSON.parse(one('SELECT data FROM scenarios WHERE title = ?', ex.title).data);
@@ -57,6 +61,11 @@ try {
   assert.ok(!after.steps.some((st) => st.choices.some((i) => name(i) === 'Ask them to spell the street')), 'a line the admin removed shows as a choice');
   assert.ok(after.steps.every((st) => st.choices.every((i) => i >= 0 && i < after.questions.length)));
   check('steps added in order, pointing at the right lines; "confirm the name" first; removed lines never offered');
+  const cat = (t) => one('SELECT category, version FROM scenarios WHERE title = ?', t);
+  assert.deepEqual([cat('Old mall').category, cat('Old clinic').category, cat('Old odd').category, cat('Old new').category],
+    ['Multiple entrances', 'Hospitals and clinics', 'Other', 'Airports']);
+  assert.ok(cat('Old mall').version > cat('Old new').version, 'a moved scenario must get a new version, so an editor opened before cannot save the old type back');
+  check('old "Type of place" values moved to their pin skill; already-a-skill left alone; moved ones get a new version');
 
   // Running again changes nothing, and does not add the lines twice.
   run('UPDATE scenarios SET data = ? WHERE title = ?', JSON.stringify({ ...after, why: 'ADMIN WHY' }), ex.title);

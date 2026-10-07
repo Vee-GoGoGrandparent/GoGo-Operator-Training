@@ -1,6 +1,7 @@
 // One-time, merge-only changes to live scenarios. Each runs once (recorded in the patches table) and only ADDS
 // what is missing: anything an admin wrote or removed in the scenario builder stays exactly as they left it.
-import { db, one, run, tx } from './db.js';
+import { db, one, all, run, tx } from './db.js';
+import { pinSkill } from './skills.js';
 import { cleanScenario } from './grading.js';
 import { CONFIRM_NAME_LINE, MENCHIES_STEPS, stepsFromNames } from './examples.js';
 
@@ -96,6 +97,18 @@ const PATCHES = [
       if (rep) rep.say = 'Thank you, Marge. Can you repeat the address for me?';
       d.steps = stepsFromNames(d.questions, MENCHIES_STEPS);
       run('UPDATE scenarios SET data = ?, version = version + 1 WHERE id = ?', JSON.stringify(cleanScenario(d)), row.id);
+      return true;
+    },
+  },
+  {
+    // Vee, 2026-10-07: "Type of place" is replaced by the Pin skill. Each old type moves to the skill it teaches
+    // (Restaurant or shop -> Place or business name, Shopping center -> Multiple entrances, ...). Only the label changes.
+    name: 'type-of-place-to-pin-skill-2026-10-07',
+    run() {
+      for (const r of all('SELECT id, category FROM scenarios')) {
+        const to = pinSkill(r.category);
+        if (to !== r.category) run('UPDATE scenarios SET category = ?, version = version + 1 WHERE id = ?', to, r.id);
+      }
       return true;
     },
   },

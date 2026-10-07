@@ -4,9 +4,12 @@ const $tabs = document.getElementById('tabs');
 const $who = document.getElementById('who');
 
 let ME = null, CONFIG = {}, mapsReady = null;
-const CATEGORIES = ['Hospital', 'Medical office', 'Airport', 'Restaurant or shop', 'Apartment complex', 'Senior living', 'Gated community', 'Shopping center', 'Other'];
-// One colour per type of place, so the practice page reads at a glance.
-const catColour = (cat) => `--c: var(--c${(Math.max(0, CATEGORIES.indexOf(cat)) % 6) + 1})`;
+// Pin skills: every call is grouped by the situation it teaches. The list (with a tip for each) comes from the server.
+const SKILLS = () => (CONFIG.pinSkills || []).map((k) => k.name);
+const skillAt = (name) => { const i = SKILLS().indexOf(name); return i < 0 ? 999 : i; };
+const bySkill = (a, b) => skillAt(a.category) - skillAt(b.category) || a.title.localeCompare(b.title);
+// One colour per pin skill, so the practice page reads at a glance.
+const catColour = (cat) => `--c: var(--c${(Math.max(0, SKILLS().indexOf(cat)) % 6) + 1})`;
 const STOP_NAME = { pickup: 'Start Address (pickup)', dropoff: 'End Address (drop-off)' };
 // Same colours as the dashboard: pickup lime green, drop-off pink.
 const PIN_COLOUR = { pickup: ['#8cc63e', '#55801e'], dropoff: ['#e8336d', '#a3164a'] };
@@ -658,13 +661,14 @@ VIEWS.practice = async () => {
   const [list, tests] = await Promise.all([api('/api/practice'), api('/api/tests')]);
   const sets = tests.filter((t) => t.mode === 'practice' && t.status === 'open');
   const groups = {};
-  list.forEach((s) => (groups[s.category] ||= []).push(s));
+  [...list].sort(bySkill).forEach((s) => (groups[s.category] ||= []).push(s));
+  const tip = (name) => CONFIG.pinSkills?.find((k) => k.name === name)?.tip || '';
   mount(h('h1', {}, 'Practice'),
     h('p', { class: 'lead' }, 'Each one is a short call on a copy of Ride Ordering. Ask what you need to, search the place, put the pin on the right spot, fill in what the driver needs, then Schedule This Ride to see how you did.'),
     sets.length ? [h('h3', {}, 'Practice sets for your class'), h('div', { class: 'tiles' }, sets.map((t) => h('button', { class: 'tile', onclick: () => go(`t-${t.id}`) },
       h('span', { class: 'tag' }, 'Practice set'), h('b', {}, t.name), h('span', { class: 'small muted' }, `${t.questions} calls`))))] : null,
     !list.length && !sets.length ? h('div', { class: 'card muted' }, 'No practice yet. Your trainer adds it.') : null,
-    Object.entries(groups).map(([cat, items]) => [h('h3', {}, cat),
+    Object.entries(groups).map(([cat, items]) => [h('h3', {}, cat), tip(cat) ? h('p', { class: 'small muted skill-tip' }, tip(cat)) : null,
       h('div', { class: 'tiles' }, items.map((s, i) => h('button', { class: 'tile', style: catColour(cat), onclick: () => practiceOne(items, i) },
         h('span', { class: 'tag' }, s.category), h('b', {}, s.title), h('span', { class: 'small muted' }, s.stops.map((x) => x.kind === 'dropoff' ? 'drop-off' : 'pickup').join(' + ')))))]));
 };
@@ -798,13 +802,18 @@ VIEWS.progress = async () => {
 
 // ── admins: scenarios ────────────────────────────────────────────────
 VIEWS['a-scenarios'] = async () => {
-  const list = await api('/api/admin/scenarios');
+  const list = (await api('/api/admin/scenarios')).sort(bySkill);
+  // Each pin skill needs 3 calls for a class: 2 to practise and 1 for the test.
+  const count = (k) => list.filter((s) => s.category === k).length;
   mount(h('div', { class: 'row' }, h('h1', { class: 'grow' }, 'Scenarios'),
       h('button', { class: 'btn ghost', onclick: safe(async () => { const r = await api('/api/admin/scenarios/examples', {}); toast(r.added ? `Added ${r.added} example(s)` : 'Examples are up to date'); go('a-scenarios'); }) }, 'Add the examples'),
       h('button', { class: 'btn orange', onclick: () => editScenario() }, '+ New scenario')),
     h('p', { class: 'lead' }, 'A scenario is a short pretend call: what the caller says, the place(s), the right pin and entrance, what the operator can say, and what the driver note must say. Use public places only, and made-up customer details.'),
+    h('div', { class: 'card' }, h('h2', {}, 'Pin skills'), h('p', { class: 'small muted' }, 'Each pin skill needs 3 calls: 2 to practise and 1 for the test.'),
+      h('div', { class: 'skill-counts' }, SKILLS().filter((k) => k !== 'Other' || count(k)).map((k) => h('div', { class: `skill-count ${count(k) >= 3 ? 'ok' : ''}` },
+        h('b', {}, k), h('span', {}, count(k) >= 3 ? `${count(k)} calls ✓` : `${count(k)} of 3 calls`))))),
     h('div', { class: 'card' }, !list.length ? h('p', { class: 'muted' }, 'No scenarios yet. Start with the examples, or make your own from real cases.') :
-      h('table', {}, h('tr', {}, h('th', {}, 'Scenario'), h('th', {}, 'Type'), h('th', {}, 'Stops'), h('th', {}, 'Tries'), h('th', {}, 'Got right'), h('th', {}, '')),
+      h('table', {}, h('tr', {}, h('th', {}, 'Scenario'), h('th', {}, 'Pin skill'), h('th', {}, 'Stops'), h('th', {}, 'Tries'), h('th', {}, 'Got right'), h('th', {}, '')),
         list.map((s) => h('tr', {}, h('td', {}, h('b', {}, s.title), !s.practice ? h('div', {}, h('span', { class: 'tag' }, 'not in general practice')) : null),
           h('td', {}, s.category), h('td', {}, s.data.stops.map((x) => x.kind === 'dropoff' ? 'drop-off' : 'pickup').join(' + ')),
           h('td', {}, s.tries), h('td', {}, s.tries ? `${Math.round(100 * s.passes / s.tries)}%` : '–'),
@@ -822,7 +831,7 @@ function editScenario(existing) {
   d.account = d.account || { home: null, saved: [] };
   d.steps = d.steps || [];
   const title = h('input', { type: 'text', value: existing?.title || '', placeholder: "e.g. Menchie's on Petrovitsky Road" });
-  const cat = h('select', {}, CATEGORIES.map((c) => h('option', { value: c, selected: c === (existing?.category || 'Restaurant or shop') }, c)));
+  const cat = h('select', {}, SKILLS().map((c) => h('option', { value: c, selected: c === (existing?.category || 'Place or business name') }, c)));
   const practice = h('input', { type: 'checkbox', checked: existing ? existing.practice : true });
   const caller = h('textarea', { value: d.caller, placeholder: 'What the caller says first, e.g. "Hi, I need a ride."' });
   const why = h('textarea', { value: d.why, placeholder: 'Shown after they answer: what goes wrong if you only use the address, and how to get it right.' });
@@ -937,7 +946,7 @@ function editScenario(existing) {
 
   mount(h('button', { class: 'btn ghost small', onclick: () => go('a-scenarios') }, '← Scenarios'),
     h('h1', {}, existing ? 'Edit scenario' : 'New scenario'),
-    h('div', { class: 'card' }, h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Scenario name (trainees see it, so do not give the answer away)'), title), h('div', {}, h('label', {}, 'Type of place'), cat)),
+    h('div', { class: 'card' }, h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Scenario name (trainees see it, so do not give the answer away)'), title), h('div', {}, h('label', {}, 'Pin skill (what this call teaches)'), cat)),
       h('label', {}, 'What the caller says first'), caller,
       h('label', { class: 'check' }, practice, 'Show in general practice (untick to use it only in practice sets and tests)')),
     stopsHost,
@@ -1028,8 +1037,8 @@ async function editGroup(t, tests, classes) {
     h('div', { class: 'card' }, h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Scenarios'), tally),
       locked ? h('p', { class: 'tag warn' }, `${te.started} ${te.started === 1 ? 'person has' : 'people have'} started the test, so its calls are locked. Practice can still change.`) : null,
       !list.length ? h('p', { class: 'muted' }, 'Add scenarios first.') :
-      h('table', {}, h('tr', {}, h('th', {}, 'Scenario'), h('th', {}, 'Type'), h('th', {}, 'Use it for')),
-        list.map((s) => {
+      h('table', {}, h('tr', {}, h('th', {}, 'Scenario'), h('th', {}, 'Pin skill'), h('th', {}, 'Use it for')),
+        [...list].sort(bySkill).map((s) => {
           const was = role.get(s.id) || '';
           const sel = h('select', { disabled: locked && was === 'test', onchange: () => { sel.value ? role.set(s.id, sel.value) : role.delete(s.id); upd(); } },
             [['', 'Not used'], ['practice', 'Practice'], ['test', 'Test']].map(([v, l]) => h('option', { value: v, selected: v === was, disabled: locked && v === 'test' && was !== 'test' }, l)));

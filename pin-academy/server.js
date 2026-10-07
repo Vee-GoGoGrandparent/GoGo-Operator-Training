@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { db, one, all, run, tx } from './src/db.js';
 import { gradeScenario, publicScenario, cleanScenario, isRightPick } from './src/grading.js';
+import { PIN_SKILLS, pinSkill } from './src/skills.js';
 import { EXAMPLE_SCENARIOS } from './src/examples.js';
 import { runPatches } from './src/patches.js';
 import * as auth from './src/auth.js';
@@ -139,7 +140,7 @@ route('GET', '/api/me', (req, res) => {
   send(res, 200, {
     user: publicUser(auth.currentUser(req)),
     slackReady: auth.slackConfigured(), devLogin: auth.devLoginAllowed(),
-    mapsKey: process.env.GOOGLE_MAPS_API_KEY || '', mapId: process.env.GOOGLE_MAP_ID || 'DEMO_MAP_ID',
+    mapsKey: process.env.GOOGLE_MAPS_API_KEY || '', mapId: process.env.GOOGLE_MAP_ID || 'DEMO_MAP_ID', pinSkills: PIN_SKILLS,
   });
 });
 
@@ -351,7 +352,7 @@ route('POST', '/api/admin/scenarios', async (req, res) => {
   if (!title) fail(400, 'Give the scenario a name.');
   let data;
   try { data = cleanScenario(b.data || {}); } catch (e) { fail(400, e.message); }
-  const vals = [title, str(b.category, 40) || 'Other', JSON.stringify(data), b.practice === false ? 0 : 1];
+  const vals = [title, pinSkill(str(b.category, 40)), JSON.stringify(data), b.practice === false ? 0 : 1];
   if (b.id) {
     const cur = one('SELECT id, version FROM scenarios WHERE id = ?', num(b.id));
     if (!cur) fail(404, 'Scenario not found.');
@@ -376,7 +377,7 @@ route('POST', '/api/admin/scenarios/examples', (req, res) => {
   for (const ex of EXAMPLE_SCENARIOS) {
     // Add-only: an example that is already here may have been edited by an admin, so it is left exactly as it is.
     if (one('SELECT id FROM scenarios WHERE title = ?', ex.title)) continue;
-    run('INSERT INTO scenarios (title, category, data, practice, created_by) VALUES (?, ?, ?, 1, ?)', ex.title, ex.category, JSON.stringify(cleanScenario(ex.data)), u.slack_id);
+    run('INSERT INTO scenarios (title, category, data, practice, created_by) VALUES (?, ?, ?, 1, ?)', ex.title, pinSkill(ex.category), JSON.stringify(cleanScenario(ex.data)), u.slack_id);
     added++;
   }
   send(res, 200, { added });

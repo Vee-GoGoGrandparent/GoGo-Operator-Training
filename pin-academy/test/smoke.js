@@ -61,6 +61,15 @@ try {
   assert.equal(men.data.steps.length, 12);
   assert.equal(men.data.questions[men.data.steps[0].right[0]].q, "Confirm the customer's name");
   const RIGHT = men.data.steps.map((st) => [st.right[0]]);
+  // Pin skills replace "Type of place": the list is sent to the page; an old type or unknown value is stored as a skill.
+  const skills = (await ana('/api/me')).data.pinSkills;
+  assert.equal(skills.length, 9); assert.equal(skills[0].name, 'Place or business name'); assert.ok(skills[1].tip.includes('End Location'));
+  assert.equal(men.category, 'Place or business name');
+  const sk = async (category) => { const id = (await admin('/api/admin/scenarios', { title: `Skill ${category}`, category, practice: false,
+    data: { caller: 'x', stops: [{ kind: 'pickup', label: 'P', start: { lat: 40.3, lng: -75.3 }, answer: { lat: 40.3001, lng: -75.3 } }], questions: [], note: {} } })).data.id;
+    return (await admin('/api/admin/scenarios')).data.find((x) => x.id === id).category; };
+  assert.deepEqual([await sk('Airports'), await sk('Hospital'), await sk('Shopping center'), await sk('Made up')], ['Airports', 'Hospitals and clinics', 'Multiple entrances', 'Other']);
+  check('pin skills sent to the page; Menchie\'s is "Place or business name"; old types and unknown values saved as a pin skill');
 
   const pub = (await ana('/api/practice')).data;
   const json = JSON.stringify(pub);

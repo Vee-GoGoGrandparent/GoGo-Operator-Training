@@ -263,3 +263,11 @@ td.actions .btn { margin: 2px 2px 2px 0; }
 .stepchip.right { border-style: solid; border-color: var(--green); color: #fff; background: var(--green); font-weight: 700; }
 .warn { color: var(--red); font-weight: 600; }
 .ro .qbtn.said, .qbtn.said { background: var(--bg); border-color: var(--line); color: var(--muted); cursor: default; }
+
+/* Pin skills: the tip under each practice group, and the per-skill call count on Scenarios */
+.skill-tip { margin: -4px 0 10px; }
+.skill-counts { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.skill-count { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.skill-count span { color: var(--muted); }
+.skill-count.ok { border-color: var(--green); background: var(--green-soft); }
+.skill-count.ok span { color: var(--green); font-weight: 700; }
