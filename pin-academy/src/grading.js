@@ -1,6 +1,7 @@
 // Grading for a scenario: the pin(s), the questions asked, and the note for the driver.
 // Everything is decided here on the server, never in the browser.
 import { metersBetween, validLatLng } from './scoring.js';
+import { isStandardKey, renderCall } from './standard-lines.js';
 
 const EMOJI = /\p{Extended_Pictographic}/u;
 const MIN_NOTE_WORDS = 8;
@@ -114,7 +115,7 @@ const nearby = (p) => ({ lat: Math.round(p.lat * 1000) / 1000, lng: Math.round(p
 
 // What a trainee may see before answering: no right pins, no "needed" flags, no model note.
 export function publicScenario(row) {
-  const s = JSON.parse(row.data);
+  const s = renderCall(JSON.parse(row.data)); // standard lines filled in with the current wording
   return {
     id: row.id, title: row.title, category: row.category,
     caller: s.caller, account: s.account || { home: null, saved: [] }, ride: cleanRide(s.ride),
@@ -166,10 +167,15 @@ export function cleanScenario(b) {
   if (stops.filter((x) => x.kind === 'pickup').length > 1 || stops.filter((x) => x.kind === 'dropoff').length > 1) throw new Error('One pickup and one drop-off at most.');
   stops.sort((a, b) => (a.kind === 'pickup' ? 0 : 1) - (b.kind === 'pickup' ? 0 : 1)); // pickup first, like the form
   const lines = (Array.isArray(b.questions) ? b.questions : []).slice(0, 30)
-    .map((q, i) => ({ q: str(q?.q, 160), say: str(q?.say, 400), a: str(q?.a, 300), needed: !!q?.needed, i })).filter((q) => q.q);
+    .map((q, i) => ({ q: str(q?.q, 160), say: str(q?.say, 400), a: str(q?.a, 300), needed: !!q?.needed,
+      ...(isStandardKey(q?.std) ? { std: q.std } : {}), i })).filter((q) => q.q);
   const newIndex = new Map(lines.map((q, n) => [q.i, n]));
   return {
     caller: str(b.caller, 600), why: str(b.why, 1500),
+    // Made with the New call screen: the call's own details for its standard lines, and what happened (cleaned, no
+    // customer details). Kept only when there is something in them, so older calls stay exactly as they were.
+    ...(b.vars ? { vars: { wearing: str(b.vars.wearing, 160), notesAnswer: str(b.vars.notesAnswer, 200), dropoffAnswer: str(b.vars.dropoffAnswer, 200) } } : {}),
+    ...(str(b.story, 4000) ? { story: str(b.story, 4000) } : {}),
     ride: cleanRide(b.ride), mustOrder: b.mustOrder !== false,
     savedFix: [3, 4, 5].includes(Number(b.savedFix?.slot)) ? { slot: Number(b.savedFix.slot), action: b.savedFix.action === 'delete' ? 'delete' : 'update', stop: b.savedFix.stop === 'dropoff' ? 'dropoff' : 'pickup' } : null,
     account: { home: savedPlace(b.account?.home), saved: (Array.isArray(b.account?.saved) ? b.account.saved : []).map(savedPlace).filter(Boolean).slice(0, 3) },

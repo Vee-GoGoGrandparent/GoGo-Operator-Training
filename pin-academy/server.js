@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { db, one, all, run, tx } from './src/db.js';
 import { gradeScenario, publicScenario, cleanScenario, isRightPick } from './src/grading.js';
 import { PIN_SKILLS, pinSkill } from './src/skills.js';
+import { renderCall, standardLines, saveStandardLine, PLACEHOLDERS } from './src/standard-lines.js';
+import { buildCall } from './src/build-call.js';
 import { EXAMPLE_SCENARIOS } from './src/examples.js';
 import { runPatches } from './src/patches.js';
 import * as auth from './src/auth.js';
@@ -79,7 +81,8 @@ function cleanSubmission(b) {
   };
 }
 
-const scenarioData = (row) => JSON.parse(row.data);
+// Lines that point at GoGo's standard lines are filled in with the current wording every time a call is read.
+const scenarioData = (row) => renderCall(JSON.parse(row.data));
 
 // ── tests: shared logic ────────────────────────────────────────────────
 function testScenarios(testId) {
@@ -362,6 +365,31 @@ route('POST', '/api/admin/scenarios', async (req, res) => {
     return send(res, 200, { id: num(b.id) });
   }
   send(res, 200, { id: Number(run('INSERT INTO scenarios (title, category, data, practice, created_by) VALUES (?, ?, ?, ?, ?)', ...vals, u.slack_id).lastInsertRowid) });
+});
+
+// The short "New call" screen: the server builds the whole call (flow, steps, wrong picks) from what is unique.
+route('POST', '/api/admin/scenarios/build', async (req, res) => {
+  const u = needAdmin(req);
+  const b = await readJson(req);
+  let built;
+  try { built = buildCall(b); } catch (e) { fail(e.status || 400, e.message); }
+  const id = Number(run('INSERT INTO scenarios (title, category, data, practice, created_by) VALUES (?, ?, ?, ?, ?)',
+    built.title, pinSkill(built.category), JSON.stringify(built.data), b.practice === false ? 0 : 1, u.slack_id).lastInsertRowid);
+  send(res, 200, { id });
+});
+
+// GoGo's standard lines: one wording for every call made with New call.
+route('GET', '/api/admin/standard-lines', (req, res) => {
+  needAdmin(req);
+  send(res, 200, { lines: standardLines(), placeholders: PLACEHOLDERS });
+});
+route('POST', '/api/admin/standard-lines', async (req, res) => {
+  const u = needAdmin(req);
+  const b = await readJson(req);
+  const line = { q: str(b.q, 160), say: str(b.say, 600), a: str(b.a, 300) };
+  if (!line.q || !line.say || !line.a) fail(400, 'A standard line needs a button, what the operator says, and the answer.');
+  try { saveStandardLine(str(b.key, 40), line, u.slack_id); } catch (e) { fail(400, e.message); }
+  send(res, 200, { ok: true });
 });
 
 // Archive, never delete: old test results keep pointing at the scenario.

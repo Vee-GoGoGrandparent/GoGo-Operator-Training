@@ -1,4 +1,5 @@
 // GoGo Academy front end. Plain JS. All user text goes in with textContent, never innerHTML.
+import { cleanTranscript } from './clean.js';
 const $view = document.getElementById('view');
 const $tabs = document.getElementById('tabs');
 const $who = document.getElementById('who');
@@ -815,7 +816,9 @@ VIEWS['a-scenarios'] = async () => {
   const count = (k) => list.filter((s) => s.category === k).length;
   mount(h('div', { class: 'row' }, h('h1', { class: 'grow' }, 'Scenarios'),
       h('button', { class: 'btn ghost', onclick: safe(async () => { const r = await api('/api/admin/scenarios/examples', {}); toast(r.added ? `Added ${r.added} example(s)` : 'Examples are up to date'); go('a-scenarios'); }) }, 'Add the examples'),
-      h('button', { class: 'btn orange', onclick: () => editScenario() }, '+ New scenario')),
+      h('button', { class: 'btn ghost', onclick: () => go('a-lines') }, 'Standard lines'),
+      h('button', { class: 'btn ghost', onclick: () => editScenario() }, 'Advanced editor'),
+      h('button', { class: 'btn orange', onclick: () => newCall() }, '+ New call')),
     h('p', { class: 'lead' }, 'A scenario is a short pretend call: what the caller says, the place(s), the right pin and entrance, what the operator can say, and what the driver note must say. Use public places only, and made-up customer details.'),
     h('div', { class: 'card' }, h('h2', {}, 'Pin skills'), h('p', { class: 'small muted' }, 'Each pin skill needs 3 calls: 2 to practise and 1 for the test.'),
       h('div', { class: 'skill-counts' }, SKILLS().filter((k) => k !== 'Other' || count(k)).map((k) => h('div', { class: `skill-count ${count(k) >= 3 ? 'ok' : ''}` },
@@ -838,6 +841,8 @@ function editScenario(existing) {
   };
   d.account = d.account || { home: null, saved: [] };
   d.steps = d.steps || [];
+  // Lines that come from the standard lines: remember their wording, so a line reworded here becomes this call's own.
+  d.questions.forEach((q) => { if (q.std) q._was = `${q.q}\n${q.say}\n${q.a}`; });
   const title = h('input', { type: 'text', value: existing?.title || '', placeholder: "e.g. Menchie's on Petrovitsky Road" });
   const cat = h('select', {}, SKILLS().map((c) => h('option', { value: c, selected: c === (existing?.category || 'Place or business name') }, c)));
   const practice = h('input', { type: 'checkbox', checked: existing ? existing.practice : true });
@@ -985,7 +990,8 @@ function editScenario(existing) {
       // Lines with no answer are dropped, so point the steps at where the kept lines end up.
       const kept = d.questions.map((q, i) => [q, i]).filter(([q]) => q.q && q.a);
       const newAt = new Map(kept.map(([, i], n) => [i, n]));
-      const data = { ...d, caller: caller.value, why: why.value, questions: kept.map(([q]) => q),
+      const own = (q) => { const { _was, ...rest } = q; if (rest.std && _was !== `${rest.q}\n${rest.say}\n${rest.a}`) delete rest.std; return rest; };
+      const data = { ...d, caller: caller.value, why: why.value, questions: kept.map(([q]) => own(q)),
         steps: shiftSteps(d.steps, (x) => (newAt.has(x) ? newAt.get(x) : -1)),
         note: { mustMention: must.value.split(',').map((x) => x.trim()).filter(Boolean), model: model.value, options: d.note.options.filter((o) => o.text.trim()) } };
       if (data.note.options.length === 1) return toast('Give at least 2 note choices, or none.', true);
@@ -997,6 +1003,147 @@ function editScenario(existing) {
     }) }, 'Save scenario'));
   drawStops(); drawAccount(); drawQuestions(); drawNoteOptions();
 }
+
+
+// ── admins: the short "New call" screen ───────────────────────────────
+// The trainer gives only what is unique: the place and its right pin, the customer, what happened. The call flow,
+// the steps and the wrong picks come from GoGo's standard lines (built on the server). Pasted transcripts are cleaned
+// HERE, in this browser, before anything is saved or sent: the raw text never leaves the page.
+const MADE_UP_NAMES = ['Marge Simpson', 'Rick Sanchez', 'Leslie Knope', 'Ron Swanson', 'Fred Flintstone', 'Wilma Flintstone', 'Lucille Bluth',
+  'Hank Hill', 'Peggy Hill', 'Bob Belcher', 'Linda Belcher', 'Phil Dunphy', 'Clair Dunphy', 'Dwight Schrute', 'Pam Beesly'];
+
+function newCall() {
+  const field = (label, el, hint) => h('div', {}, h('label', {}, label), el, hint ? h('div', { class: 'small muted' }, hint) : null);
+  const title = h('input', { type: 'text', placeholder: 'e.g. Dinner at a restaurant downtown (trainees see it, so do not give the answer away)' });
+  const cat = h('select', {}, SKILLS().map((c) => h('option', { value: c }, c)));
+
+  // What happened: described in their own words, or a pasted transcript that is cleaned right here.
+  let cleaned = null;
+  const story = h('textarea', { placeholder: 'e.g. The caller named the restaurant, the operator only typed the address, and the couple were almost dropped off at the wrong place.' });
+  const paste = h('textarea', { placeholder: 'Paste the call transcript here, then press "Take out customer details".' });
+  const extra = h('input', { type: 'text', placeholder: 'Any names to remove that it missed, separated by commas' });
+  const review = h('div', { class: 'clean-review' });
+  function drawReview() {
+    review.replaceChildren(h('div', { class: 'small muted' }, 'Removed parts are highlighted. Click any other word to remove it too. Only this cleaned text is kept.'),
+      h('div', { class: 'clean-text' }, cleaned.parts.flatMap((p, i) => p.kind
+        ? [h('span', { class: 'clean-gone', title: 'Removed' }, p.text)]
+        : p.text.split(/(\s+)/).map((w) => (/^\s+$/.test(w) || !w ? w : h('span', { class: 'clean-word', title: 'Click to remove', onclick: () => {
+          const at = cleaned.parts.indexOf(p); const bits = p.text.split(/(\s+)/); let done = false;
+          const before = [], after = [];
+          for (const b of bits) { if (!done && b === w) { done = true; continue; } (done ? after : before).push(b); }
+          cleaned.parts.splice(at, 1, { text: before.join('') }, { text: '[REMOVED]', kind: 'REMOVED' }, { text: after.join('') });
+          drawReview();
+        } }, w))))));
+  }
+  const cleanBtn = h('button', { class: 'btn', type: 'button', onclick: () => {
+    if (!paste.value.trim()) return toast('Paste the transcript first.', true);
+    cleaned = cleanTranscript(paste.value, extra.value.split(',').map((x) => x.trim()));
+    paste.value = ''; paste.style.display = 'none'; cleanBtn.style.display = 'none'; extra.style.display = 'none';
+    drawReview();
+  } }, 'Take out customer details');
+  const storyText = () => (mode.value === 'paste' ? (cleaned ? cleaned.parts.map((p) => p.text).join('') : '') : story.value);
+  const mode = h('select', { onchange: () => { describeBox.style.display = mode.value === 'paste' ? 'none' : ''; pasteBox.style.display = mode.value === 'paste' ? '' : 'none'; } },
+    h('option', { value: 'describe' }, 'Describe it in your own words'), h('option', { value: 'paste' }, 'Paste the call transcript'));
+  const describeBox = h('div', {}, story);
+  const pasteBox = h('div', { style: 'display:none' }, paste, extra, h('div', { class: 'row' }, cleanBtn), review);
+  const why = h('textarea', { placeholder: 'What went wrong on the real call, and how to get it right. Trainees read this after they answer.' });
+  story.addEventListener('blur', () => { if (!why.value.trim()) why.value = story.value; });
+
+  // The customer (made up) and their home on the account.
+  const customer = h('input', { type: 'text', value: MADE_UP_NAMES[Math.floor(Math.random() * MADE_UP_NAMES.length)] });
+  const home = { address: '', lat: null, lng: null };
+  const homeShown = h('div', { class: 'small muted' }, 'No home yet.');
+  const homeSearch = h('div', { class: 'search' });
+  const homeLat = h('input', { type: 'text', placeholder: 'Lat, Lng (or search above)', onchange: () => { const [a, b] = homeLat.value.split(',').map(Number); if (Number.isFinite(a) && Number.isFinite(b)) { home.lat = a; home.lng = b; } } });
+  const homeAddr = h('input', { type: 'text', placeholder: 'Home address as it shows on the account', oninput: () => (home.address = homeAddr.value) });
+  placeSearch(homeSearch, (p) => { Object.assign(home, { address: p.address, lat: p.lat, lng: p.lng }); homeAddr.value = p.address; homeLat.value = `${p.lat}, ${p.lng}`; homeShown.textContent = `Home: ${p.address}`; });
+
+  // A stop: Home, or a place with the address the caller gives and the right pin.
+  function stopBox(kind) {
+    const word = kind === 'pickup' ? 'Pickup' : 'Drop-off';
+    const st = { home: kind === 'pickup', label: '', addressGiven: '', start: null, answer: null };
+    const isHome = h('select', { onchange: () => { st.home = isHome.value === 'home'; placeBox.style.display = st.home ? 'none' : ''; } },
+      h('option', { value: 'home', selected: kind === 'pickup' }, 'Home (from the account)'), h('option', { value: 'place', selected: kind !== 'pickup' }, 'A place'));
+    const label = h('input', { type: 'text', placeholder: "Name of the place, e.g. Torikaya", oninput: () => (st.label = label.value) });
+    const given = h('input', { type: 'text', placeholder: 'The address the caller gives', oninput: () => (st.addressGiven = given.value) });
+    const startLL = h('input', { type: 'text', placeholder: 'Lat, Lng', onchange: () => (st.start = parseLL(startLL.value)) });
+    const rightLL = h('input', { type: 'text', placeholder: 'Lat, Lng', onchange: () => (st.answer = parseLL(rightLL.value)) });
+    const searchHost = h('div', { class: 'search' }), mapHost = h('div');
+    let pm = null;
+    placeSearch(searchHost, async (p) => {
+      if (!st.start) { st.start = { lat: p.lat, lng: p.lng }; startLL.value = `${p.lat}, ${p.lng}`; if (!st.addressGiven) { st.addressGiven = p.address; given.value = p.address; } }
+      else if (!st.label) { st.label = p.name; label.value = p.name; }
+      st.answer = { lat: p.lat, lng: p.lng }; rightLL.value = `${p.lat}, ${p.lng}`;
+      if (!pm) pm = await pinMap(mapHost, { start: st.start, kind, onMove: (q) => { st.answer = q; rightLL.value = `${q.lat}, ${q.lng}`; } });
+      pm && pm.setPin(p);
+    });
+    const placeBox = h('div', { style: kind === 'pickup' ? 'display:none' : '' },
+      h('label', {}, '1. Search the address the caller gives (that is where the address alone puts the pin). 2. Then search the place by name, or drag the pin, to where the driver should stop.'),
+      searchHost, mapHost,
+      h('div', { class: 'grid2' }, field('Name of the place', label), field('Address the caller gives', given)),
+      h('div', { class: 'grid2' }, field('Where the address alone puts the pin', startLL, 'Filled in by the first search. You can paste it from the dashboard.'),
+        field('The right spot', rightLL, 'Filled in when you move the pin. You can paste it from the dashboard.')));
+    return { st, el: h('div', { class: 'card' }, h('h2', {}, word), field(`${word} is`, isHome), placeBox) };
+  }
+  const parseLL = (v) => { const [a, b] = String(v).split(',').map((x) => Number(x.trim())); return Number.isFinite(a) && Number.isFinite(b) ? { lat: a, lng: b } : null; };
+  const pickup = stopBox('pickup'), dropoff = stopBox('dropoff');
+
+  const wearing = h('input', { type: 'text', placeholder: 'e.g. A blue top and black jeans.' });
+  const notesAnswer = h('input', { type: 'text', value: "No, that's all.", placeholder: 'e.g. Yes, my wife uses a walker.' });
+  const low = h('input', { type: 'number', min: 1, value: 10 }), high = h('input', { type: 'number', min: 1, value: 12 });
+  const drName = h('input', { type: 'text', value: 'Lidong' }), drCar = h('input', { type: 'text', value: 'Black Toyota Sienna' });
+  const drPlate = h('input', { type: 'text', value: '0734' }), drEta = h('input', { type: 'text', value: '5 minutes' });
+  const caller = h('input', { type: 'text', placeholder: 'Leave empty for a standard opening, e.g. "Hi, I need a ride from home to Torikaya."' });
+  const model = h('textarea', { placeholder: 'Leave empty and one is written for you. e.g. Two passengers. The female rider uses a walker, please assist her.' });
+
+  mount(h('button', { class: 'btn ghost small', onclick: () => go('a-scenarios') }, '← Scenarios'),
+    h('h1', {}, 'New call'),
+    h('p', { class: 'lead' }, 'Fill in what is special about this call. The rest of the call (greeting, name, contact number, read-backs, notes, estimate, driver, closing) comes from the Standard lines, in the right order, with wrong picks chosen for you.'),
+    h('div', { class: 'card' }, h('div', { class: 'grid2' }, field('Name of the call', title), field('Pin skill (what it teaches)', cat))),
+    h('div', { class: 'card' }, h('h2', {}, 'What happened'), field('How do you want to give it?', mode), describeBox, pasteBox,
+      field('Why (trainees read this after they answer)', why),
+      h('div', { class: 'row' }, h('button', { class: 'btn ghost', type: 'button', disabled: true, title: 'Needs the Anthropic key in Railway' }, 'Draft the call with Claude (coming next)'))),
+    h('div', { class: 'card' }, h('h2', {}, 'The customer'), h('div', { class: 'grid2' },
+      field('Made-up name (never a real customer)', customer, null),
+      h('div', {}, h('label', {}, ' '), h('button', { class: 'btn ghost small', type: 'button', onclick: () => { customer.value = MADE_UP_NAMES[Math.floor(Math.random() * MADE_UP_NAMES.length)]; } }, 'Pick another made-up name'))),
+      h('label', {}, 'Home address on the account (search it, or type it and paste Lat, Lng from the dashboard)'), homeSearch, homeShown, h('div', { class: 'grid2' }, homeAddr, homeLat)),
+    pickup.el, dropoff.el,
+    h('div', { class: 'card' }, h('h2', {}, 'What the caller says'),
+      field('Their first line', caller),
+      field('What they are wearing (asked when the pickup is not home)', wearing),
+      field('Their answer when asked for driver notes', notesAnswer)),
+    h('div', { class: 'card' }, h('h2', {}, 'The ride'), h('div', { class: 'grid2' }, field('Estimate from ($)', low), field('to ($)', high)),
+      h('div', { class: 'grid2' }, field('Driver', drName), field('Car', drCar)), h('div', { class: 'grid2' }, field('Plate', drPlate), field('Arriving in', drEta))),
+    h('div', { class: 'card' }, h('h2', {}, 'Driver note'), field('A good note (optional)', model)),
+    h('button', { class: 'btn orange', onclick: safe(async () => {
+      const stopOut = (b) => (b.st.home ? { home: true } : { place: { label: b.st.label, addressGiven: b.st.addressGiven, start: b.st.start, answer: b.st.answer } });
+      const r = await api('/api/admin/scenarios/build', {
+        title: title.value, category: cat.value, customerName: customer.value, story: storyText(), why: why.value,
+        home: home.lat != null ? { address: homeAddr.value || home.address, lat: home.lat, lng: home.lng } : null,
+        pickup: stopOut(pickup), dropoff: stopOut(dropoff), wearing: wearing.value, notesAnswer: notesAnswer.value, caller: caller.value,
+        ride: { low: Number(low.value), high: Number(high.value), driver: { name: drName.value, car: drCar.value, plate: drPlate.value, eta: drEta.value } },
+        note: { model: model.value },
+      });
+      toast('Call saved. Try it from Practice, or open it in the Advanced editor to fine-tune.');
+      go('a-scenarios');
+      return r;
+    }) }, 'Save the call'));
+}
+
+// ── admins: GoGo's standard lines ────────────────────────────────────
+VIEWS['a-lines'] = async () => {
+  const { lines, placeholders } = await api('/api/admin/standard-lines');
+  mount(h('button', { class: 'btn ghost small', onclick: () => go('a-scenarios') }, '← Scenarios'),
+    h('h1', {}, 'Standard lines'),
+    h('p', { class: 'lead' }, 'The lines every call has, written once. Change one here and every call made with "New call" says it the new way. Words in {curly brackets} are filled in from each call.'),
+    h('div', { class: 'card small' }, h('b', {}, 'Fill-ins: '), Object.entries(placeholders).map(([k, v]) => h('span', { class: 'ph' }, h('code', {}, `{${k}}`), ` ${v}`))),
+    lines.map((l) => {
+      const q = h('input', { type: 'text', value: l.q }), say = h('textarea', { value: l.say }), a = h('input', { type: 'text', value: l.a });
+      return h('div', { class: 'card' }, h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Button'), q), h('div', {}, h('label', {}, 'Caller answers'), a)),
+        h('label', {}, 'What the operator says'), say,
+        h('button', { class: 'btn small', onclick: safe(async () => { await api('/api/admin/standard-lines', { key: l.key, q: q.value, say: say.value, a: a.value }); toast('Saved. Every New call now uses it.'); }) }, 'Save'));
+    }));
+};
 
 // ── admins: practice sets & tests ────────────────────────────────────
 // Each class has ONE link, ending with its name: …/class/october-2026. It shows that class's open practice and tests.

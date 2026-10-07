@@ -12,6 +12,11 @@ Pin placement practice and class pin tests for GoGo orientation. Built from Osca
   right one plus two that sound right), and one or two can be right. Practice: a wrong pick says "Not quite" and they
   pick again (still a miss). Test: the wrong line is said, the call goes on, and it is graded at the end. A call
   with no steps shows every line at once, as before.
+- **New call (for trainers):** fill in only what is special (the place and its right pin, a made-up customer, what
+  happened). The flow, steps and wrong picks are built from GoGo's **Standard lines** (`src/standard-lines.js`,
+  editable on the Standard lines page; a change reaches every New call). A pasted transcript is cleaned in the
+  browser first (`public/clean.js`: phones, emails, dates, cards, addresses, names where found); the raw text is
+  never saved or sent. The old editor is still there as "Advanced editor".
 - **Driver note choices:** a call can carry 2-3 notes (one right). In practice the trainee picks one; in a test they
   always write the note themselves.
 - **Pin skills:** every call teaches one situation (place or business name, past rides, multiple entrances,

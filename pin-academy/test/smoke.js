@@ -339,6 +339,64 @@ try {
   assert.equal((await admin(`/api/admin/classes/${jan}/delete`, {})).status, 409, 'class with a trainee deleted');
   check('delete a test (gone from list and link); a class with no trainees deletes with its practice/tests; with trainees it is refused');
 
+  // The short "New call" screen: the server builds the whole call from what is unique. All details made up.
+  const NEW_CALL = { title: 'Built: dinner downtown', category: 'Place or business name', customerName: 'Leslie Knope',
+    home: { address: '1 Test Avenue, Townsville, TN 37000', lat: 35.01, lng: -85.16 }, pickup: { home: true },
+    dropoff: { place: { label: 'Test Bistro', addressGiven: '200 Main Street, Townsville', start: { lat: 35.04, lng: -85.3 }, answer: { lat: 35.0402, lng: -85.3003 } } },
+    ride: { low: 12, high: 15, driver: { name: 'Sam', car: 'Blue Honda Civic', plate: 'ABCD', eta: '7 minutes' } }, why: 'The operator typed only the address.' };
+  assert.equal((await ana('/api/admin/scenarios/build', NEW_CALL)).status, 403, 'a trainee built a call');
+  assert.equal((await admin('/api/admin/scenarios/build', { ...NEW_CALL, home: null })).status, 400, 'home pickup with no home address');
+  assert.equal((await admin('/api/admin/scenarios/build', { ...NEW_CALL, dropoff: { home: true } })).status, 400, 'both stops home');
+  const built = (await admin('/api/admin/scenarios/build', NEW_CALL)).data.id;
+  const bc = (await admin('/api/admin/scenarios')).data.find((x) => x.id === built);
+  const bq = (i) => bc.data.questions[i];
+  const rightSoFar = new Set();
+  for (const [n, st] of bc.data.steps.entries()) {
+    assert.equal(st.right.length, 1); assert.ok(st.choices.length >= 2 && st.choices.length <= 3, `step ${n + 1} choices`);
+    assert.ok(st.choices.every((i) => bq(i)), `step ${n + 1} points at a missing line`);
+    assert.ok(!st.choices.some((i) => rightSoFar.has(i)), `step ${n + 1} offers a line that was already right`);
+    st.right.forEach((i) => rightSoFar.add(i));
+  }
+  const order = bc.data.steps.map((st) => bq(st.right[0]).q);
+  assert.deepEqual(order.slice(0, 3), ["Confirm the customer's name", 'Confirm the best contact number', 'Confirm the pickup is home']);
+  assert.ok(order.includes('Ask for notes for the driver') && order.at(-1) === 'Close the call');
+  const line = (q) => bc.data.questions.find((x) => x.q === q);
+  assert.ok(line("Confirm the customer's name").say.includes('Leslie Knope') && line('Confirm the best contact number').say.includes('855-464-6872'));
+  assert.ok(line('Provide estimate').say.includes('$12-$15'));
+  assert.ok(/Sam, in a blue Honda Civic, license plate ABCD, should be arriving in about 7 minutes.*call back immediately/.test(line('Provide driver info').say), line('Provide driver info').say);
+  const bOk = bc.data.steps.map((st) => [st.right[0]]);
+  const bRun = (await ana(`/api/practice/${built}`, { pins: [{ lat: 35.01, lng: -85.16 }, { lat: 35.0402, lng: -85.3003 }], ordered: true, steps: bOk,
+    note: 'Please drop the customer off at Test Bistro on Main Street. Thank you so much.' })).data;
+  assert.equal(bRun.passed, true, JSON.stringify(bRun));
+  check('New call: builds a passable call, standard flow in order (name, contact number, home, …, notes, close), wrong picks never already right, details filled in');
+
+  // The other two trip shapes: a place to home, and a place to another place.
+  const PLACE_A = { label: 'Test Clinic', addressGiven: '9 Elm Street, Townsville', start: { lat: 35.1, lng: -85.2 }, answer: { lat: 35.1002, lng: -85.2001 } };
+  for (const [shape, pickup, dropoff] of [['place to home', { place: PLACE_A }, { home: true }], ['place to place', { place: PLACE_A }, NEW_CALL.dropoff]]) {
+    const id = (await admin('/api/admin/scenarios/build', { ...NEW_CALL, title: `Built: ${shape}`, pickup, dropoff, wearing: 'A red coat.' })).data.id;
+    const c = (await admin('/api/admin/scenarios')).data.find((x) => x.id === id).data;
+    const seen = new Set();
+    for (const st of c.steps) { assert.ok(!st.choices.some((i) => seen.has(i)) && st.right.length === 1, `${shape}: a wrong pick was already right`); st.right.forEach((i) => seen.add(i)); }
+    const names = c.steps.map((st) => c.questions[st.right[0]].q);
+    assert.ok(names.includes('Ask what they are wearing') && names.includes('Ask for the name of the place'), `${shape}: ${names.join(' > ')}`);
+    assert.equal(names.includes('Confirm the home address'), shape === 'place to home');
+  }
+  check('New call works for every trip shape: home to a place, a place to home, a place to another place (clothing asked when pickup is not home)');
+
+  // One wording for every New call: changing a standard line changes those calls, not hand-made ones like Menchie's.
+  assert.equal((await ana('/api/admin/standard-lines')).status, 403);
+  const lines = (await admin('/api/admin/standard-lines')).data;
+  assert.ok(lines.lines.some((l) => l.key === 'driver') && lines.placeholders.driver);
+  const newDriver = "NEW WORDING: {driver} in a {car}, plate {plate}, about {eta}. If you don't see the driver, call us back immediately.";
+  assert.equal((await admin('/api/admin/standard-lines', { key: 'driver', q: 'Provide driver info', say: newDriver, a: 'Thanks.' })).status, 200);
+  assert.equal((await admin('/api/admin/standard-lines', { key: 'nope', q: 'x', say: 'x', a: 'x' })).status, 400);
+  const after2 = (await admin('/api/admin/scenarios')).data;
+  assert.ok(after2.find((x) => x.id === built).data.questions.find((q) => q.q === 'Provide driver info').say.startsWith('NEW WORDING: Sam in a blue Honda Civic'));
+  assert.ok(!after2.find((x) => x.id === men.id).data.questions.find((q) => q.q === 'Provide driver info').say.includes('NEW WORDING'), "Menchie's own line changed");
+  const pubBuilt = (await ana('/api/practice')).data.find((x) => x.id === built);
+  assert.ok(pubBuilt.questions.some((q) => q.say.startsWith('NEW WORDING')), 'trainees still see the old wording');
+  check('changing a standard line changes every New call (trainees see it too), never a hand-made call; trainees cannot see or change the lines');
+
   assert.ok((await (await fetch(BASE + '/')).text()).includes('GoGo Academy'));
   check('page loads');
   console.log(`\nAll ${passed} checks passed.`);
