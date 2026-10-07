@@ -217,3 +217,17 @@ main:has(.ro) { max-width: none; padding: 0; }
 main:has(.ro) > p, main:has(.ro) > .row:not(.ro-top), main:has(.ro) > h2 { padding-left: 18px; padding-right: 18px; }
 #tabs button { padding: 8px 10px; }
 @media (max-width: 1350px) { .brand { font-size: 17px; } #tabs button { padding: 7px 8px; font-size: 14px; } #who > span { display: none; } }
+
+/* saved locations + dashboard pop-ups */
+.round.has-home { background: #3dbb8c; color: #fff; border-color: #3dbb8c; }
+.ro .slot { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ro .slot.chosen { background: #3dbb8c; color: #fff; border-color: #3dbb8c; }
+.modal-back { position: fixed; inset: 0; background: rgba(40,40,60,.45); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
+.modal { background: #fff; border-radius: 6px; width: min(560px, 100%); box-shadow: 0 10px 40px rgba(0,0,0,.25); }
+.modal-title { display: flex; justify-content: space-between; align-items: center; font-size: 18px; color: #333; padding: 16px 20px; border-bottom: 1px solid #eee; }
+.modal-x { border: 0; background: none; font-size: 22px; cursor: pointer; color: #777; }
+.modal-body { padding: 16px 20px; }
+.modal-btns { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 20px 18px; border-top: 1px solid #eee; }
+.modal-btns .pill { padding: 9px 22px; font-size: 13px; }
+.modal-q { text-align: center; font-size: 26px; color: #555; padding: 10px 0; }
+.modal-q > div { font-size: 24px; margin-top: 8px; }

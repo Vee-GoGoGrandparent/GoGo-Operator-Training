@@ -8,8 +8,8 @@ const CATEGORIES = ['Hospital', 'Medical office', 'Airport', 'Restaurant or shop
 // One colour per type of place, so the practice page reads at a glance.
 const catColour = (cat) => `--c: var(--c${(Math.max(0, CATEGORIES.indexOf(cat)) % 6) + 1})`;
 const STOP_NAME = { pickup: 'Start Address (pickup)', dropoff: 'End Address (drop-off)' };
-// Pickup = Google-style pink so it stands out on satellite (Vee); drop-off = purple.
-const PIN_COLOUR = { pickup: ['#ea2f6c', '#a3164a'], dropoff: ['#6b5bd2', '#463a9e'] };
+// Same colours as the dashboard: pickup lime green, drop-off pink.
+const PIN_COLOUR = { pickup: ['#8cc63e', '#55801e'], dropoff: ['#e8336d', '#a3164a'] };
 const SUGGESTED_QUESTIONS = [
   'Which business or building are you at?', 'Which entrance or side of the building will you be at?',
   'What are you wearing, so the driver can spot you?', 'Have you had any trouble being picked up there before?',
@@ -296,6 +296,17 @@ async function render(id) {
   } catch (e) { mount(h('div', { class: 'card' }, h('p', {}, e.message), h('button', { class: 'btn ghost', onclick: () => go('practice') }, 'Go to Practice'))); }
 }
 
+// A dashboard-style pop-up. buttons: [[label, className, onClick]]; returns close().
+function modal(title, body, buttons) {
+  const back = h('div', { class: 'modal-back' });
+  const close = () => back.remove();
+  back.append(h('div', { class: 'modal' }, title ? h('div', { class: 'modal-title' }, title, h('button', { class: 'modal-x', type: 'button', onclick: close }, '×')) : null,
+    h('div', { class: 'modal-body' }, body),
+    h('div', { class: 'modal-btns' }, buttons.map(([label, cls, fn]) => h('button', { class: `pill ${cls}`, type: 'button', onclick: () => fn(close) }, label)))));
+  document.body.append(back);
+  return close;
+}
+
 // ── the practice copy of Ride Ordering ───────────────────────────────
 // Looks like the dashboard's Ride Ordering page so the moves carry over: the address block, the map, the boxes.
 // The call runs in the right-hand panel. Returns { el, getSubmission(), showResult(result) }.
@@ -308,6 +319,11 @@ function scenarioForm(s, { submitLabel = 'Schedule This Ride', onSubmit } = {}) 
   const asked = new Set();
   const first = (ME?.name || '').split(' ')[0] || 'your name';
   const account = s.account || { home: null, saved: [] };
+  // The account as the trainee changes it: Home and Custom Locations #3-#5 (index 0-2). Every save/delete is recorded.
+  const acct = { home: account.home ? { ...account.home } : null, saved: [0, 1, 2].map((i) => (account.saved[i] ? { ...account.saved[i] } : null)) };
+  const savedChanges = [];
+  const redrawSlots = [];
+  const slotLabel = (sp) => `${sp.label}${sp.address ? ' - ' + sp.address : ''}`;
 
   // the call (right-hand panel)
   const transcript = h('div', { class: 'transcript' },
@@ -350,7 +366,7 @@ function scenarioForm(s, { submitLabel = 'Schedule This Ride', onSubmit } = {}) 
     const ensureMap = async (start) => {
       if (b.pm || b.mapLoading) return b.pm;
       b.mapLoading = true;
-      b.pm = await pinMap(mapHost, { start, kind, entrances, onMove: (p) => { b.pin = p; showLL(p); },
+      b.pm = await pinMap(mapHost, { start, kind, entrances, onMove: (p) => { b.pin = p; showLL(p); maybeOffer(p); },
         onEntrance: (i) => { venue.value = String(i); b.entrance = i; specific.value = entrances[i].name; } });
       if (b.pm) { b.pin = b.pm.getPin(); showLL(b.pin); }
       return b.pm;
@@ -366,12 +382,60 @@ function scenarioForm(s, { submitLabel = 'Schedule This Ride', onSubmit } = {}) 
     // Saved places on the pretend account: Home (⌂) and the saved list. They fill the box like the dashboard does.
     const useSaved = (sp) => fill({ ...sp, name: sp.label, street: sp.address.split(',')[0], city: (sp.address.split(',')[1] || '').trim(),
       state: ((sp.address.split(',')[2] || '').trim().split(' ')[0]) || '', zip: ((sp.address.split(',')[2] || '').trim().split(' ')[1]) || '' });
-    const savedSel = h('select', { onchange: () => { const sp = account.saved[Number(savedSel.value)]; if (sp) useSaved(sp); } },
-      h('option', { value: '' }, 'None Selected'), account.saved.map((sp, i) => h('option', { value: i }, sp.label)));
-    const homeBtn = h('button', { class: 'round', type: 'button', title: 'Home address on the account', onclick: () => account.home ? useSaved({ ...account.home, label: account.home.label || 'Home' }) : toast('No home address saved on this account.') }, '⌂');
+    const savedSel = h('select', { disabled: true, title: 'Saved locations are listed below' }, h('option', { value: '' }, 'None Selected'));
+    const homeBtn = h('button', { class: 'round', type: 'button', title: 'Home address on the account', onclick: () => {
+      if (!acct.home) return toast('No home address saved on this account.');
+      b.fromSlot = 'home'; b.fromPlace = { ...acct.home }; drawSlots(); useSaved({ ...acct.home, label: acct.home.label || 'Home' });
+    } }, '⌂');
     const lastBtn = h('button', { class: 'round', type: 'button', title: 'Last location', onclick: notInPractice('Last location') }, 'L');
-    const slots = [0, 1, 2].map((i) => { const sp = account.saved[i];
-      return h('button', { class: 'slot', type: 'button', onclick: () => sp ? useSaved(sp) : null }, `${i + 3}: ${sp ? sp.label : 'None'}`); });
+    const slotsHost = h('div');
+    function drawSlots() {
+      homeBtn.classList.toggle('has-home', !!acct.home);
+      slotsHost.replaceChildren(...[0, 1, 2].map((i) => { const sp = acct.saved[i];
+        return h('button', { class: `slot ${b.fromSlot === i + 3 ? 'chosen' : ''}`, type: 'button', title: sp ? slotLabel(sp) : '',
+          onclick: () => { if (!sp) return; b.fromSlot = i + 3; b.fromPlace = { ...sp }; b.offered = false; redrawSlots.forEach((f) => f()); useSaved(sp); } },
+          `${i + 3}: ${sp ? slotLabel(sp) : 'None'}`); }));
+    }
+    redrawSlots.push(drawSlots);
+    const slots = slotsHost;
+    // Save Location: the dashboard's "Save Location Type" pop-up, plus Delete for a place the customer won't use again.
+    function saveLocation(pre) {
+      if (!b.pin) return toast('Put the pin on the map first.');
+      let choice = pre ?? null;
+      const opt = (val, label) => h('label', { class: 'ro-check' }, h('input', { type: 'radio', name: 'saveType', checked: choice === val, onchange: () => (choice = val) }), label);
+      const record = (slot, action, place) => {
+        savedChanges.push({ slot, action, ...(place ? { lat: place.lat, lng: place.lng, label: place.label } : {}) });
+        if (slot === 'home') acct.home = action === 'delete' ? null : place; else acct.saved[slot - 3] = action === 'delete' ? null : place;
+        redrawSlots.forEach((f) => f());
+      };
+      modal('Save Location Type', h('div', { class: 'grid2' }, opt('home', 'Home'), opt(3, 'Custom Location #3'), opt(4, 'Custom Location #4'), opt(5, 'Custom Location #5')), [
+        ['Delete', 'grey', (close) => {
+          if (choice == null) return toast('Pick which saved location to delete.');
+          const has = choice === 'home' ? acct.home : acct.saved[choice - 3];
+          if (!has) return toast('Nothing is saved there.');
+          modal(null, h('div', { class: 'modal-q' }, '?', h('div', {}, `Delete ${choice === 'home' ? 'Home' : 'Custom Location #' + choice}?`)),
+            [['Delete', 'purple', (c2) => { record(choice, 'delete'); c2(); close(); toast('Deleted'); }], ['No', 'yellow', (c2) => c2()]]);
+        }],
+        ['Save Location', 'grey', (close) => {
+          if (choice == null) return toast('Pick where to save it.');
+          const place = { label: locName.value || street.value || 'Saved', address: [street.value, city.value, [state.value, zip.value].filter(Boolean).join(' ')].filter(Boolean).join(', '), ...b.pin };
+          const taken = choice === 'home' ? acct.home : acct.saved[choice - 3];
+          const doIt = () => { record(choice, 'save', place); close(); toast('Location saved'); };
+          if (!taken) return doIt();
+          modal(null, h('div', { class: 'modal-q' }, '?', h('div', {}, `Overwrite ${choice === 'home' ? 'Home' : 'Custom Location #' + choice}?`)),
+            [['Overwrite', 'purple', (c2) => { c2(); doIt(); }], ['No', 'yellow', (c2) => c2()]]);
+        }],
+        ['Cancel', 'yellow', (close) => close()],
+      ]);
+    }
+    // Moving the pin of a place that came from a saved location: offer to save it (once per pick), like Vee described.
+    function maybeOffer(p) {
+      if (b.fromSlot == null || b.offered || !b.fromPlace) return;
+      const far = Math.abs(p.lat - b.fromPlace.lat) + Math.abs(p.lng - b.fromPlace.lng) > 0.00004; // about 4 m
+      if (!far) return;
+      b.offered = true;
+      setTimeout(() => saveLocation(b.fromSlot), 300);
+    }
     const typedLL = async () => { const p = { lat: Number(lat.value), lng: Number(lng.value) };
       if (Number.isFinite(p.lat) && Number.isFinite(p.lng) && Math.abs(p.lat) <= 90 && Math.abs(p.lng) <= 180) { const pm = await ensureMap(p); pm && pm.setPin(p); } };
     lat.addEventListener('change', typedLL); lng.addEventListener('change', typedLL);
@@ -392,11 +456,12 @@ function scenarioForm(s, { submitLabel = 'Schedule This Ride', onSubmit } = {}) 
       h('details', { class: 'ro-mapbox', open: true }, h('summary', {}, 'Location Map'), mapHost),
       h('div', { class: 'ro-btns' },
         h('button', { class: 'pill purple', type: 'button', onclick: notInPractice('Intersection Form') }, 'Intersection Form'),
-        h('button', { class: 'pill grey', type: 'button', onclick: notInPractice('Save Location') }, 'Save Location'),
+        h('button', { class: 'pill grey', type: 'button', onclick: () => saveLocation() }, 'Save Location'),
         h('button', { class: 'pill purple', type: 'button', onclick: notInPractice('Switch') }, 'Switch ⇅'),
         h('button', { class: 'pill yellow', type: 'button', onclick: clear }, 'Reset')));
     Object.assign(b, { specific, locName });
-    addressSearch(street, (p) => fill(p));
+    drawSlots();
+    addressSearch(street, (p) => { b.fromSlot = null; redrawSlots.forEach((f) => f()); fill(p); });
     if (stop) ensureMap(stop.start);
     return b;
   }
@@ -409,7 +474,7 @@ function scenarioForm(s, { submitLabel = 'Schedule This Ride', onSubmit } = {}) 
   const submitBtn = h('button', { class: 'pill cyan', type: 'button' }, submitLabel);
   const getSubmission = () => ({
     pins: s.stops.map((x) => blocks[x.kind].pin), entrances: s.stops.map((x) => blocks[x.kind].entrance), asked: [...asked],
-    note: note.value, wearing: wearing.value, announce: announce.value,
+    note: note.value, wearing: wearing.value, announce: announce.value, savedChanges,
     specific: s.stops.map((x) => blocks[x.kind].specific.value), locationName: s.stops.map((x) => blocks[x.kind].locName.value),
     seconds: Math.round((Date.now() - t0) / 1000),
   });
@@ -473,7 +538,9 @@ function resultCard(r) {
       h('tr', {}, h('td', {}, ok(!r.missingQuestions.length)), h('td', {}, h('b', {}, 'Questions')),
         h('td', {}, r.missingQuestions.length ? `You didn't: ${r.missingQuestions.join(' · ')}` : 'You asked what you needed to.')),
       h('tr', {}, h('td', {}, ok(r.note.ok)), h('td', {}, h('b', {}, 'Driver note')),
-        h('td', {}, r.note.ok ? 'Clear and useful for the driver.' : r.note.problems.join(' ')))),
+        h('td', {}, r.note.ok ? 'Clear and useful for the driver.' : r.note.problems.join(' '))),
+      r.saved ? h('tr', {}, h('td', {}, ok(r.saved.ok)), h('td', {}, h('b', {}, 'Saved location')),
+        h('td', {}, r.saved.ok ? r.saved.did : `${r.saved.did}. Should be: ${r.saved.want}.`)) : null),
     r.modelNote ? [h('h3', {}, 'A good note looks like this'), h('p', { class: 'model' }, r.modelNote)] : null,
     r.why ? [h('h3', {}, 'Why'), h('p', {}, r.why)] : null);
 }
@@ -683,7 +750,17 @@ function editScenario(existing) {
       d.account.home ? placeRow(d.account.home, () => { d.account.home = null; drawAccount(); }) : homeSearch,
       h('label', {}, 'Saved locations (up to 3). Add a wrong one on purpose to teach "don’t trust saved locations blindly".'),
       d.account.saved.map((p, i) => placeRow(p, () => { d.account.saved.splice(i, 1); drawAccount(); })),
-      d.account.saved.length < 3 ? h('div', { class: 'grid2' }, savedLabel, savedSearch) : null);
+      d.account.saved.length < 3 ? h('div', { class: 'grid2' }, savedLabel, savedSearch) : null,
+      h('label', {}, 'Is one of the saved locations wrong on purpose? What should the operator do with it?'),
+      h('div', { class: 'row' },
+        h('select', { onchange: (e) => { const v = e.target.value; d.savedFix = v ? { ...(d.savedFix || { action: 'update', stop: 'pickup' }), slot: Number(v) } : null; drawAccount(); } },
+          h('option', { value: '' }, 'None wrong'), [3, 4, 5].map((n) => h('option', { value: n, selected: d.savedFix?.slot === n }, `Custom Location #${n} is wrong`))),
+        d.savedFix ? h('select', { onchange: (e) => (d.savedFix.action = e.target.value) },
+          h('option', { value: 'update', selected: d.savedFix.action !== 'delete' }, 'Fix the pin and save over it (they go there often)'),
+          h('option', { value: 'delete', selected: d.savedFix.action === 'delete' }, 'Delete it (they do not go there often)')) : null,
+        d.savedFix ? h('select', { onchange: (e) => (d.savedFix.stop = e.target.value) },
+          h('option', { value: 'pickup', selected: d.savedFix.stop !== 'dropoff' }, 'It is the pickup place'),
+          h('option', { value: 'dropoff', selected: d.savedFix.stop === 'dropoff' }, 'It is the drop-off place')) : null));
     placeSearch(homeSearch, (p) => { d.account.home = { label: 'Home', address: p.address, lat: p.lat, lng: p.lng }; drawAccount(); });
     placeSearch(savedSearch, (p) => { d.account.saved.push({ label: savedLabel.value || p.name, address: p.address, lat: p.lat, lng: p.lng }); drawAccount(); });
   }

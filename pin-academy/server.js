@@ -69,6 +69,9 @@ function cleanSubmission(b) {
     specific: (Array.isArray(b.specific) ? b.specific : []).slice(0, 2).map((s) => str(s, 120)),
     locationName: (Array.isArray(b.locationName) ? b.locationName : []).slice(0, 2).map((s) => str(s, 120)),
     wearing: str(b.wearing, 200),
+    savedChanges: (Array.isArray(b.savedChanges) ? b.savedChanges : []).slice(0, 12).map((c) => ({
+      slot: c && (c.slot === 'home' ? 'home' : Number(c.slot)), action: c?.action === 'delete' ? 'delete' : 'save',
+      lat: num(c?.lat), lng: num(c?.lng), label: str(c?.label, 120) })),
     announce: str(b.announce, 40),
   };
 }

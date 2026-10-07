@@ -42,10 +42,27 @@ export function gradeScenario(s, sub, passMeters) {
   const asked = new Set((Array.isArray(sub?.asked) ? sub.asked : []).map(Number));
   const missingQuestions = s.questions.map((q, i) => ({ ...q, i })).filter((q) => q.needed && !asked.has(q.i)).map((q) => q.q);
   const note = checkNote(sub?.note, s.note?.mustMention || [], sub?.wearing);
+  const saved = gradeSavedFix(s, sub, passMeters);
   return {
-    stops, missingQuestions, note, modelNote: s.note?.model || '', why: s.why || '',
-    passed: stops.every((x) => x.passed) && missingQuestions.length === 0 && note.ok,
+    stops, missingQuestions, note, saved, modelNote: s.note?.model || '', why: s.why || '',
+    passed: stops.every((x) => x.passed) && missingQuestions.length === 0 && note.ok && (!saved || saved.ok),
   };
+}
+
+// When a scenario has a saved location that was stored wrong (slot 3, 4 or 5): did they fix it the right way?
+// 'update' = save the corrected pin over that slot (the customer goes there often); 'delete' = remove it.
+function gradeSavedFix(s, sub, passMeters) {
+  const fix = s.savedFix;
+  if (!fix) return null;
+  const changes = (Array.isArray(sub?.savedChanges) ? sub.savedChanges : []).filter((c) => c && String(c.slot) === String(fix.slot));
+  const last = changes[changes.length - 1];
+  const stop = s.stops.find((x) => x.kind === fix.stop) || s.stops[0];
+  const want = fix.action === 'delete' ? `Delete Custom Location #${fix.slot}` : `Save the corrected pin over Custom Location #${fix.slot}`;
+  if (!last) return { ok: false, want, did: 'Left it as it was (the saved pin is still wrong)' };
+  if (fix.action === 'delete') return { ok: last.action === 'delete', want, did: last.action === 'delete' ? 'Deleted it' : 'Saved over it instead of deleting it' };
+  if (last.action !== 'save') return { ok: false, want, did: 'Deleted it, but the customer goes there often' };
+  const d = validLatLng(Number(last.lat), Number(last.lng)) ? metersBetween({ lat: Number(last.lat), lng: Number(last.lng) }, stop.answer) : null;
+  return { ok: d != null && d <= passMeters, want, did: d == null ? 'Saved without a pin' : `Saved it, ${Math.round(d)} m from the right spot` };
 }
 
 // Where the map opens if a stop has no saved start: rounded to ~100 m so it never sits on the answer.
@@ -84,6 +101,7 @@ export function cleanScenario(b) {
   stops.sort((a, b) => (a.kind === 'pickup' ? 0 : 1) - (b.kind === 'pickup' ? 0 : 1)); // pickup first, like the form
   return {
     caller: str(b.caller, 600), why: str(b.why, 1500),
+    savedFix: [3, 4, 5].includes(Number(b.savedFix?.slot)) ? { slot: Number(b.savedFix.slot), action: b.savedFix.action === 'delete' ? 'delete' : 'update', stop: b.savedFix.stop === 'dropoff' ? 'dropoff' : 'pickup' } : null,
     account: { home: savedPlace(b.account?.home), saved: (Array.isArray(b.account?.saved) ? b.account.saved : []).map(savedPlace).filter(Boolean).slice(0, 3) },
     stops,
     questions: (Array.isArray(b.questions) ? b.questions : []).slice(0, 16)

@@ -12,7 +12,16 @@ export const EXAMPLE_SCENARIOS = [
         + 'Always add the place name the customer mentions, then check the pin on satellite and Street View. '
         + 'Move the pin a little forward, in front of the entrance where a car can stop, never right on top of the building. '
         + 'Read the address back to the customer every time. '
+        + 'Custom Location #3 on this account was saved by the system after an earlier ride, with the pin in the wrong spot. '
+        + 'Never trust a saved location blindly: check its pin, fix it, and since she goes there often, save the corrected pin over #3 '
+        + '(if she did not go there often, delete it instead). '
         + 'Whenever a pickup is not at home, ask what the customer is wearing so the driver can spot them in a busy place.',
+      // The system saved this stop after an earlier ride, with the wrong coordinates (Vee's real example).
+      account: {
+        home: null,
+        saved: [{ label: '14060 SE Petrovitsky Rd', address: '14060 Southeast Petrovitsky Road, Renton, WA 98058', lat: 47.44598587, lng: -122.15203913 }],
+      },
+      savedFix: { slot: 3, action: 'update', stop: 'pickup' },
       stops: [{
         kind: 'pickup', label: "Menchie's Frozen Yogurt",
         addressGiven: '14060 SE Petrovitsky Rd, Renton, WA 98058',
@@ -33,6 +42,8 @@ export const EXAMPLE_SCENARIOS = [
         { q: 'Read the business back', say: "So that's Menchie's Frozen Yogurt on Southeast Petrovitsky Road, correct?", a: 'Yes, that one.', needed: false },
         { q: 'Tell them you are checking the map', say: 'Give me just a moment while I look at the map. I want to make sure I put the pickup spot in the right place.',
           a: 'Okay, no problem.', needed: false },
+        { q: 'Ask if they go there often', say: "Is Menchie's a place you go to often?",
+          a: 'Yes, I go every Sunday with my grandkids.', needed: true },
         { q: 'Ask for notes for the driver', say: 'Do you have any notes for the driver?', a: "Just tell them I'm at Menchie's.", needed: false },
         { q: 'Ask what they are wearing', say: "Would you mind telling me what you're wearing, so the driver can spot you easier?", a: 'A blue top and black jeans.', needed: true },
         { q: 'Ask where they are going', say: 'And where will you be going today?', a: 'Home. Can we set up the pickup first?', needed: false },
