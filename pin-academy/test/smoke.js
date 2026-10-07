@@ -483,6 +483,12 @@ try {
   assert.equal(anaRow.logins, anaLogins.length); assert.ok(anaLogins.length >= 3, `only ${anaLogins.length} sign-ins kept`);
   assert.equal((await ana('/api/admin/people/UANA/logins')).status, 403);
   check(`every sign-in is kept (${anaLogins.length} for one trainee) and only admins can see the list`);
+  const anaTries = (await admin('/api/admin/people/UANA/practice')).data;
+  assert.equal(anaTries.length, (await admin('/api/admin/people')).data.find((p) => p.slack_id === 'UANA').practice_tries, 'not every practice try is listed');
+  assert.ok(anaTries.some((t) => t.passed) && anaTries.some((t) => !t.passed) && anaTries.every((t) => t.at && t.title));
+  assert.ok(anaTries.some((t) => t.pin === false && t.callFlow === true), 'pin and call flow should be listed per try');
+  assert.equal((await ana('/api/admin/people/UANA/practice')).status, 403);
+  check(`every practice try is listed per trainee (${anaTries.length}): when, which call, pin and call flow; admins only`);
 
   assert.ok((await (await fetch(BASE + '/')).text()).includes('GoGo Academy'));
   check('page loads');

@@ -286,7 +286,7 @@ async function drawClassPicker() {
 const VIEWS = {};
 let VIEW_AS = (() => { try { return sessionStorage.getItem('pa_view') || 'admin'; } catch { return 'admin'; } })();
 
-// "People & classes": hover for Admins, each class, and the Archive (classes 6 months old can be archived there).
+// "People & classes": hover for Admins, Classes ▸ (+ Add a class, then each class) and Archive ▸ (Vee, 2026-10-07).
 function peopleMenu(active) {
   const list = h('div', { class: 'menu-list' }, h('div', { class: 'small muted pad-s' }, 'Loading…'));
   let loaded = false;
@@ -295,16 +295,25 @@ function peopleMenu(active) {
     const classes = await api('/api/admin/classes');
     const live = classes.filter((c) => !c.archived), old = classes.filter((c) => c.archived);
     const item = (label, to) => h('button', { class: 'menu-item', onclick: () => go(to) }, label);
-    list.replaceChildren(item('All classes & admins', 'a-people'), item('Admins', 'a-admins'), h('div', { class: 'menu-sep' }),
-      ...live.map((c) => item(c.name, `a-class-${c.id}`)),
-      h('div', { class: 'menu-sep' }),
-      h('div', { class: 'menu-sub' }, h('button', { class: 'menu-item' }, `Archive (${old.length}) ▸`),
-        h('div', { class: 'menu-list sub' }, old.length ? old.map((c) => item(c.name, `a-class-${c.id}`)) : h('div', { class: 'small muted pad-s' }, 'Nothing archived yet.'))));
+    const sub = (label, kids) => h('div', { class: 'menu-sub' }, h('button', { class: 'menu-item' }, label), h('div', { class: 'menu-list sub' }, kids));
+    list.replaceChildren(item('Admins', 'a-admins'),
+      sub('Classes ▸', [item('+ Add a class', 'a-class-new'), live.length ? h('div', { class: 'menu-sep' }) : null, ...live.map((c) => item(c.name, `a-class-${c.id}`))]),
+      sub(`Archive (${old.length}) ▸`, old.length ? old.map((c) => item(c.name, `a-class-${c.id}`)) : [h('div', { class: 'small muted pad-s' }, 'Nothing archived yet.')]));
   };
   const wrap = h('div', { class: 'menu', onmouseenter: () => load().catch(() => {}) },
-    h('button', { class: active === 'a-people' || active?.startsWith?.('a-class') || active === 'a-admins' ? 'on' : '', onclick: () => go('a-people') }, 'People & classes ▾'), list);
+    h('button', { class: active === 'a-people' || active?.startsWith?.('a-class') || active === 'a-admins' ? 'on' : '', onclick: () => go('a-admins') }, 'People & classes ▾'), list);
   return wrap;
 }
+
+// Add a class (from People & classes ▸ Classes ▸ + Add a class).
+VIEWS['a-class-new'] = async () => {
+  const nm = h('input', { type: 'text', placeholder: 'e.g. December 2026' });
+  mount(h('h1', {}, 'Add a class'), h('p', { class: 'lead' }, 'It gets a practice link and a test link, both ending with its name.'),
+    h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'grow' }, nm),
+      h('button', { class: 'btn', onclick: safe(async () => { const r = await api('/api/admin/classes', { name: nm.value }); toast('Class added'); go(`a-class-${r.id}`); }) }, 'Add class'))));
+};
+// The old all-in-one page now opens Admins (Vee: one class at a time, from the menu).
+VIEWS['a-people'] = async () => go('a-admins');
 
 // Admins only.
 VIEWS['a-admins'] = async () => {
@@ -326,7 +335,14 @@ function peopleTable(list, { classes = [], showClass = true } = {}) {
       const signins = h('details', { ontoggle: async (e) => { if (!e.target.open || times.childElementCount) return;
         const at = await api(`/api/admin/people/${p.slack_id}/logins`); times.replaceChildren(...at.map((t) => h('div', {}, when(t)))); } },
         h('summary', {}, `${p.logins} · last ${when(p.last_login)}`), times);
-      return h('tr', {}, h('td', {}, p.name), h('td', {}, h('code', { class: 'small' }, p.slack_id)), h('td', {}, p.practice_tries), h('td', {}, p.practice_right),
+      // Every practice try, opened on demand: when, which call, pin and call flow.
+      const triesBox = h('div', { class: 'small' });
+      const tries = !p.practice_tries ? '0' : h('details', { ontoggle: async (e) => { if (!e.target.open || triesBox.childElementCount) return;
+        const list = await api(`/api/admin/people/${p.slack_id}/practice`);
+        const mark = (v) => (v == null ? '–' : v ? '✓' : '✗');
+        triesBox.replaceChildren(...list.map((t) => h('div', { class: t.passed ? '' : 'muted' }, `${when(t.at)} · ${t.title} · Pin ${mark(t.pin)} · Call flow ${mark(t.callFlow)}`))); } },
+        h('summary', {}, `${p.practice_tries}`), triesBox);
+      return h('tr', {}, h('td', {}, p.name), h('td', {}, h('code', { class: 'small' }, p.slack_id)), h('td', {}, tries), h('td', {}, p.practice_right),
         h('td', {}, p.tests_done), showClass ? h('td', {}, c) : null, h('td', {}, r), h('td', {}, signins));
     }));
 }
@@ -350,7 +366,13 @@ async function classAdminPage(id) {
         c.archived ? h('button', { class: 'btn ghost small', onclick: safe(async () => { await api('/api/admin/classes', { id, archived: false }); toast('Back from the archive'); classAdminPage(id); }) }, 'Bring back')
           : h('button', { class: 'btn ghost small', disabled: !c.canArchive, title: c.canArchive ? '' : 'A class can be archived once it is 6 months old', onclick: safe(async () => {
             if (!confirm(`Archive ${c.name}? Its links stop working; everything is kept and it moves to the Archive menu.`)) return;
-            await api('/api/admin/classes', { id, archived: true }); toast('Archived'); go('a-people'); }) }, 'Archive')),
+            await api('/api/admin/classes', { id, archived: true }); toast('Archived'); go('a-admins'); }) }, 'Archive'),
+        h('button', { class: 'btn ghost small danger', onclick: safe(async () => {
+          const own = tests.filter((t) => t.class_id === id);
+          if (!confirm(`Delete the class "${c.name}"?${own.length ? `
+
+This also deletes its ${own.length} practice set(s)/test(s): ${own.map((t) => t.name).join(', ')}.` : ''}`)) return;
+          await api(`/api/admin/classes/${id}/delete`, {}); toast('Deleted'); go('a-admins'); }) }, 'Delete')),
       linkRow('practice'), linkRow('test'),
       h('div', { class: 'small muted', style: 'margin-top:6px' }, open.length ? `Open now: ${open.map((t) => `${t.name} (${t.mode})`).join(', ')}` : 'Nothing is open on these links yet. Make practice or a test on Practice & tests, then press Open.')),
     h('h2', {}, `Trainees (${mine.length})`),
@@ -1495,50 +1517,4 @@ VIEWS['a-results'] = async () => {
 };
 
 // ── admins: people & classes ─────────────────────────────────────────
-VIEWS['a-people'] = async () => {
-  const [classes, people, tests] = await Promise.all([api('/api/admin/classes'), api('/api/admin/people'), api('/api/admin/tests')]);
-  const newName = h('input', { type: 'text', placeholder: 'e.g. October 2026' });
-  const classCard = (c) => {
-    const nm = h('input', { type: 'text', value: c.name });
-    const shown = tests.filter((t) => t.class_id === c.id && t.status === 'open');
-    return h('div', { class: 'card' },
-      h('div', { class: 'row' }, h('div', { class: 'grow' }, nm),
-        h('button', { class: 'btn ghost small', onclick: safe(async () => { await api('/api/admin/classes', { id: c.id, name: nm.value }); toast('Renamed'); go('a-people'); }) }, 'Rename'),
-        h('span', { class: `tag ${c.active ? 'pass' : ''}` }, c.active ? 'open' : 'closed'),
-        h('button', { class: 'btn ghost small', onclick: safe(async () => { await api('/api/admin/classes', { id: c.id, active: !c.active }); go('a-people'); }) }, c.active ? 'Close' : 'Re-open'),
-        h('button', { class: 'btn ghost small danger', onclick: safe(async () => {
-          const own = tests.filter((t) => t.class_id === c.id);
-          if (!confirm(`Delete the class "${c.name}"?${own.length ? `\n\nThis also deletes its ${own.length} practice set(s)/test(s): ${own.map((t) => t.name).join(', ')}.` : ''}`)) return;
-          await api(`/api/admin/classes/${c.id}/delete`, {}); toast('Deleted'); go('a-people'); }) }, 'Delete')),
-      h('div', { class: 'small muted' }, `${c.people} people`),
-      h('div', { class: 'row', style: 'margin-top:8px' }, h('code', { class: 'small grow' }, classLink(c.slug, 'practice')), h('button', { class: 'btn ghost small', onclick: copyClassLink(c.slug, 'practice') }, 'Copy practice link')),
-      h('div', { class: 'row' }, h('code', { class: 'small grow' }, classLink(c.slug, 'test')), h('button', { class: 'btn ghost small', onclick: copyClassLink(c.slug, 'test') }, 'Copy test link')),
-      h('div', { class: 'row' }, h('button', { class: 'btn ghost small', onclick: () => go(`a-class-${c.id}`) }, 'Open this class →')),
-      h('div', { class: 'small muted' }, shown.length ? `Open on the link now: ${shown.map((t) => `${t.name} (${t.mode === 'practice' ? 'practice' : 'test'})`).join(', ')}`
-        : 'Nothing is open on this link yet. Make practice and a test on Practice & tests, then press Open.'));
-  };
-  // Admins and trainers sit apart from the classes: their own tries are visible here but never mixed into a class.
-  const admins = people.filter((p) => p.role === 'admin');
-  const byClass = {};
-  people.filter((p) => p.role !== 'admin').forEach((p) => (byClass[p.class_name || 'No class yet'] ||= []).push(p));
-  mount(h('h1', {}, 'People & classes'),
-    h('p', { class: 'lead' }, 'Make a class, then its practice and test on Practice & tests. Each class has one link that ends with its name: whoever opens it joins the class. A class with trainees in it can’t be deleted (move them first).'),
-    h('div', { class: 'card' }, h('h2', {}, 'Add a class'), h('div', { class: 'row' }, h('div', { class: 'grow' }, newName),
-      h('button', { class: 'btn', onclick: safe(async () => { await api('/api/admin/classes', { name: newName.value }); go('a-people'); }) }, 'Add class'))),
-    classes.filter((c) => !c.archived).map(classCard),
-    h('h2', {}, 'Admins & trainers'),
-    h('div', { class: 'card admins' }, h('p', { class: 'small muted' }, 'You, Oscar and anyone given admin access. Your own practice shows here and is never counted in a class or in a scenario\u2019s "Got right".'),
-      h('table', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Practice calls'), h('th', {}, 'Calls got right'), h('th', {}, 'Role'), h('th', {}, 'Last sign-in')),
-        admins.map((p) => {
-          const r = h('select', { onchange: safe(async () => { await api('/api/admin/people', { slackId: p.slack_id, role: r.value }); toast('Role updated'); go('a-people'); }) },
-            ['admin', 'trainee'].map((x) => h('option', { value: x, selected: x === p.role }, x === 'admin' ? 'Admin' : 'Trainee')));
-          return h('tr', {}, h('td', {}, p.name), h('td', {}, p.practice_tries), h('td', {}, p.practice_right), h('td', {}, r), h('td', { class: 'small muted' }, when(p.last_login)));
-        }))),
-    h('h2', {}, 'Trainees by class'),
-    !Object.keys(byClass).length ? h('div', { class: 'card muted' }, 'No trainees yet. Send a class its practice or test link.') : null,
-    Object.entries(byClass).map(([cname, list]) => h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, cname),
-      peopleTable(list, { classes }))));
-  // (a trainee made admin moves up to Admins & trainers on the next refresh)
-};
-
 boot().catch((e) => mount(h('div', { class: 'card' }, e.message)));

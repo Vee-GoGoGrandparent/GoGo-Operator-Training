@@ -509,6 +509,15 @@ route('GET', '/api/admin/people/([A-Za-z0-9]+)/logins', (req, res, { m }) => {
   needAdmin(req);
   send(res, 200, all('SELECT at FROM logins WHERE slack_id = ? ORDER BY id DESC', m[1]).map((r) => r.at));
 });
+// Every practice try a person made (Vee, 2026-10-07): when, which call, and how the pin and the call flow went.
+route('GET', '/api/admin/people/([A-Za-z0-9]+)/practice', (req, res, { m }) => {
+  needAdmin(req);
+  send(res, 200, all(`SELECT sa.created_at at, s.title, sa.passed, sa.result FROM scenario_answers sa JOIN attempts a ON a.id = sa.attempt_id
+    JOIN scenarios s ON s.id = sa.scenario_id WHERE a.slack_id = ? AND a.test_id IS NULL ORDER BY sa.id DESC`, m[1]).map((r) => {
+    const g = JSON.parse(r.result);
+    return { at: r.at, title: r.title, passed: !!r.passed, pin: g.pin ? g.pin.ok : null, callFlow: g.callFlow ? g.callFlow.ok : null };
+  }));
+});
 route('POST', '/api/admin/people', async (req, res) => {
   const me = needAdmin(req);
   const b = await readJson(req);

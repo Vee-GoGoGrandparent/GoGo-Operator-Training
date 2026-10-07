@@ -332,3 +332,9 @@ td.actions .btn { margin: 2px 2px 2px 0; }
 .pad-s { padding: 6px 10px; }
 #who .view-switch .view-btn { background: #fff; border: 0; border-radius: 0; padding: 5px 12px; color: var(--indigo); margin: 0; }
 #who .view-switch .view-btn.on { background: var(--purple); color: #fff; }
+
+/* The tab bar must not clip the People & classes drop-down (Vee could not see it) */
+#tabs { overflow: visible; flex-wrap: wrap; }
+.menu > .menu-list { margin-top: 0; }
+.menu > .menu-list::before { content: ''; position: absolute; top: -10px; left: 0; right: 0; height: 10px; } /* no gap that closes it */
+.menu-list .menu-item { color: var(--ink); font-weight: 500; border-radius: 8px; }
