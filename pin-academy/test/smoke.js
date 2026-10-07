@@ -128,25 +128,31 @@ try {
   assert.ok(tor, 'Torikaya example missing'); assert.equal(tor.category, 'Place or business name');
   const T_HOME = { lat: 35.0170514, lng: -85.1643452 }, T_ADDR = { lat: 35.0427, lng: -85.3060933 }, T_RIGHT = { lat: 35.04246931201211, lng: -85.30682293621099 };
   const tq = (i) => tor.data.questions[i].q;
-  assert.equal(tor.data.steps.length, 10);
+  assert.equal(tor.data.steps.length, 12);
+  const last = tor.data.steps.length - 1;
   const cs = tor.data.steps.findIndex((st) => tq(st.right[0]) === 'Congratulate them on their anniversary');
-  assert.equal(tq(tor.data.steps[cs - 1].right[0]), 'Read the address back', 'the congratulations must come right after the anniversary is mentioned');
+  assert.equal(tq(tor.data.steps[cs - 1].right[0]), 'Ask for the name of the place', 'the congratulations must come right after the anniversary is mentioned');
+  assert.equal(tq(tor.data.steps[cs + 1].right[0]), 'Celebrate with them while you check the map');
+  assert.ok(tor.data.steps[cs + 1].choices.some((i) => tq(i) === 'Tell them you are checking the map'), 'the plain map line should be the trap there');
+  assert.ok(tor.data.steps.some((st) => tq(st.right[0]) === 'Ask for notes for the driver'), 'driver notes must be asked');
   assert.ok(!tor.data.caller.includes('anniversary'), 'the opening line should not mention the anniversary');
-  assert.deepEqual(tor.data.steps[9].right.map(tq).sort(), ['Close the call', 'Close with an anniversary wish']);
+  assert.deepEqual(tor.data.steps[last].right.map(tq), ['Close with an anniversary wish']);
   const T_OK = tor.data.steps.map((st) => [st.right[0]]);
-  const tNote = 'Please drop the customer and his wife off at Torikaya, the restaurant at 1120 Houston Street.';
+  const tNote = 'Two passengers. The female rider uses a walker, please assist her. Please drop them off at Torikaya on Houston Street.';
+  const noWalker = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_RIGHT], ordered: true, steps: T_OK, note: 'Please drop the customer and his wife off at Torikaya on Houston Street.' })).data;
+  assert.ok(!noWalker.passed && noWalker.note.missing.includes('walker'), 'a note without the walker must fail');
   const tGood = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_RIGHT], ordered: true, steps: T_OK, note: tNote })).data;
   assert.equal(tGood.passed, true, JSON.stringify(tGood));
   const tPlain = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_RIGHT], ordered: true, note: tNote,
-    steps: [...T_OK.slice(0, 9), [tor.data.steps[9].right.find((i) => tq(i) === 'Close the call')]] })).data;
-  assert.equal(tPlain.passed, true, 'a plain close should also be right');
+    steps: [...T_OK.slice(0, last), [tor.data.steps[last].choices.find((i) => tq(i) === 'Close the call')]] })).data;
+  assert.equal(tPlain.passed, false, 'a plain close must be wrong on this call');
   const cold = tor.data.steps[cs].choices.find((i) => tq(i) === 'Tell them you are checking the map');
   const tCold = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_RIGHT], ordered: true, note: tNote, steps: [...T_OK.slice(0, cs), [cold], ...T_OK.slice(cs + 1)] })).data;
   assert.equal(tCold.passed, false); assert.ok(tCold.missingQuestions[0].startsWith(`Step ${cs + 1}: picked "Tell them you are checking the map"`), tCold.missingQuestions[0]);
   assert.ok(tor.data.questions.find((q) => q.q === 'Provide driver info').say.includes('call back immediately so we can look into the status of your ride'));
   const tAddr = (await ana(`/api/practice/${tor.id}`, { pins: [T_HOME, T_ADDR], ordered: true, steps: T_OK, note: tNote })).data;
   assert.equal(tAddr.passed, false); assert.ok(tAddr.stops[1].distance > 65 && tAddr.stops[1].distance < 80, `distance ${tAddr.stops[1].distance}`);
-  check(`Torikaya: right pins + steps pass (either close); skipping the congratulations fails; address-only drop-off is ${tAddr.stops[1].distance} m off and fails`);
+  check(`Torikaya: right pins + steps pass; a plain close fails; skipping the congratulations fails; address-only drop-off is ${tAddr.stops[1].distance} m off and fails`);
 
   // Two-stop scenario with entrances, made in the admin builder.
   assert.equal((await admin('/api/admin/scenarios', { title: 'Broken', category: 'Hospital', data: { stops: [{ kind: 'pickup', label: 'X' }] } })).status, 400);

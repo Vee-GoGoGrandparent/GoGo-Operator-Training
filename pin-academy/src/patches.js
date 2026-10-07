@@ -1,5 +1,6 @@
 // One-time, merge-only changes to live scenarios. Each runs once (recorded in the patches table) and only ADDS
 // what is missing: anything an admin wrote or removed in the scenario builder stays exactly as they left it.
+import fs from 'node:fs';
 import { db, one, all, run, tx } from './db.js';
 import { pinSkill } from './skills.js';
 import { cleanScenario } from './grading.js';
@@ -126,6 +127,25 @@ const PATCHES = [
       if (!one('SELECT id FROM scenarios WHERE title = ?', ex.title)) {
         run('INSERT INTO scenarios (title, category, data, practice) VALUES (?, ?, ?, 1)', ex.title, ex.category, JSON.stringify(cleanScenario(ex.data)));
       }
+      return true;
+    },
+  },
+  {
+    // Vee, 2026-10-07 afternoon: Torikaya's new flow (full home address, ask the name of the place again, celebrate the
+    // 40 years while checking the map, driver notes: his wife uses a walker). Replaced ONLY if the live call is still
+    // exactly the version that went live (snapshots/torikaya-v1.json); if anyone edited it, it is left alone.
+    name: 'torikaya-flow-v2-2026-10-07',
+    run() {
+      const ex = EXAMPLE_SCENARIOS.find((x) => x.title === 'Anniversary dinner on Houston Street');
+      const row = one('SELECT * FROM scenarios WHERE title = ?', ex.title);
+      if (!row) return true; // not on this site: "Add the examples" brings the new version
+      const v2 = JSON.stringify(cleanScenario(ex.data));
+      if (row.data === v2) return true; // added after this change: already the new flow
+      if (row.data !== fs.readFileSync(new URL('./snapshots/torikaya-v1.json', import.meta.url), 'utf8')) {
+        console.log('[pin-academy] Torikaya was edited after it went live; the new flow was NOT applied.');
+        return true;
+      }
+      run('UPDATE scenarios SET data = ?, version = version + 1 WHERE id = ?', v2, row.id);
       return true;
     },
   },

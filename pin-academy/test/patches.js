@@ -88,8 +88,23 @@ try {
   run(`DELETE FROM patches WHERE name = 'add-torikaya-2026-10-07'`); runPatches();
   assert.equal(torCount(), 1, 'Torikaya added twice');
   const td = JSON.parse(one('SELECT data FROM scenarios WHERE title = ?', 'Anniversary dinner on Houston Street').data);
-  assert.equal(td.steps.length, 10); assert.equal(td.account.home.lat, 35.0170514); assert.equal(td.ride.driver.name, 'Yoandris');
+  assert.equal(td.steps.length, 12); assert.equal(td.account.home.lat, 35.0170514); assert.equal(td.ride.driver.name, 'Yoandris');
   check('Torikaya added once to a site that already has the examples, with its steps, home and driver');
+
+  // The live Torikaya (first version) gets the new flow; an edited one is left alone.
+  const v1 = fs.readFileSync(new URL('../src/snapshots/torikaya-v1.json', import.meta.url), 'utf8');
+  assert.equal(JSON.parse(v1).steps.length, 10, 'snapshot is not the first version');
+  const tor = (sql) => one('SELECT data, version FROM scenarios WHERE title = ?', 'Anniversary dinner on Houston Street');
+  run('UPDATE scenarios SET data = ? WHERE title = ?', v1, 'Anniversary dinner on Houston Street');
+  const before = tor().version;
+  run(`DELETE FROM patches WHERE name = 'torikaya-flow-v2-2026-10-07'`); runPatches();
+  const up = JSON.parse(tor().data);
+  assert.equal(up.steps.length, 12); assert.ok(up.note.mustMention.includes('walker')); assert.ok(tor().version > before, 'version not bumped');
+  const edited = JSON.parse(v1); edited.why = 'VEE EDITED IT';
+  run('UPDATE scenarios SET data = ? WHERE title = ?', JSON.stringify(edited), 'Anniversary dinner on Houston Street');
+  run(`DELETE FROM patches WHERE name = 'torikaya-flow-v2-2026-10-07'`); runPatches();
+  assert.equal(JSON.parse(tor().data).why, 'VEE EDITED IT', 'an edited Torikaya was overwritten');
+  check('live Torikaya (first version) gets the new flow; an edited one is left exactly as it is');
   // The fixture's driver line was removed by the "admin", then re-added by the first patch in its ORIGINAL wording.
   const drv = JSON.parse(one('SELECT data FROM scenarios WHERE title = ?', ex.title).data).questions.find((q) => q.q === 'Provide driver info');
   assert.ok(drv.say.includes('call back immediately so we can look into the status of your ride'), 'original driver line not reworded');
