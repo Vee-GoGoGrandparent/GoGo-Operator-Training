@@ -1108,19 +1108,29 @@ function newCall() {
     return { el, get value() { return value; } };
   };
   const parseLL = (v) => { const [x, y] = String(v).split(',').map((n) => Number(n.trim())); return Number.isFinite(x) && Number.isFinite(y) ? { lat: x, lng: y } : null; };
-  // A pin: search (Google) and drag on the map, or paste "Lat, Lng" from the dashboard.
-  function pinField(kind, label, hint) {
+  // A pin: search (Google), paste "Lat, Lng" from the dashboard, or start from another pin; then drag it on the map.
+  // The map shows as soon as there is a pin, so the trainer always sees where it is (Vee, 2026-10-07).
+  function pinField(kind, label, hint, from) {
     const st = { ll: null, name: '', address: '' };
-    const input = h('input', { type: 'text', placeholder: 'Lat, Lng (paste from the dashboard, or search below)', onchange: () => (st.ll = parseLL(input.value)) });
-    const searchHost = h('div', { class: 'search' }), mapHost = h('div');
-    let pm = null;
+    const searchHost = h('div', { class: 'search' }), mapHost = h('div', { class: 'pin-map' });
+    let pm = null; // null = not made yet; false = no map on this site (made once, never repeated)
+    const showMap = async (ll) => {
+      if (!ll) return;
+      if (pm === null) pm = (await pinMap(mapHost, { start: ll, kind, onMove: (q) => { st.ll = q; input.value = `${q.lat}, ${q.lng}`; } })) || false;
+      pm && pm.setPin(ll);
+    };
+    const input = h('input', { type: 'text', placeholder: 'Lat, Lng (paste from the dashboard, or search below)', onchange: () => { st.ll = parseLL(input.value); showMap(st.ll); } });
     placeSearch(searchHost, async (pl) => {
       st.ll = { lat: pl.lat, lng: pl.lng }; st.name = pl.name; st.address = pl.address; input.value = `${pl.lat}, ${pl.lng}`;
-      if (!pm) pm = await pinMap(mapHost, { start: pl, kind, onMove: (q) => { st.ll = q; input.value = `${q.lat}, ${q.lng}`; } });
-      pm && pm.setPin(pl); onPicked && onPicked(pl);
+      await showMap(pl); onPicked && onPicked(pl);
     });
+    const fromBtn = from ? h('button', { type: 'button', class: 'btn ghost small', onclick: () => {
+      if (!from.st.ll) return toast('Put the wrong pin first.', true);
+      st.ll = { ...from.st.ll }; input.value = `${st.ll.lat}, ${st.ll.lng}`; showMap(st.ll);
+    } }, 'Start from the wrong pin, then drag it to the right spot') : null;
     let onPicked = null;
-    return { st, set onPick(fn) { onPicked = fn; }, el: h('div', { class: 'pin-field' }, h('label', {}, label), input, hint ? h('div', { class: 'small muted' }, hint) : null, searchHost, mapHost) };
+    return { st, set onPick(fn) { onPicked = fn; }, el: h('div', { class: 'pin-field' }, h('label', {}, label), input, hint ? h('div', { class: 'small muted' }, hint) : null,
+      h('div', { class: 'row' }, fromBtn), searchHost, h('div', { class: 'small muted' }, 'The map shows here once there is a pin. Drag the pin to adjust it.'), mapHost) };
   }
 
   // Step 1: what it teaches
@@ -1161,22 +1171,25 @@ function newCall() {
   // Step 3: the address with the problem
   const homeAddr = h('input', { type: 'text', placeholder: 'Home address as it shows on the account' });
   const homeSearch = h('div', { class: 'search' });
-  placeSearch(homeSearch, (pl) => { homeAddr.value = pl.address; homeRight.st.ll = { lat: pl.lat, lng: pl.lng }; });
+  placeSearch(homeSearch, (pl) => { homeAddr.value = pl.address; });
   const homeRight = pinField('pickup', 'Where the home really is (the right pin)', 'The spot the driver should go to.');
   const homeWrong = pinField('pickup', 'Where the system has the home pin (the wrong one)', 'Saved when they registered.');
+  const homeRightFrom = pinField('pickup', 'Where the home really is (the right pin)', 'The spot the driver should go to.', homeWrong);
   const placeName = h('input', { type: 'text', placeholder: 'e.g. Torikaya' });
   const placeGiven = h('input', { type: 'text', placeholder: 'e.g. 1120 Houston Street, Chattanooga, TN 37402' });
   const placeWrong = pinField('dropoff', 'Where the wrong pin is', 'Where the address alone puts it, or where the operator / the saved location had it.');
-  const placeRight = pinField('dropoff', 'The right spot', 'Where the driver should stop. Search the place by name, then drag the pin a little in front of the entrance.');
+  const placeRight = pinField('dropoff', 'The right spot', 'Where the driver should stop. Search the place by name, then drag the pin a little in front of the entrance.', placeWrong);
   placeWrong.onPick = (pl) => { if (!placeGiven.value) placeGiven.value = pl.address; };
   placeRight.onPick = (pl) => { if (!placeName.value) placeName.value = pl.name; };
-  const newCaller = choice([['no', 'No'], ['yes', 'Yes, a new caller']], 'no', (v) => { homeWrong.el.style.display = v === 'yes' ? '' : 'none'; });
-  homeWrong.el.style.display = 'none';
+  // New caller: the wrong pin first, then the right one (which can start from the wrong one). Otherwise just the home pin.
+  const newCaller = choice([['no', 'No'], ['yes', 'Yes, a new caller']], 'no', (v) => {
+    homeWrong.el.style.display = homeRightFrom.el.style.display = v === 'yes' ? '' : 'none'; homeRight.el.style.display = v === 'yes' ? 'none' : ''; });
+  homeWrong.el.style.display = 'none'; homeRightFrom.el.style.display = 'none';
   const savedWrong = choice([['no', 'No'], ['yes', 'Yes, saved with the wrong pin']], 'no', (v) => { oftenRow.style.display = v === 'yes' ? '' : 'none'; });
   const often = choice([['yes', 'Yes, often'], ['no', 'No, not often']], 'yes');
   const oftenRow = h('div', { style: 'display:none' }, field('Do they go there often? (often = fix it and save it; not often = remove it)', often.el));
   const homeBox = h('div', {}, field('Home address on the account', homeAddr, 'Search it below, or type it as it shows on the dashboard.'), homeSearch,
-    field('Is this a new caller? Their home was saved when they registered, and the pin may be wrong.', newCaller.el), homeRight.el, homeWrong.el);
+    field('Is this a new caller? Their home was saved when they registered, and the pin may be wrong.', newCaller.el), homeRight.el, homeWrong.el, homeRightFrom.el);
   const placeBox = h('div', { style: 'display:none' }, h('div', { class: 'grid2' }, field('Name of the place', placeName), field('The address the caller gives', placeGiven)),
     field('Was this place saved on their account with the wrong pin?', savedWrong.el), oftenRow, placeWrong.el, placeRight.el);
   const which = choice([['pickup', 'The pickup'], ['dropoff', 'The drop-off']], 'pickup');
@@ -1207,6 +1220,7 @@ function newCall() {
     [h('div', { class: 'card' }, h('h2', {}, 'What happened?'), h('p', { class: 'small muted' }, 'Two ways to tell us: paste the transcript of the real call where the problem happened, or write the scenario yourself.'),
       how.el, describeBox, pasteBox, field('Why (trainees read this after they answer)', why))],
     [h('div', { class: 'card' }, h('h2', {}, 'The address with the problem'),
+      h('p', { class: 'small muted' }, 'Every call has both a pickup and a drop-off. Here, tell us about the one that had the problem; the next step asks about the other one. Together they decide how the call goes.'),
       field('Which address had the problem?', which.el), field('Was that address the customer\u2019s home?', isHome.el), homeBox, placeBox)],
     [h('div', { class: 'card' }, otherLabel, field('The other address is', otherIs.el), otherPlaceBox, otherHomeBox),
       h('div', { class: 'card' }, h('h2', {}, 'The customer and the ride'),
@@ -1222,8 +1236,9 @@ function newCall() {
     let home = null;
     const problem = {}, other = {};
     if (isHome.value === 'home') {
-      if (!homeRight.st.ll) throw new Error('Step 3: put the right pin for the home.');
-      home = { address: homeAddr.value, ...homeRight.st.ll };
+      const right = newCaller.value === 'yes' ? homeRightFrom.st.ll : homeRight.st.ll;
+      if (!right) throw new Error('Step 3: put the right pin for the home.');
+      home = { address: homeAddr.value, ...right };
       problem.home = true;
       if (newCaller.value === 'yes') { if (!homeWrong.st.ll) throw new Error('Step 3: put the wrong home pin (where the system has it).'); problem.wrong = homeWrong.st.ll; }
     } else {
@@ -1240,7 +1255,7 @@ function newCall() {
       ride: { low: Number(low.value), high: Number(high.value), driver: { name: drName.value, car: drCar.value, plate: drPlate.value, eta: drEta.value } },
     });
   }
-  const names = ['What it teaches', 'What happened', 'The problem', 'The rest'];
+  const names = ['What it teaches', 'What happened', 'The address with the problem', 'The other address & the ride'];
   const nav = h('div', { class: 'row step-nav' });
   const top = stepper(names, (n) => show(n));
   function show(n) {

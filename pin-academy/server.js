@@ -221,6 +221,16 @@ function loadTestForTrainee(u, testId) {
   return t;
 }
 
+// Tests come in a different order for each person (Vee, 2026-10-07: so they cannot copy each other). The order is
+// worked out from their own attempt, so it stays the same if they reload. Practice keeps one order for everyone.
+function shuffledFor(list, seed) {
+  let x = (seed * 2654435761) >>> 0;
+  const rand = () => { x = (x + 0x6D2B79F5) >>> 0; let t = Math.imul(x ^ (x >>> 15), 1 | x); t ^= t + Math.imul(t ^ (t >>> 7), 61 | t); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [out[i], out[j]] = [out[j], out[i]]; }
+  return out;
+}
+
 route('POST', '/api/tests/(\\d+)/start', (req, res, { m }) => {
   const u = needUser(req);
   const t = loadTestForTrainee(u, num(m[1]));
@@ -236,7 +246,7 @@ route('POST', '/api/tests/(\\d+)/start', (req, res, { m }) => {
   if (att.submitted_at) return send(res, 200, { done: true, result: testResult(t, att) });
   const answered = all('SELECT scenario_id FROM scenario_answers WHERE attempt_id = ?', att.id).map((r) => r.scenario_id);
   send(res, 200, { done: false, name: t.name, deadline: toMs(att.deadline), serverNow: Date.now(),
-    passMeters: t.pass_meters, passCount: t.pass_count, scenarios: testScenarios(t.id).map(publicScenario), answered });
+    passMeters: t.pass_meters, passCount: t.pass_count, scenarios: shuffledFor(testScenarios(t.id), att.id).map(publicScenario), answered });
 });
 
 route('POST', '/api/tests/(\\d+)/answer', async (req, res, { m }) => {

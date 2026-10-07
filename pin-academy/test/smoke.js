@@ -436,6 +436,30 @@ try {
   assert.ok(pubBuilt.questions.some((q) => q.say.startsWith('NEW WORDING')), 'trainees still see the old wording');
   check('changing a standard line changes every New call (trainees see it too), never a hand-made call; trainees cannot see or change the lines');
 
+  // Tests: a different order for each person (stable for that person); practice: the same order for everyone.
+  const shufClass = (await admin('/api/admin/classes', { name: 'Shuffle class' })).data.id;
+  const four = (await admin('/api/admin/scenarios')).data.slice(0, 4).map((x) => x.id);
+  assert.equal(four.length, 4);
+  const sg = (await admin('/api/admin/tests/group', { name: 'Shuffle', classId: shufClass, practiceIds: [], testIds: four, passCount: 1, timeLimitMin: 30 })).data.groupId;
+  const sp = (await admin('/api/admin/tests/group', { name: 'Shuffle practice', classId: shufClass, practiceIds: four, testIds: [] })).data.groupId;
+  const shufTests = (await admin('/api/admin/tests')).data.filter((x) => x.grp === sg || x.grp === sp);
+  for (const x of shufTests) await admin(`/api/admin/tests/${x.id}/status`, { status: 'open' });
+  const tId = shufTests.find((x) => x.mode === 'test').id, pId = shufTests.find((x) => x.mode === 'practice').id;
+  const orders = [], practiceOrders = [];
+  for (let k = 0; k < 8; k++) {
+    const who = client();
+    await who(`/auth/dev?as=USHUF${k}&name=Shuffle%20${k}`, null, { raw: true });
+    await who('/api/me/class', { classId: shufClass });
+    const o = (await who(`/api/tests/${tId}/start`, {})).data.scenarios.map((x) => x.id);
+    assert.deepEqual([...o].sort(), [...four].sort(), 'a test lost or gained a call');
+    assert.deepEqual((await who(`/api/tests/${tId}/start`, {})).data.scenarios.map((x) => x.id), o, 'the order changed on reload');
+    orders.push(o.join(','));
+    practiceOrders.push((await who(`/api/tests/${pId}/set`)).data.scenarios.map((x) => x.id).join(','));
+  }
+  assert.ok(new Set(orders).size >= 3, `only ${new Set(orders).size} different test orders for 8 people`);
+  assert.equal(new Set(practiceOrders).size, 1, 'practice should be the same order for everyone');
+  check(`test calls come in a different order per person (${new Set(orders).size} orders for 8 people, same on reload); practice is the same for everyone`);
+
   assert.ok((await (await fetch(BASE + '/')).text()).includes('GoGo Academy'));
   check('page loads');
   console.log(`\nAll ${passed} checks passed.`);
