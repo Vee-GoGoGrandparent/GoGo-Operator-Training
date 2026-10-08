@@ -338,3 +338,7 @@ td.actions .btn { margin: 2px 2px 2px 0; }
 .menu > .menu-list { margin-top: 0; }
 .menu > .menu-list::before { content: ''; position: absolute; top: -10px; left: 0; right: 0; height: 10px; } /* no gap that closes it */
 .menu-list .menu-item { color: var(--ink); font-weight: 500; border-radius: 8px; }
+
+/* Step editor: the branch ("This step comes...") and shared-words controls */
+.step-extra { margin-top: 8px; gap: 6px; align-items: center; }
+.step-extra select { width: auto; max-width: 320px; }
