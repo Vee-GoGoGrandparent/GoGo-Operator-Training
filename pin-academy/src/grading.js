@@ -50,7 +50,7 @@ export function gradeScenario(s, sub, passMeters, { practice = false } = {}) {
     };
   });
   // A call with steps is graded on the steps; "Must ask" is only used by calls without steps.
-  const steps = gradeSteps(s, sub);
+  const steps = gradeSteps(s, sub, practice);
   const asked = new Set((Array.isArray(sub?.asked) ? sub.asked : []).map(Number));
   const missingQuestions = steps ? steps.filter((x) => !x.ok).map((x) => x.text)
     : s.questions.map((q, i) => ({ ...q, i })).filter((q) => q.needed && !asked.has(q.i)).map((q) => q.q);
@@ -74,18 +74,35 @@ export function gradeScenario(s, sub, passMeters, { practice = false } = {}) {
 export function isRightPick(s, step, pick) {
   return !!s.steps?.[step]?.right.includes(pick);
 }
-function gradeSteps(s, sub) {
+// Branches (Vee, 2026-10-08): a step can have `when: { said: line }` or `when: { notSaid: line }`: it only comes up
+// if that line was (or was not) said earlier in the call, so the call follows what the trainee picked. A step that
+// does not come up is not graded. `said` = what was actually said: in practice the right picks (wrong ones are not
+// said), in a test every pick. A step with its own `say` (one wording for all its right answers) counts its lines said.
+export function stepApplies(st, said) {
+  if (st.when?.said != null) return said.has(st.when.said);
+  if (st.when?.notSaid != null) return !said.has(st.when.notSaid);
+  return true;
+}
+function gradeSteps(s, sub, practice = false) {
   if (!s.steps?.length) return null;
   const picks = Array.isArray(sub?.steps) ? sub.steps : [];
   const line = (i) => `"${s.questions[i]?.q || '?'}"`;
-  return s.steps.map((st, n) => {
+  const said = new Set();
+  const out = [];
+  s.steps.forEach((st, n) => {
+    if (!stepApplies(st, said)) return; // this path did not take this step
     const p = (Array.isArray(picks[n]) ? picks[n] : []).map(Number).filter(Number.isInteger);
     const should = st.right.map(line).join(' or ');
     const wrong = p.filter((i) => !st.right.includes(i));
-    if (!p.length) return { ok: false, text: `Step ${n + 1}: not reached (should be ${should})` };
-    if (wrong.length) return { ok: false, text: `Step ${n + 1}: picked ${wrong.map(line).join(', then ')} (should be ${should})` };
-    return { ok: true, text: `Step ${n + 1}: ${line(p[0])}` };
+    (practice ? p.filter((i) => st.right.includes(i)) : p).forEach((i) => said.add(i));
+    // Same rule as the page: a step with its own words marks ALL its lines said, after a right pick in practice, after
+    // any pick in a test (where the page cannot know which pick was right).
+    if (st.say && (practice ? p.some((i) => st.right.includes(i)) : p.length)) st.choices.forEach((i) => said.add(i));
+    if (!p.length) return out.push({ ok: false, text: `Step ${n + 1}: not reached (should be ${should})` });
+    if (wrong.length) return out.push({ ok: false, text: `Step ${n + 1}: picked ${wrong.map(line).join(', then ')} (should be ${should})` });
+    out.push({ ok: true, text: `Step ${n + 1}: ${line(p[0])}` });
   });
+  return out;
 }
 
 // Steps point at lines by their place in the list. When lines are dropped, point them at the new places,
@@ -94,7 +111,12 @@ export function cleanSteps(steps, newIndex) {
   return (Array.isArray(steps) ? steps : []).slice(0, 30).map((st) => {
     const map = (a) => [...new Set((Array.isArray(a) ? a : []).map(Number).filter((i) => newIndex.has(i)).map((i) => newIndex.get(i)))];
     const choices = map(st?.choices).slice(0, 6);
-    return { choices, right: map(st?.right).filter((i) => choices.includes(i)).slice(0, 3) };
+    const out = { choices, right: map(st?.right).filter((i) => choices.includes(i)).slice(0, 3) };
+    const w = st?.when;
+    if (w && newIndex.has(Number(w.said ?? w.notSaid))) out.when = w.said != null ? { said: newIndex.get(Number(w.said)) } : { notSaid: newIndex.get(Number(w.notSaid)) };
+    const sayAll = typeof st?.say === 'string' ? st.say.trim().slice(0, 600) : '';
+    if (sayAll && out.right.length > 1) { out.say = sayAll; out.a = typeof st.a === 'string' ? st.a.trim().slice(0, 300) : ''; }
+    return out;
   }).filter((st) => st.right.length);
 }
 
@@ -127,7 +149,7 @@ export function publicScenario(row) {
     stops: s.stops.map((x) => ({ kind: x.kind, label: x.label, addressGiven: x.addressGiven, start: x.start || nearby(x.answer), entrances: x.entrances.map((e) => ({ name: e.name, lat: e.lat, lng: e.lng })) })),
     questions: s.questions.map((q) => ({ q: q.q, say: q.say || '', a: q.a })),
     // Only which lines show at each step, mixed up, so the right one is not always in the same place.
-    steps: (s.steps || []).map((st) => ({ choices: shuffle(st.choices) })),
+    steps: (s.steps || []).map((st) => ({ choices: shuffle(st.choices), ...(st.when ? { when: st.when } : {}), ...(st.say ? { say: st.say, a: st.a || '' } : {}) })),
     // Driver note choices for practice: the text only, mixed up; which one is right stays on the server.
     noteOptions: shuffle((s.note?.options || []).map((o, i) => ({ i, text: o.text }))),
   };

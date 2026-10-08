@@ -133,6 +133,33 @@ try {
   assert.equal(JSON.parse(one('SELECT data FROM scenarios WHERE title = ?', ex.title).data).questions.find((q) => q.q === 'Provide driver info').say, 'ADMIN DRIVER LINE', 'admin driver line overwritten');
   check('driver line reworded to the standard "call back immediately" wording only while it is the original; an admin edit is kept');
 
+  // Vee's live Menchie's (her 2026-10-08 screenshot): step 3 has two right answers, no branches yet. The patch adds the
+  // branches in place, backs it up first, and keeps her other steps in their order.
+  const { stepsFromNames } = await import('../src/examples.js');
+  const live = JSON.parse(one('SELECT data FROM scenarios WHERE title = ?', ex.title).data);
+  const HER = [["Confirm the customer's name"], ['Confirm the best contact number'], ['Ask them to repeat the address', 'Mention the saved location'],
+    ['Read the address back', 'Ask them to spell the street'], ['Ask for the name of the business'], ['Tell them you are checking the map'], ['Ask if they go there often'],
+    ['Save it as their preferred location'], ['Ask where they are going'], ['Confirm the home address'], ['Ask what they are wearing'], ['Ask for notes for the driver'],
+    ['Provide estimate'], ['Provide driver info'], ['Ask if there is anything else'], ['Close the call']].map((right) => ({ right, wrong: ['Send the driver to the address'] }));
+  live.steps = stepsFromNames(live.questions, HER);
+  assert.equal(live.steps.length, 16, 'fixture should copy her layout');
+  run('UPDATE scenarios SET data = ? WHERE title = ?', JSON.stringify(live), ex.title);
+  const backupsBefore = one('SELECT COUNT(*) n FROM scenario_backups').n;
+  run(`DELETE FROM patches WHERE name = 'menchies-branches-2026-10-08'`); runPatches();
+  const br = JSON.parse(one('SELECT data FROM scenarios WHERE title = ?', ex.title).data);
+  const nm = (i) => br.questions[i].q;
+  const lab = br.steps.map((st) => st.right.map(nm).join(' | ') + (st.when ? (st.when.said != null ? ` [if said: ${nm(st.when.said)}]` : ` [if not said: ${nm(st.when.notSaid)}]`) : '') + (st.say ? ' [one wording]' : ''));
+  assert.deepEqual(lab.slice(2, 8), [
+    'Ask them to repeat the address | Mention the saved location', 'Read the address back', // (this copy has "spell the street" removed, like an admin edit)
+    'Mention the saved location [if not said: Mention the saved location]', 'Ask for the name of the business [if said: Ask them to repeat the address]',
+    "Ask the business name (it's saved) [if not said: Ask them to repeat the address]", 'Tell them you are checking the map | Ask if they go there often [one wording]'], lab.join(' / '));
+  assert.deepEqual(lab.slice(8), ['Save it as their preferred location', 'Ask where they are going', 'Confirm the home address', 'Ask what they are wearing',
+    'Ask for notes for the driver', 'Provide estimate', 'Provide driver info', 'Ask if there is anything else', 'Close the call'], 'her later steps moved or changed');
+  assert.equal(one('SELECT COUNT(*) n FROM scenario_backups').n, backupsBefore + 1, 'no backup before adding branches');
+  run(`DELETE FROM patches WHERE name = 'menchies-branches-2026-10-08'`); runPatches();
+  assert.equal(JSON.parse(one('SELECT data FROM scenarios WHERE title = ?', ex.title).data).steps.length, br.steps.length, 'branches added twice');
+  check("live Menchie's: branches added in place after the read-back, join has one wording, her later steps kept in order, backed up first, never twice");
+
   // "Add the examples" must leave an existing example alone (test through the server route).
   process.env.DEV_LOGIN = '1';
   const { server } = await import('../server.js');

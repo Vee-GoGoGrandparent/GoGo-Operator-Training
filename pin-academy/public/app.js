@@ -490,6 +490,9 @@ function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit,
     if (at >= steps.length) {
       return stepHost.replaceChildren(h('div', { class: 'ro-call-label' }, `That's the end of the call. Check the pins and the driver note, then click "${submitLabel}".`));
     }
+    // A branch step only comes up if a line was (or was not) said earlier (Vee, 2026-10-08).
+    const w = steps[at].when;
+    if (w && ((w.said != null && !said.has(w.said)) || (w.notSaid != null && said.has(w.notSaid)))) { at++; return drawStep(); }
     const tried = picks[at];
     // A line already said earlier in the call (a test's wrong pick) stays greyed out; if nothing new is left, move on.
     if (steps[at].choices.every((i) => said.has(i) || tried.includes(i))) { at++; return drawStep(); }
@@ -507,7 +510,11 @@ function scenarioForm(s, { submitLabel = 'End call & check my answer', onSubmit,
       picks[at].push(i);
       if (!right) { hint = 'Not quite, that is not what comes next. Try again. (This counts as a miss.)'; return drawStep(); }
       hint = '';
-      sayLine(s.questions[i]);
+      // A step with its own words says them whichever right answer was picked, and counts all its right lines said.
+      // (In a test the page cannot know which pick is right, so it plays the line itself; the server grades it.)
+      const st = steps[at];
+      if (st.say && checkStep) sayLine({ say: st.say, a: st.a }); else sayLine(s.questions[i]);
+      if (st.say) st.choices.forEach((c) => said.add(c));
       said.add(i);
       at++;
       drawStep();
@@ -1089,12 +1096,20 @@ function editScenario(existing, { startStep = 1 } = {}) {
     drawSteps();
   }
   // Steps point at lines by their place in the list; when lines move, point them at the new places (-1 = gone).
-  const shiftSteps = (steps, to) => steps.map((st) => ({ choices: st.choices.map(to).filter((x) => x >= 0), right: st.right.map(to).filter((x) => x >= 0) }));
+  // Keeps a step's branch ("only if … said") and its shared words; a branch on a line that is gone is dropped.
+  const shiftSteps = (steps, to) => steps.map((st) => {
+    const out = { choices: st.choices.map(to).filter((x) => x >= 0), right: st.right.map(to).filter((x) => x >= 0) };
+    const w = st.when, line = w ? to(w.said ?? w.notSaid) : -1;
+    if (w && line >= 0) out.when = w.said != null ? { said: line } : { notSaid: line };
+    if (st.say) { out.say = st.say; out.a = st.a || ''; }
+    return out;
+  });
   // The call in steps. Each line is a chip: click once = shown as a choice, twice = a right answer (green), three times = off.
   // Lines that were right at an earlier step don't come back later.
   function drawSteps() {
     stepsHost.replaceChildren(...d.steps.map((st, n) => {
-      const earlier = new Set(d.steps.slice(0, n).flatMap((x) => x.right));
+      // (A branch step may repeat a line another path already had, so nothing is hidden on a branch step.)
+      const earlier = new Set(st.when ? [] : d.steps.slice(0, n).flatMap((x) => x.right));
       const chips = d.questions.map((q, i) => [q, i]).filter(([q, i]) => q.q && !earlier.has(i)).map(([q, i]) => {
         const state = st.right.includes(i) ? 'right' : st.choices.includes(i) ? 'shown' : '';
         return h('button', { class: `stepchip ${state}`, type: 'button', title: 'Click: choice → right answer → off', onclick: () => {
@@ -1111,8 +1126,26 @@ function editScenario(existing, { startStep = 1 } = {}) {
           n > 0 ? h('button', { class: 'btn ghost small', title: 'Move up', onclick: () => move(n - 1) }, '↑') : null,
           n < d.steps.length - 1 ? h('button', { class: 'btn ghost small', title: 'Move down', onclick: () => move(n + 1) }, '↓') : null,
           h('button', { class: 'btn ghost small', onclick: () => { d.steps.splice(n, 1); drawSteps(); } }, '✕')),
-        h('div', { class: 'qbtns' }, chips));
+        h('div', { class: 'qbtns' }, chips),
+        branchRow(st), sharedRow(st));
     }), h('button', { class: 'btn ghost small', onclick: () => { d.steps.push({ choices: [], right: [] }); drawSteps(); } }, '+ Add a step'));
+  }
+  // Branch (Vee, 2026-10-08): this step only comes up if a line was (or was not) said earlier in the call.
+  function branchRow(st) {
+    const kind = st.when?.said != null ? 'said' : st.when?.notSaid != null ? 'notSaid' : '';
+    const lineSel = h('select', { onchange: () => { st.when = { [kind]: Number(lineSel.value) }; } },
+      d.questions.map((q, i) => (q.q ? h('option', { value: i, selected: (st.when?.said ?? st.when?.notSaid) === i }, q.q) : null)));
+    const kindSel = h('select', { onchange: () => { const k = kindSel.value; st.when = k ? { [k]: Number(lineSel.value) || 0 } : undefined; if (!k) delete st.when; drawSteps(); } },
+      h('option', { value: '', selected: !kind }, 'always'), h('option', { value: 'said', selected: kind === 'said' }, 'only if they said'),
+      h('option', { value: 'notSaid', selected: kind === 'notSaid' }, 'only if they did NOT say'));
+    return h('div', { class: 'row small step-extra' }, h('span', {}, 'This step comes'), kindSel, kind ? lineSel : null, kind ? h('span', { class: 'muted' }, 'earlier in the call') : null);
+  }
+  // One wording for every right answer at this step, so they learn the words, not just the button (Vee, 2026-10-08).
+  function sharedRow(st) {
+    if (st.right.length < 2) return null;
+    const say = h('input', { type: 'text', value: st.say || '', placeholder: 'Leave empty to use each line’s own words', oninput: () => { st.say = say.value; if (!st.say) delete st.say; } });
+    const a = h('input', { type: 'text', value: st.a || '', placeholder: 'What the caller answers', oninput: () => { st.a = a.value; } });
+    return h('div', { class: 'step-extra' }, h('div', { class: 'small' }, h('b', {}, 'Same words for every right answer'), ' (optional)'), h('div', { class: 'grid2' }, say, a));
   }
 
   // Everything on the five steps, put together: used by Save and by "Draft the call with Claude".
@@ -1183,8 +1216,8 @@ function editScenario(existing, { startStep = 1 } = {}) {
   function show(n) {
     current = n; top.set(n);
     panels.forEach((pn, i) => { pn.style.display = i + 1 === n ? '' : 'none'; });
-    nav.replaceChildren(n > 1 ? h('button', { class: 'btn ghost', onclick: () => show(n - 1) }, '← Back') : null, h('span', { class: 'grow' }),
-      n < panels.length ? h('button', { class: 'btn', onclick: () => show(n + 1) }, 'Next →') : null, saveBtn);
+    nav.replaceChildren(...[n > 1 ? h('button', { class: 'btn ghost', onclick: () => show(n - 1) }, '← Back') : null, h('span', { class: 'grow' }),
+      n < panels.length ? h('button', { class: 'btn', onclick: () => show(n + 1) }, 'Next →') : null, saveBtn].filter(Boolean)); // an empty slot would print "null"
     window.scrollTo(0, 0);
   }
   mount(h('button', { class: 'btn ghost small', onclick: () => go('a-scenarios') }, '← Scenarios'),
@@ -1366,13 +1399,13 @@ function newCall() {
     top.set(n);
     panels.forEach((pn, i) => { pn.style.display = i + 1 === n ? '' : 'none'; });
     otherLabel.textContent = which.value === 'pickup' ? 'The drop-off' : 'The pickup';
-    nav.replaceChildren(n > 1 ? h('button', { class: 'btn ghost', onclick: () => show(n - 1) }, '\u2190 Back') : null, h('span', { class: 'grow' }),
+    nav.replaceChildren(...[n > 1 ? h('button', { class: 'btn ghost', onclick: () => show(n - 1) }, '\u2190 Back') : null, h('span', { class: 'grow' }),
       n < panels.length ? h('button', { class: 'btn', onclick: () => show(n + 1) }, 'Next \u2192')
         : h('button', { class: 'btn orange', onclick: safe(async () => {
           const r = await build();
           editScenario({ title: r.title, category: r.category, practice: true, data: r.data }, { startStep: 5 });
           toast('The call is built. Check it, let Claude finish it if you like, then save.');
-        }) }, 'Build the call \u2192'));
+        }) }, 'Build the call \u2192')].filter(Boolean));
     window.scrollTo(0, 0);
   }
   mount(h('button', { class: 'btn ghost small', onclick: () => go('a-scenarios') }, '\u2190 Scenarios'), h('h1', {}, 'New call'),

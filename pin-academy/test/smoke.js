@@ -87,7 +87,7 @@ try {
   const bad = (await ana(`/api/practice/${men.id}`, { pins: [ADDRESS_ONLY], asked: [], noteChoice: M_EMOJI })).data;
   assert.equal(bad.passed, false);
   assert.ok(bad.stops[0].distance > 35 && bad.stops[0].distance < 50, `distance ${bad.stops[0].distance}`);
-  assert.equal(bad.missingQuestions.length, 17);
+  assert.equal(bad.missingQuestions.length, 16, 'with no picks, one of the two business-name branches is skipped');
   assert.ok(bad.stepMode && bad.missingQuestions[0].startsWith('Step 1: not reached'));
   assert.equal(bad.ordered.ok, false);
   assert.equal(bad.saved.ok, false);
@@ -103,6 +103,32 @@ try {
   assert.equal(good.passed, true, JSON.stringify(good));
   assert.ok(good.modelNote && good.why);
   check('right business pin + right questions + clear note passes, then shows the model note and why');
+
+  // Branches (Vee, 2026-10-08): step 3 = repeat the address OR mention the saved location; the next steps follow the pick.
+  const fullB = { pins: [MENCHIES, HOME], ordered: true, savedChanges: [{ slot: 3, action: 'save', ...MENCHIES }], noteChoice: M_NOTE };
+  const mq = (i) => men.data.questions[i].q;
+  const s3 = men.data.steps.findIndex((st) => st.right.length === 2 && st.right.map(mq).includes('Mention the saved location'));
+  const joinStep = men.data.steps.findIndex((st) => st.say);
+  assert.ok(s3 === 2 && joinStep > s3, `branch step ${s3}, join ${joinStep}`);
+  assert.deepEqual(men.data.steps[joinStep].right.map(mq).sort(), ['Ask if they go there often', 'Tell them you are checking the map']);
+  assert.ok(pubM.steps[joinStep].say.includes('go to often') && !JSON.stringify(pubM.steps).includes('"right"'), 'trainees get the shared words, never the answers');
+  const repeatIdx = men.data.questions.findIndex((q) => q.q === 'Ask them to repeat the address');
+  const mentionIdx = men.data.questions.findIndex((q) => q.q === 'Mention the saved location');
+  const pathB = men.data.steps.map((st, n) => (n === s3 ? [mentionIdx] : st.right.includes(repeatIdx) && n !== s3 ? [] : [st.right[0]]));
+  const goB = (await ana(`/api/practice/${men.id}`, { ...fullB, steps: pathB })).data;
+  assert.equal(goB.passed, true, JSON.stringify(goB.missingQuestions));
+  const goA = (await ana(`/api/practice/${men.id}`, { ...fullB, steps: RIGHT })).data;
+  assert.equal(goA.passed, true, JSON.stringify(goA.missingQuestions));
+  // Path B with the "since it's saved" business question skipped is a miss; in path A the saved version is never asked.
+  const bizSaved = men.data.steps.findIndex((st) => st.when?.notSaid === repeatIdx);
+  const skipB = (await ana(`/api/practice/${men.id}`, { ...fullB, steps: pathB.map((p, n) => (n === bizSaved ? [] : p)) })).data;
+  assert.ok(!skipB.passed && skipB.missingQuestions.some((t) => t.startsWith(`Step ${bizSaved + 1}: not reached`)), JSON.stringify(skipB.missingQuestions));
+  assert.ok(!goA.missingQuestions.length, 'path A must not be asked the saved-version question');
+  // The join: either of its two right answers is right.
+  const other = men.data.steps[joinStep].right.find((i) => i !== RIGHT[joinStep][0]);
+  const goJ = (await ana(`/api/practice/${men.id}`, { ...fullB, steps: RIGHT.map((p, n) => (n === joinStep ? [other] : p)) })).data;
+  assert.equal(goJ.passed, true);
+  check('branches: both paths after step 3 pass, each skips the other path steps; skipping a step on your path is a miss; the join takes either answer, with one shared wording');
 
   // Steps in practice: the server says right or wrong for one pick, and never for a scenario they can't practise.
   const st0 = men.data.steps[0];

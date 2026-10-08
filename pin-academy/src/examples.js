@@ -14,15 +14,23 @@ export const CONFIRM_NAME_LINE = { q: "Confirm the customer's name", say: 'Perfe
 // Vee's order (afternoon): mention the saved location ("dropped off here earlier"), the business, the map, go there
 // often ("every Sunday"), save it as preferred location #3, where to (home), confirm the home address, clothing, notes.
 // Admins change it in the scenario editor. Lines are named by their button.
+// Branches (Vee, 2026-10-08): step 3 can be "repeat the address" OR "mention the saved location". If they asked for
+// the address, they mention the saved location next and ask the business name the usual way; if they mentioned the
+// saved location first, they read the address back and ask "you're at a business there, correct?". Both paths meet
+// at "checking the map" / "go there often": both right, ONE wording (so they learn the words, not just the button).
+export const MENCHIES_MAP_OFTEN = { say: "Give me just a moment while I look at the map. I want to make sure I put the pickup spot in the right place. By the way, is Menchie's a place you go to often?",
+  a: 'Yes, I go every Sunday.' };
+export const MENCHIES_BUSINESS_SAVED = { q: "Ask the business name (it's saved)", say: "I see we have that address saved on your account. You're at a business there, correct? Can you tell me the name of the place?",
+  a: "Yes, I'm at Menchie's, the frozen yogurt place.", needed: true };
 export const MENCHIES_STEPS = [
   { right: ["Confirm the customer's name"], wrong: ['Ask them to repeat the address', 'Mention the saved location'] },
   { right: ['Confirm the best contact number'], wrong: ['Ask them to repeat the address', 'Mention the saved location'] },
-  { right: ['Ask them to repeat the address'], wrong: ['Mention the saved location', 'Ask them to spell the street'] },
+  { right: ['Ask them to repeat the address', 'Mention the saved location'], wrong: ['Ask them to spell the street'] },
   { right: ['Read the address back'], wrong: ['Ask them to spell the street', 'Send the driver to the address'] },
-  { right: ['Mention the saved location'], wrong: ['Send the driver to the address', 'Ask what they are wearing'] },
-  { right: ['Ask for the name of the business'], wrong: ['Ask them to spell the street', 'Ask for notes for the driver'] },
-  { right: ['Tell them you are checking the map'], wrong: ['Send the driver to the address', 'Ask where they are going'] },
-  { right: ['Ask if they go there often'], wrong: ['Ask for notes for the driver', 'Ask where they are going'] },
+  { right: ['Mention the saved location'], wrong: ['Send the driver to the address', 'Ask what they are wearing'], when: { notSaid: 'Mention the saved location' } },
+  { right: ['Ask for the name of the business'], wrong: ['Ask them to spell the street', 'Ask for notes for the driver'], when: { said: 'Ask them to repeat the address' } },
+  { right: [MENCHIES_BUSINESS_SAVED.q], wrong: ['Ask them to spell the street', 'Ask for notes for the driver'], when: { notSaid: 'Ask them to repeat the address' } },
+  { right: ['Tell them you are checking the map', 'Ask if they go there often'], wrong: ['Ask for notes for the driver'], ...MENCHIES_MAP_OFTEN },
   { right: ['Save it as their preferred location'], wrong: ['Send the driver to the address', 'Provide estimate'] },
   { right: ['Ask where they are going'], wrong: ['Provide estimate', 'Ask what they are wearing'] },
   { right: ['Confirm the home address'], wrong: ['Ask what they are wearing', 'Provide estimate'] },
@@ -63,7 +71,12 @@ export function stepsFromNames(questions, named) {
   return named.map((st) => {
     const right = st.right.map(at).filter((i) => i >= 0);
     const wrong = st.wrong.map(at).filter((i) => i >= 0 && !right.includes(i));
-    return { choices: [...right, ...wrong], right };
+    const out = { choices: [...right, ...wrong], right };
+    // A branch: only if a line was (or was not) said earlier. A shared wording: one line for all the right answers.
+    const w = st.when?.said ? at(st.when.said) : st.when?.notSaid ? at(st.when.notSaid) : -1;
+    if (w >= 0) out.when = st.when.said ? { said: w } : { notSaid: w };
+    if (st.say && right.length > 1) { out.say = st.say; out.a = st.a || ''; }
+    return out;
   }).filter((st) => st.right.length);
 }
 
@@ -111,6 +124,7 @@ export const EXAMPLE_SCENARIOS = [
         {"q":"Mention the saved location","say":"Okay, looks like we have this location saved on your account.","a":"Oh yes, I was just dropped off here earlier.","needed":true},
         { q: 'Ask them to spell the street', say: 'Can you spell the street name for me?', a: 'P-E-T-R-O-V-I-T-S-K-Y.', needed: false },
         { q: 'Ask for the name of the business', say: 'Are you at a business at that address? What is the name of it?', a: "Yes, I'm at Menchie's.", needed: true },
+        MENCHIES_BUSINESS_SAVED,
         { q: 'Ask them to spell the business', say: "You said you're located at Menchie's. Can you spell the name of the business for me?",
           a: "M-E-N-C-H-I-E apostrophe S. It's the frozen yogurt place.", needed: false },
         { q: 'Read the business back', say: "So that's Menchie's Frozen Yogurt on Southeast Petrovitsky Road, correct?", a: 'Yes, that one.', needed: false },

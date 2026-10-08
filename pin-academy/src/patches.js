@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { db, one, all, run, tx } from './db.js';
 import { pinSkill } from './skills.js';
 import { cleanScenario } from './grading.js';
-import { CONFIRM_NAME_LINE, CONTACT_LINE, MENCHIES_STEPS, stepsFromNames, EXAMPLE_SCENARIOS, MENCHIES_NEW_LINES, MENCHIES_ANSWERS,
+import { CONFIRM_NAME_LINE, CONTACT_LINE, MENCHIES_MAP_OFTEN, MENCHIES_BUSINESS_SAVED, MENCHIES_STEPS, stepsFromNames, EXAMPLE_SCENARIOS, MENCHIES_NEW_LINES, MENCHIES_ANSWERS,
   MENCHIES_NOTE_OPTIONS, TORIKAYA_NOTE_OPTIONS } from './examples.js';
 
 db.exec(`CREATE TABLE IF NOT EXISTS patches (name TEXT PRIMARY KEY, ran_at TEXT NOT NULL DEFAULT (datetime('now')))`);
@@ -212,6 +212,39 @@ const PATCHES = [
         }
         run('UPDATE scenarios SET data = ?, version = version + 1 WHERE id = ?', JSON.stringify(cleanScenario(d)), row.id);
       }
+      return true;
+    },
+  },
+  {
+    // Vee, 2026-10-08: branches + one wording at the join. Backup first (her version is in scenario_backups).
+    name: 'menchies-branches-2026-10-08',
+    run() {
+      const row = one('SELECT * FROM scenarios WHERE title = ?', "Menchie's on Petrovitsky Road");
+      if (!row) return false;
+      const d = JSON.parse(row.data);
+      const at = (label) => d.questions.findIndex((q) => q.q.trim().toLowerCase() === label.toLowerCase());
+      const [repeat, mention, readBack, business, map, often] = ['Ask them to repeat the address', 'Mention the saved location', 'Read the address back',
+        'Ask for the name of the business', 'Tell them you are checking the map', 'Ask if they go there often'].map(at);
+      const s3 = d.steps.findIndex((st) => st.right.includes(repeat) && st.right.includes(mention));
+      const s4 = d.steps.findIndex((st, n) => n > s3 && st.right.includes(readBack));
+      if ([repeat, mention, readBack, business, map, often].some((i) => i < 0) || s3 < 0 || s4 < 0 || d.steps.some((st) => st.when)) {
+        console.log("[pin-academy] Menchie's does not have the expected steps (or already has branches): branches NOT added.");
+        return true;
+      }
+      backup(row, "Before Menchie's branches (Vee, 2026-10-08)");
+      let saved = at(MENCHIES_BUSINESS_SAVED.q);
+      if (saved < 0) { d.questions.push({ ...MENCHIES_BUSINESS_SAVED }); saved = d.questions.length - 1; }
+      const fill = (keep, want) => [...want, ...[at('Ask them to spell the street'), at('Send the driver to the address'), at('Ask for notes for the driver'), at('Ask what they are wearing')]]
+        .filter((i, k, a) => i >= 0 && !keep.includes(i) && a.indexOf(i) === k).slice(0, 2);
+      const steps = d.steps.filter((st) => !st.right.some((i) => [business, map, often].includes(i)) && !(st.right.length === 1 && st.right[0] === mention));
+      const s4new = steps.findIndex((st) => st.right.includes(readBack) && st.right.length >= 1);
+      steps.splice(s4new + 1, 0,
+        { choices: [mention, ...fill([mention], [])], right: [mention], when: { notSaid: mention } },
+        { choices: [business, ...fill([business], [])], right: [business], when: { said: repeat } },
+        { choices: [saved, ...fill([saved], [])], right: [saved], when: { notSaid: repeat } },
+        { choices: [map, often, ...fill([map, often], [at('Ask for notes for the driver')]).slice(0, 1)], right: [map, often], ...MENCHIES_MAP_OFTEN });
+      d.steps = steps;
+      run('UPDATE scenarios SET data = ?, version = version + 1 WHERE id = ?', JSON.stringify(cleanScenario(d)), row.id);
       return true;
     },
   },
