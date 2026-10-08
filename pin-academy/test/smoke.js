@@ -391,7 +391,8 @@ try {
   const bq = (i) => bc.data.questions[i];
   const rightSoFar = new Set();
   for (const [n, st] of bc.data.steps.entries()) {
-    assert.equal(st.right.length, 1); assert.ok(st.choices.length >= 2 && st.choices.length <= 3, `step ${n + 1} choices`);
+    assert.ok(st.right.length === 1 || (st.right.length === 2 && st.say), `step ${n + 1}: one right answer, or a pair with one wording`);
+    assert.ok(st.choices.length >= 2 && st.choices.length <= 3, `step ${n + 1} choices`);
     assert.ok(st.choices.every((i) => bq(i)), `step ${n + 1} points at a missing line`);
     assert.ok(!st.choices.some((i) => rightSoFar.has(i)), `step ${n + 1} offers a line that was already right`);
     st.right.forEach((i) => rightSoFar.add(i));
@@ -407,7 +408,14 @@ try {
   const bRun = (await ana(`/api/practice/${built}`, { pins: [{ lat: 35.01, lng: -85.16 }, { lat: 35.0402, lng: -85.3003 }], ordered: true, steps: bOk,
     note: 'Please drop the customer off at Test Bistro on Main Street. Thank you so much.' })).data;
   assert.equal(bRun.passed, true, JSON.stringify(bRun));
-  check('New call: builds a passable call, standard flow in order (name, contact number, home, …, notes, close), wrong picks never already right, details filled in');
+  // Vee's pairs (10/08): two lines that belong together = one step, two right answers, ONE wording said for both.
+  const pairOf = (q) => bc.data.steps.find((st) => st.right.map((i) => bq(i).q).includes(q));
+  const drv = pairOf('Provide driver info');
+  assert.deepEqual(drv.right.map((i) => bq(i).q), ['Provide driver info', 'Ask if there is anything else']);
+  assert.ok(drv.say.includes('call back immediately') && drv.say.endsWith('Is there anything else I can help you with today?'), drv.say);
+  assert.deepEqual(pairOf('Read the drop-off address back').right.map((i) => bq(i).q), ['Read the drop-off address back', 'Ask for the name of the place they are going']);
+  assert.deepEqual(pairOf('Confirm the pickup is home').right.map((i) => bq(i).q), ['Confirm the pickup is home', 'Ask them to repeat the address']);
+  check('New call: builds a passable call in Vee’s pairs (two right answers, one wording), flow in order, wrong picks never already right, details filled in');
 
   // The other two trip shapes: a place to home, and a place to another place.
   const PLACE_A = { label: 'Test Clinic', addressGiven: '9 Elm Street, Townsville', start: { lat: 35.1, lng: -85.2 }, answer: { lat: 35.1002, lng: -85.2001 } };
@@ -415,8 +423,8 @@ try {
     const id = (await admin('/api/admin/scenarios/build', { ...NEW_CALL, title: `Built: ${shape}`, pickup, dropoff, wearing: 'A red coat.' })).data.id;
     const c = (await admin('/api/admin/scenarios')).data.find((x) => x.id === id).data;
     const seen = new Set();
-    for (const st of c.steps) { assert.ok(!st.choices.some((i) => seen.has(i)) && st.right.length === 1, `${shape}: a wrong pick was already right`); st.right.forEach((i) => seen.add(i)); }
-    const names = c.steps.map((st) => c.questions[st.right[0]].q);
+    for (const st of c.steps) { assert.ok(!st.choices.some((i) => seen.has(i)), `${shape}: a wrong pick was already right`); st.right.forEach((i) => seen.add(i)); }
+    const names = c.steps.flatMap((st) => st.right.map((i) => c.questions[i].q));
     assert.ok(names.includes('Ask what they are wearing') && names.includes('Ask for the name of the place'), `${shape}: ${names.join(' > ')}`);
     assert.equal(names.includes('Confirm the home address'), shape === 'place to home');
   }
@@ -444,9 +452,9 @@ try {
     const spd = (await admin('/api/admin/scenarios')).data.find((x) => x.id === sp).data;
     assert.equal(spd.account.saved[0].lat, NEW_CALL.dropoff.place.start.lat, 'the saved place should hold the wrong pin');
     assert.deepEqual(spd.savedFix, { slot: 3, action: often ? 'update' : 'delete', stop: 'dropoff' });
-    const names = spd.steps.map((st) => spd.questions[st.right[0]].q);
+    const names = spd.steps.flatMap((st) => st.right.map((i) => spd.questions[i].q));
     const i = names.indexOf('Mention the saved location');
-    assert.ok(i > 0 && names[i - 1] === 'Read the drop-off address back', names.join(' > '));
+    assert.ok(i > 0 && names[i - 1] === 'Ask for the name of the place they are going' && names[i - 2] === 'Read the drop-off address back', names.join(' > '));
     assert.ok(names.includes('Ask if they go there often') && names.includes(often ? 'Save it as their preferred location' : 'Remove the wrong saved location'));
     assert.ok(spd.questions.find((q) => q.q === 'Ask if they go there often').say.includes('Test Bistro'));
   }

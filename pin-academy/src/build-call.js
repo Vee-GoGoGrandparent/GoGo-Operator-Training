@@ -9,39 +9,44 @@ const num = (v) => (typeof v === 'number' ? v : Number(v));
 const ll = (p) => (p && Number.isFinite(num(p.lat)) && Number.isFinite(num(p.lng)) ? { lat: num(p.lat), lng: num(p.lng) } : null);
 const bad = (msg) => { const e = new Error(msg); e.status = 400; throw e; };
 
-// The call flow: [the right line, two lines that sound right but are not next]. Vee's order.
+// The call flow, Vee's way (2026-10-08): lines that belong together are ONE step with TWO right answers and ONE
+// wording ("so we are still guiding them to the right wording, not just the right answer"). Each step:
+// { right: [lines], wrong: [lines that sound right but are not next], say: [lines whose words make the shared wording],
+//   a: [lines whose caller answers make the shared answer] }. Pairs copied from her Menchie's and Torikaya (10/08).
 // fix = where a wrong pin is SAVED on the account: 'home' (a new caller's home, saved at registration) or 'place'
 // (a saved location with the wrong pin; often = they go there often, so save the fix, else remove it).
+const one = (k, wrong) => ({ right: [k], wrong });
+const pair = (k1, k2, wrong, say = [k1, k2], a = [k1, k2]) => ({ right: [k1, k2], wrong, say, a });
 function flowFor({ pickupHome, dropoffHome, fix, fixStop, often }) {
-  const f = [['confirm_name', ['ask_pickup', 'send_driver']], ['contact', ['ask_pickup', 'send_driver']]];
+  const f = [one('confirm_name', ['ask_pickup', 'send_driver']), one('contact', ['ask_pickup', 'send_driver'])];
   const placeFix = (kind) => fix === 'place' && fixStop === kind;
-  const afterMap = (kind) => {
-    if (fix === 'home' && fixStop === kind) f.push(['save_home', ['send_driver', 'estimate']]);
-    if (placeFix(kind)) f.push(['go_often', ['notes', 'estimate']], [often ? 'save_place' : 'delete_place', ['send_driver', often ? 'delete_place' : 'save_place']]);
-  };
+  const homeFix = (kind) => fix === 'home' && fixStop === kind;
+  let askedWhere = false;
   if (pickupHome) {
-    f.push(['confirm_home_pickup', ['ask_pickup', 'wearing']]);
-    if (fix === 'home' && fixStop === 'pickup') { f.push(['map', ['send_driver', 'estimate']]); afterMap('pickup'); }
+    f.push(pair('confirm_home_pickup', 'ask_pickup', ['wearing'], ['confirm_home_pickup'], ['confirm_home_pickup']));
+    if (homeFix('pickup')) f.push(one('map', ['send_driver', 'estimate']), one('save_home', ['send_driver', 'estimate']));
+  } else if (placeFix('pickup')) {
+    f.push(pair('ask_pickup', 'mention_saved', ['spell_street']), one('read_back_pickup', ['spell_street', 'send_driver']),
+      pair('place_pickup', 'map', ['send_driver'], ['place_pickup', 'map'], ['place_pickup']), one('go_often', ['notes', 'estimate']));
+    if (often) { f.push(pair('save_place', 'ask_where', ['send_driver'], ['save_place', 'ask_where'], ['ask_where'])); askedWhere = true; }
+    else f.push(one('delete_place', ['send_driver', 'save_place']));
   } else {
-    f.push(['ask_pickup', ['spell_street', 'send_driver']], ['read_back_pickup', ['spell_street', 'send_driver']]);
-    if (placeFix('pickup')) f.push(['mention_saved', ['send_driver', 'wearing']]);
-    f.push(['place_pickup', ['spell_street', 'notes']], ['map', ['send_driver', 'estimate']]);
-    afterMap('pickup');
+    f.push(one('ask_pickup', ['spell_street', 'send_driver']), pair('read_back_pickup', 'place_pickup', ['spell_street']), one('map', ['send_driver', 'estimate']));
   }
-  f.push(['ask_where', ['estimate', 'send_driver']]);
+  if (!askedWhere) f.push(one('ask_where', ['estimate', 'send_driver']));
   if (dropoffHome) {
-    f.push(['confirm_home_dropoff', ['wearing', 'estimate']]);
-    if (fix === 'home' && fixStop === 'dropoff') { f.push(['map', ['send_driver', 'estimate']]); afterMap('dropoff'); }
+    f.push(one('confirm_home_dropoff', ['wearing', 'estimate']));
+    if (homeFix('dropoff')) f.push(one('map', ['send_driver', 'estimate']), one('save_home', ['send_driver', 'estimate']));
   } else {
-    f.push(['read_back_dropoff', ['spell_street', 'send_driver']]);
-    if (placeFix('dropoff')) f.push(['mention_saved', ['send_driver', 'estimate']]);
-    f.push(['place_dropoff', ['spell_street', 'estimate']]);
-    if (pickupHome && !(fix === 'home' && fixStop === 'pickup')) f.push(['map', ['send_driver', 'notes']]);
-    afterMap('dropoff');
+    f.push(pair('read_back_dropoff', 'place_dropoff', ['spell_street']));
+    if (placeFix('dropoff')) f.push(one('mention_saved', ['send_driver', 'estimate']));
+    if (pickupHome && !homeFix('pickup')) f.push(one('map', ['send_driver', 'notes']));
+    if (placeFix('dropoff')) f.push(one('go_often', ['notes', 'estimate']), one(often ? 'save_place' : 'delete_place', ['send_driver', often ? 'delete_place' : 'save_place']));
   }
-  if (!pickupHome) f.push(['wearing', ['notes', 'estimate']]); // the driver has to spot them somewhere that is not home
-  f.push(['notes', ['estimate', 'send_driver']], ['estimate', ['driver', 'anything_else']], ['driver', ['anything_else', 'close']],
-    ['anything_else', ['close', 'send_driver']], ['close', ['send_driver', 'spell_street']]);
+  // The driver has to spot them somewhere that is not home: notes and clothing together.
+  f.push(pickupHome ? one('notes', ['estimate', 'send_driver']) : pair('notes', 'wearing', ['estimate']));
+  f.push(one('estimate', ['driver', 'anything_else']), pair('driver', 'anything_else', ['close'], ['driver', 'anything_else'], ['anything_else']),
+    one('close', ['send_driver', 'spell_street']));
   return f;
 }
 const FILL = ['send_driver', 'spell_street', 'wearing', 'notes', 'estimate'];
@@ -100,13 +105,14 @@ export function buildCall(b) {
 
   // The lines this call uses (every right line and every wrong pick), then the steps pointing at them.
   const flow = flowFor({ pickupHome, dropoffHome, fix, fixStop, often });
-  const keys = [...new Set(flow.flatMap(([r, w]) => [r, ...w]).concat(FILL))];
+  const keys = [...new Set(flow.flatMap((st) => [...st.right, ...st.wrong]).concat(FILL))];
   const idx = Object.fromEntries(keys.map((k, i) => [k, i]));
   const rightSoFar = new Set();
-  const steps = flow.map(([r, w]) => {
-    const wrong = [...w, ...FILL].filter((k, i, a) => a.indexOf(k) === i && k !== r && !rightSoFar.has(k)).slice(0, 2);
-    rightSoFar.add(r);
-    return { choices: [idx[r], ...wrong.map((k) => idx[k])], right: [idx[r]] };
+  const steps = flow.map((st) => {
+    // One right line: two wrong picks. A pair: one wrong pick (three choices in all).
+    const wrong = [...st.wrong, ...FILL].filter((k, i, a) => a.indexOf(k) === i && !st.right.includes(k) && !rightSoFar.has(k)).slice(0, 3 - st.right.length);
+    st.right.forEach((k) => rightSoFar.add(k));
+    return { choices: [...st.right.map((k) => idx[k]), ...wrong.map((k) => idx[k])], right: st.right.map((k) => idx[k]) };
   });
   const questions = keys.map((k) => ({ std: k, q: k, say: '', a: '', needed: true }));
 
@@ -120,5 +126,8 @@ export function buildCall(b) {
     caller, why: str(b.why, 1500), story: str(b.story, 4000), account, savedFix, newCaller: fix === 'home', stops, ride, vars, questions, steps,
     note: { mustMention, model, options: [] },
   }, standardLines());
+  // A pair's shared wording: its lines' words said together, in order; the caller's answer likewise.
+  const join = (ks, field) => [...new Set(ks.map((k) => data.questions[idx[k]][field].trim()).filter(Boolean))].join(' ');
+  flow.forEach((st, n) => { if (st.say) { data.steps[n].say = join(st.say, 'say'); data.steps[n].a = join(st.a, 'a'); } });
   return { title, category: str(b.category, 40), data: cleanScenario(data) };
 }

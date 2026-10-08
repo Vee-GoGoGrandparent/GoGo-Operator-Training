@@ -21,6 +21,10 @@ already built from GoGo's standard lines (in order). Write ONLY what is special 
   congratulate them right then), a walker or wheelchair, a hard-to-find entrance. Each extra line has a short button label, what
   the operator says, the caller's answer, the button of the step it comes right AFTER, and two buttons of existing lines that sound
   right but are not next. At most 4. Leave empty when nothing special happened.
+  GoGo builds calls in PAIRS: two lines that belong together are one step with two right answers and ONE wording, so
+  trainees learn the words, not just the button. When a special moment goes with an existing line (e.g. "celebrate the
+  40 years" while "checking the map"), set pairWith to that line's button: the moment then becomes the second right
+  answer of that step, and its words are what is said for both. Otherwise leave pairWith empty.
 - answerChanges: when a special moment comes up inside an existing line's answer (e.g. the caller mentions the anniversary when
   the operator asks the name of the place), give that line's button and the new answer.
 - why: 2-5 plain sentences trainees read after they answer: what went wrong on the real call and exactly how to get it right.
@@ -41,8 +45,8 @@ const SCHEMA = {
     caller: S, why: S, noteModel: S,
     noteOptions: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['text', 'right'], properties: { text: S, right: { type: 'boolean' } } } },
     mustMention: { type: 'array', items: S },
-    extraLines: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['button', 'say', 'answer', 'afterButton', 'wrongButtons'],
-      properties: { button: S, say: S, answer: S, afterButton: S, wrongButtons: { type: 'array', items: S } } } },
+    extraLines: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['button', 'say', 'answer', 'afterButton', 'wrongButtons', 'pairWith'],
+      properties: { button: S, say: S, answer: S, afterButton: S, wrongButtons: { type: 'array', items: S }, pairWith: S } } },
     answerChanges: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['button', 'answer'], properties: { button: S, answer: S } } },
   },
 };
@@ -70,9 +74,24 @@ export function applyDraft(data, out) {
   const at = (button) => d.questions.findIndex((q) => q.q.trim().toLowerCase() === String(button || '').trim().toLowerCase());
   if (out.caller?.trim()) d.caller = out.caller.trim();
   if (out.why?.trim()) d.why = out.why.trim();
-  for (const c of out.answerChanges || []) { const i = at(c.button); if (i >= 0 && c.answer?.trim()) { d.questions[i].a = c.answer.trim(); delete d.questions[i].std; } }
+  for (const c of out.answerChanges || []) {
+    const i = at(c.button);
+    if (i < 0 || !c.answer?.trim()) continue;
+    d.questions[i].a = c.answer.trim(); delete d.questions[i].std;
+    // In a pair, the shared answer is what the trainee hears: change it there too.
+    d.steps.forEach((st) => { if (st.say && st.right.includes(i)) st.a = c.answer.trim(); });
+  }
   for (const x of (out.extraLines || []).slice(0, 4)) {
     if (!x.button?.trim() || !x.say?.trim() || !x.answer?.trim() || at(x.button) >= 0) continue;
+    // Paired with an existing line: becomes that step's second right answer, and its words are said for both.
+    const partner = x.pairWith ? d.steps.findIndex((st) => st.right.length === 1 && st.right.includes(at(x.pairWith))) : -1;
+    if (partner >= 0) {
+      d.questions.push({ q: x.button.trim(), say: x.say.trim(), a: x.answer.trim(), needed: true });
+      const line = d.questions.length - 1, st = d.steps[partner];
+      st.right.push(line); st.choices = [...st.right, ...st.choices.filter((i) => !st.right.includes(i))].slice(0, 4);
+      st.say = x.say.trim(); st.a = x.answer.trim();
+      continue;
+    }
     const after = d.steps.findIndex((st) => st.right.includes(at(x.afterButton)));
     if (after < 0) continue;
     d.questions.push({ q: x.button.trim(), say: x.say.trim(), a: x.answer.trim(), needed: true });

@@ -33,7 +33,7 @@ try {
   const d = applyDraft(base, GOOD);
   const order = d.steps.map((st) => name(d, st.right[0]));
   const ci = order.indexOf('Congratulate them on their anniversary');
-  assert.equal(order[ci - 1], 'Ask for the name of the place they are going', order.join(' > '));
+  assert.ok(d.steps[ci - 1].right.map((i) => name(d, i)).includes('Ask for the name of the place they are going'), order.join(' > '));
   assert.ok(d.steps[ci].choices.map((i) => name(d, i)).includes('Tell them you are checking the map'));
   const seen = new Set();
   for (const st of d.steps) { assert.ok(st.choices.every((i) => d.questions[i] && !seen.has(i)), 'a choice points nowhere or was already right'); st.right.forEach((i) => seen.add(i)); }
@@ -54,6 +54,18 @@ try {
   const odd = applyDraft(base, { ...GOOD, extraLines: [{ ...GOOD.extraLines[0], afterButton: 'No such button' }, { ...GOOD.extraLines[0], button: 'Provide estimate' }] });
   assert.equal(odd.steps.length, base.steps.length, 'a line after a missing step, or one copying an existing button, must be dropped');
   check('extra lines that point at a missing step or copy an existing button are dropped, never half-added');
+
+  // Pairs (Vee): "celebrate the 40 years" paired with "checking the map" = one step, both right, the celebration's words.
+  const celebrate = { button: 'Celebrate with them while you check the map', say: "Wow, forty years, that's incredible! I'm looking over the map right now to make sure we drop you off at the right spot.",
+    answer: "Thank you, that's very kind of you.", afterButton: 'Congratulate them on their anniversary', wrongButtons: [], pairWith: 'Tell them you are checking the map' };
+  const pd = applyDraft(base, { ...GOOD, extraLines: [...GOOD.extraLines.map((x) => ({ ...x, pairWith: '' })), celebrate] });
+  const mapStep = pd.steps.find((st) => st.right.some((i) => name(pd, i) === 'Tell them you are checking the map'));
+  assert.deepEqual(mapStep.right.map((i) => name(pd, i)).sort(), ['Celebrate with them while you check the map', 'Tell them you are checking the map']);
+  assert.equal(mapStep.say, celebrate.say); assert.equal(pd.steps.length, base.steps.length + 1, 'the paired moment must not add a step');
+  // A changed answer on a paired line changes the pair's shared answer (that is what the trainee hears).
+  const placeStep = pd.steps.find((st) => st.say && st.right.some((i) => name(pd, i) === 'Ask for the name of the place they are going'));
+  assert.ok(placeStep.a.includes('anniversary'), placeStep.a);
+  check('a special moment can pair with an existing line (both right, its words said for both); a changed answer reaches the pair');
 
   // Through the server, with no key set: the status says so and the button explains instead of failing silently.
   const { server } = await import('../server.js');
